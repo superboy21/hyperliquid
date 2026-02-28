@@ -261,9 +261,10 @@ export async function getFundingAverages(coin: string): Promise<{ avg7d: number;
       return null;
     }
 
-    // 计算7天平均
-    const sevenDaysAgo = endTime - 7 * 24 * 60 * 60;
-    const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+    // 计算7天平均（API返回的time是毫秒级）
+    const endTimeMs = endTime * 1000; // 转换为毫秒
+    const sevenDaysAgoMs = endTimeMs - 7 * 24 * 60 * 60 * 1000;
+    const last7Days = history.filter((h) => h.time >= sevenDaysAgoMs);
     const avg7d =
       last7Days.length > 0
         ? last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length
