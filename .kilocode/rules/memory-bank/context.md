@@ -2,9 +2,12 @@
 
 ## Current State
 
-**Template Status**: ✅ Active Development - Funding Monitor Added
+**Template Status**: ✅ Active Development - Funding Monitor with HIP-3 Assets
 
-The project now includes a Hyperliquid funding rate monitoring page with real-time data and historical tracking.
+The project now includes a comprehensive Hyperliquid funding rate monitoring page with:
+- Real-time data for perpetual and HIP-3 spot markets
+- Annualized funding rate display
+- 7-day and 30-day historical averages
 
 ## Recently Completed
 
@@ -16,9 +19,12 @@ The project now includes a Hyperliquid funding rate monitoring page with real-ti
 - [x] Recipe system for common features
 - [x] Hyperliquid funding rate monitoring page
 - [x] Real-time funding rate display with 30s auto-refresh
-- [x] Historical funding rate data (7-day view)
+- [x] Historical funding rate data (30-day view)
 - [x] Search and sort functionality
 - [x] Statistics dashboard (positive/negative rates, average)
+- [x] **HIP-3 asset support** (xyz:gold, xyz:mstr, etc.)
+- [x] **Annualized funding rate display** (rate × 1095)
+- [x] **7-day and 30-day average annualized funding rates**
 
 ## Current Structure
 
@@ -31,6 +37,23 @@ The project now includes a Hyperliquid funding rate monitoring page with real-ti
 | `src/components/funding/FundingMonitor.tsx` | Main funding monitor component | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
+
+## Features
+
+### Funding Monitor Features
+
+1. **Real-time Data**: Updates every 30 seconds
+2. **HIP-3 Assets**: Shows spot tokens like xyz:gold, xyz:mstr
+3. **Annualized Rates**: All rates displayed as annual percentages
+4. **Historical Averages**: 7-day and 30-day rolling averages
+5. **Sorting Options**: By current rate, 7d avg, 30d avg, volume, name
+6. **Statistics Dashboard**: Market overview with key metrics
+
+### API Integration
+
+- `metaAndAssetCtxs`: Perpetual contract funding rates
+- `spotMetaAndAssetCtxs`: HIP-3 spot market funding rates
+- `fundingHistory`: Historical funding data (up to 30 days)
 
 ## Current Focus
 
@@ -93,3 +116,4 @@ export async function GET() {
 | Date | Changes |
 |------|---------|
 | Initial | Template created with base setup |
+| 2026-02-28 | Added Hyperliquid funding monitor with HIP-3 assets, annualized rates, and historical averages |

@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
-  getAllFundingRates,
+  getAllFundingRatesWithHistory,
   getFundingHistory,
-  formatFundingRate,
+  formatAnnualizedRate,
   formatPrice,
   formatTime,
   formatVolume,
+  toAnnualizedRate,
   type FundingRate,
   type FundingHistoryItem,
 } from "@/lib/hyperliquid";
@@ -20,7 +21,7 @@ export default function FundingMonitor() {
   const [history, setHistory] = useState<FundingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("rate");
+  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume" | "avg7d" | "avg30d">("rate");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
@@ -28,7 +29,7 @@ export default function FundingMonitor() {
   const fetchData = useCallback(async () => {
     try {
       setError(null);
-      const rates = await getAllFundingRates();
+      const rates = await getAllFundingRatesWithHistory();
       
       if (rates.length === 0) {
         setError("未能获取到资金费率数据，请稍后重试");
@@ -55,9 +56,9 @@ export default function FundingMonitor() {
   const fetchHistory = useCallback(async (coin: string) => {
     setHistoryLoading(true);
     try {
-      // 获取过去7天的历史数据
+      // 获取过去30天的历史数据
       const endTime = Date.now();
-      const startTime = endTime - 7 * 24 * 60 * 60 * 1000;
+      const startTime = endTime - 30 * 24 * 60 * 60 * 1000;
       const historyData = await getFundingHistory(coin, startTime, endTime);
       setHistory(historyData);
     } catch (error) {
@@ -90,6 +91,14 @@ export default function FundingMonitor() {
         const volA = parseFloat(a.dayVolume);
         const volB = parseFloat(b.dayVolume);
         return sortDesc ? volB - volA : volA - volB;
+      } else if (sortBy === "avg7d") {
+        const avgA = a.avg7d || 0;
+        const avgB = b.avg7d || 0;
+        return sortDesc ? avgB - avgA : avgA - avgB;
+      } else if (sortBy === "avg30d") {
+        const avgA = a.avg30d || 0;
+        const avgB = b.avg30d || 0;
+        return sortDesc ? avgB - avgA : avgA - avgB;
       } else {
         return sortDesc
           ? b.coin.localeCompare(a.coin)
@@ -97,7 +106,7 @@ export default function FundingMonitor() {
       }
     });
 
-  // 计算统计数据
+  // 计算统计数据（使用年化值）
   const positiveRates = fundingRates.filter(
     (r) => parseFloat(r.fundingRate) > 0
   ).length;
@@ -107,15 +116,32 @@ export default function FundingMonitor() {
   const zeroRates = fundingRates.filter(
     (r) => parseFloat(r.fundingRate) === 0
   ).length;
+  
+  // 计算平均年化资金费率
   const avgRate =
     fundingRates.length > 0
       ? fundingRates.reduce((sum, r) => sum + parseFloat(r.fundingRate), 0) /
         fundingRates.length
       : 0;
+  const avgAnnualized = toAnnualizedRate(avgRate);
+  
+  // 计算历史平均年化
+  const avg7dAnnualized =
+    fundingRates.length > 0
+      ? fundingRates.reduce((sum, r) => sum + (r.avg7d || 0), 0) / fundingRates.filter(r => r.avg7d !== undefined).length
+      : 0;
+  const avg30dAnnualized =
+    fundingRates.length > 0
+      ? fundingRates.reduce((sum, r) => sum + (r.avg30d || 0), 0) / fundingRates.filter(r => r.avg30d !== undefined).length
+      : 0;
+      
   const totalVolume = fundingRates.reduce(
     (sum, r) => sum + parseFloat(r.dayVolume),
     0
   );
+  
+  // HIP-3 资产数量
+  const hip3Count = fundingRates.filter(r => r.isSpot).length;
 
   if (loading) {
     return (
@@ -152,10 +178,14 @@ export default function FundingMonitor() {
   return (
     <div className="space-y-6">
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">交易对数量</p>
           <p className="text-2xl font-bold text-white">{fundingRates.length}</p>
+        </div>
+        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <p className="text-gray-400 text-sm">HIP-3 资产</p>
+          <p className="text-2xl font-bold text-purple-400">{hip3Count}</p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">正资金费率</p>
@@ -170,18 +200,34 @@ export default function FundingMonitor() {
           <p className="text-2xl font-bold text-gray-400">{zeroRates}</p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">平均资金费率</p>
+          <p className="text-gray-400 text-sm">当前平均年化</p>
           <p
-            className={`text-2xl font-bold ${
-              avgRate >= 0 ? "text-green-400" : "text-red-400"
+            className={`text-lg font-bold ${
+              avgAnnualized >= 0 ? "text-green-400" : "text-red-400"
             }`}
           >
-            {formatFundingRate(avgRate.toString())}
+            {formatAnnualizedRate(avgRate)}
           </p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">24h 总交易量</p>
-          <p className="text-2xl font-bold text-blue-400">{formatVolume(totalVolume.toString())}</p>
+          <p className="text-gray-400 text-sm">7天平均年化</p>
+          <p
+            className={`text-lg font-bold ${
+              avg7dAnnualized >= 0 ? "text-green-400" : "text-red-400"
+            }`}
+          >
+            {avg7dAnnualized !== 0 ? formatAnnualizedRate(avg7dAnnualized) : "-"}
+          </p>
+        </div>
+        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <p className="text-gray-400 text-sm">30天平均年化</p>
+          <p
+            className={`text-lg font-bold ${
+              avg30dAnnualized >= 0 ? "text-green-400" : "text-red-400"
+            }`}
+          >
+            {avg30dAnnualized !== 0 ? formatAnnualizedRate(avg30dAnnualized) : "-"}
+          </p>
         </div>
       </div>
 
@@ -190,7 +236,7 @@ export default function FundingMonitor() {
         <div className="flex-1">
           <input
             type="text"
-            placeholder="搜索交易对 (如: BTC, ETH)..."
+            placeholder="搜索交易对 (如: BTC, ETH, xyz:gold...)"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -202,39 +248,65 @@ export default function FundingMonitor() {
               setSortBy("rate");
               setSortDesc(!sortDesc);
             }}
-            className={`px-4 py-2 rounded-lg border transition-colors ${
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
               sortBy === "rate"
                 ? "bg-blue-600 border-blue-600 text-white"
                 : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
             }`}
           >
-            按费率 {sortDesc ? "↓" : "↑"}
+            当前年化 {sortDesc ? "↓" : "↑"}
+          </button>
+          <button
+            onClick={() => {
+              setSortBy("avg7d");
+              setSortDesc(!sortDesc);
+            }}
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
+              sortBy === "avg7d"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            7天平均 {sortDesc ? "↓" : "↑"}
+          </button>
+          <button
+            onClick={() => {
+              setSortBy("avg30d");
+              setSortDesc(!sortDesc);
+            }}
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
+              sortBy === "avg30d"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            30天平均 {sortDesc ? "↓" : "↑"}
           </button>
           <button
             onClick={() => {
               setSortBy("volume");
               setSortDesc(!sortDesc);
             }}
-            className={`px-4 py-2 rounded-lg border transition-colors ${
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
               sortBy === "volume"
                 ? "bg-blue-600 border-blue-600 text-white"
                 : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
             }`}
           >
-            按交易量 {sortDesc ? "↓" : "↑"}
+            交易量 {sortDesc ? "↓" : "↑"}
           </button>
           <button
             onClick={() => {
               setSortBy("name");
               setSortDesc(!sortDesc);
             }}
-            className={`px-4 py-2 rounded-lg border transition-colors ${
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
               sortBy === "name"
                 ? "bg-blue-600 border-blue-600 text-white"
                 : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
             }`}
           >
-            按名称 {sortDesc ? "↓" : "↑"}
+            名称 {sortDesc ? "↓" : "↑"}
           </button>
         </div>
       </div>
@@ -251,7 +323,7 @@ export default function FundingMonitor() {
         {/* 资金费率列表 */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
-            <h2 className="text-lg font-semibold text-white">实时资金费率</h2>
+            <h2 className="text-lg font-semibold text-white">实时年化资金费率</h2>
             <p className="text-sm text-gray-400">
               共 {filteredAndSortedRates.length} 个交易对
               {searchTerm && ` (筛选自 ${fundingRates.length} 个)`}
@@ -265,12 +337,15 @@ export default function FundingMonitor() {
                     交易对
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
-                    资金费率
+                    当前年化
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
-                    标记价格
+                    7天平均
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden md:table-cell">
+                    30天平均
+                  </th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
                     24h 交易量
                   </th>
                 </tr>
@@ -285,9 +360,16 @@ export default function FundingMonitor() {
                     }`}
                   >
                     <td className="px-4 py-3">
-                      <span className="font-medium text-white">
-                        {rate.coin}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white">
+                          {rate.coin}
+                        </span>
+                        {rate.isSpot && (
+                          <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded">
+                            HIP-3
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span
@@ -299,15 +381,40 @@ export default function FundingMonitor() {
                             : "text-gray-400"
                         }`}
                       >
-                        {formatFundingRate(rate.fundingRate)}
+                        {formatAnnualizedRate(rate.fundingRate)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right hidden sm:table-cell">
-                      <span className="text-gray-300 font-mono">
-                        {formatPrice(rate.markPrice)}
+                      <span
+                        className={`font-mono text-sm ${
+                          (rate.avg7d || 0) > 0
+                            ? "text-green-400"
+                            : (rate.avg7d || 0) < 0
+                            ? "text-red-400"
+                            : "text-gray-400"
+                        }`}
+                      >
+                        {rate.avg7d !== undefined
+                          ? formatAnnualizedRate(rate.avg7d)
+                          : "-"}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right hidden md:table-cell">
+                      <span
+                        className={`font-mono text-sm ${
+                          (rate.avg30d || 0) > 0
+                            ? "text-green-400"
+                            : (rate.avg30d || 0) < 0
+                            ? "text-red-400"
+                            : "text-gray-400"
+                        }`}
+                      >
+                        {rate.avg30d !== undefined
+                          ? formatAnnualizedRate(rate.avg30d)
+                          : "-"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right hidden lg:table-cell">
                       <span className="text-gray-400 font-mono text-sm">
                         {formatVolume(rate.dayVolume)}
                       </span>
@@ -331,7 +438,7 @@ export default function FundingMonitor() {
               {selectedCoin ? `${selectedCoin} 历史资金费率` : "选择交易对查看历史"}
             </h2>
             {selectedCoin && (
-              <p className="text-sm text-gray-400">过去7天数据</p>
+              <p className="text-sm text-gray-400">过去30天数据</p>
             )}
           </div>
           <div className="p-4">
@@ -351,7 +458,7 @@ export default function FundingMonitor() {
                             时间
                           </th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-400">
-                            资金费率
+                            年化资金费率
                           </th>
                         </tr>
                       </thead>
@@ -374,7 +481,7 @@ export default function FundingMonitor() {
                                       : "text-gray-400"
                                   }`}
                                 >
-                                  {formatFundingRate(item.fundingRate)}
+                                  {formatAnnualizedRate(item.fundingRate)}
                                 </span>
                               </td>
                             </tr>
@@ -386,9 +493,9 @@ export default function FundingMonitor() {
                   {/* 统计信息 */}
                   <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-700">
                     <div>
-                      <p className="text-sm text-gray-400">最高费率</p>
+                      <p className="text-sm text-gray-400">最高年化费率</p>
                       <p className="text-lg font-mono text-green-400">
-                        {formatFundingRate(
+                        {formatAnnualizedRate(
                           Math.max(
                             ...history.map((h) => parseFloat(h.fundingRate))
                           ).toString()
@@ -396,13 +503,36 @@ export default function FundingMonitor() {
                       </p>
                     </div>
                     <div>
-                      <p className="text-sm text-gray-400">最低费率</p>
+                      <p className="text-sm text-gray-400">最低年化费率</p>
                       <p className="text-lg font-mono text-red-400">
-                        {formatFundingRate(
+                        {formatAnnualizedRate(
                           Math.min(
                             ...history.map((h) => parseFloat(h.fundingRate))
                           ).toString()
                         )}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-400">7天平均年化</p>
+                      <p className="text-lg font-mono text-blue-400">
+                        {(() => {
+                          const endTime = Date.now();
+                          const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
+                          const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+                          if (last7Days.length === 0) return "-";
+                          const avg = last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length;
+                          return formatAnnualizedRate(avg);
+                        })()}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-400">30天平均年化</p>
+                      <p className="text-lg font-mono text-purple-400">
+                        {(() => {
+                          if (history.length === 0) return "-";
+                          const avg = history.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / history.length;
+                          return formatAnnualizedRate(avg);
+                        })()}
                       </p>
                     </div>
                   </div>
@@ -445,10 +575,12 @@ export default function FundingMonitor() {
       <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
         <h3 className="text-sm font-medium text-gray-300 mb-2">资金费率说明</h3>
         <ul className="text-sm text-gray-400 space-y-1 list-disc list-inside">
+          <li><strong className="text-purple-300">HIP-3 资产</strong>：Hyperliquid Improvement Proposal 3 支持的现货代币，如 xyz:gold、xyz:mstr 等</li>
+          <li><strong className="text-gray-300">年化资金费率</strong>：将8小时一次的资金费率乘以 365×3 = 1095 次计算得出</li>
           <li>正资金费率：多头支付给空头，表示市场看涨情绪较强</li>
           <li>负资金费率：空头支付给多头，表示市场看跌情绪较强</li>
           <li>资金费率每8小时结算一次（UTC 00:00, 08:00, 16:00）</li>
-          <li>数据来源于 Hyperliquid 官方 API</li>
+          <li>7天和30天平均基于历史资金费率数据计算</li>
         </ul>
       </div>
     </div>
