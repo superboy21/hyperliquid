@@ -81,6 +81,30 @@ interface SpotMetaAndAssetCtxs {
 // Hyperliquid 资金费率周期（每8小时一次）
 const FUNDING_PERIODS_PER_YEAR = 365 * 3; // 365天 * 每天3次
 
+// 已知的 HIP-3 资产列表（基于实际可用的资产）
+const KNOWN_HIP3_ASSETS = [
+  "xyz:SILVER",
+  "xyz:GOLD", 
+  "xyz:MSTR",
+  "xyz:COIN",
+  "xyz:NVDA",
+  "xyz:AMD",
+  "xyz:TSLA",
+  "xyz:AAPL",
+  "xyz:GOOGL",
+  "xyz:AMZN",
+  "xyz:MSFT",
+  "xyz:META",
+  "xyz:NFLX",
+  "xyz:SPY",
+  "xyz:QQQ",
+  "xyz:IWM",
+  "xyz:GLD",
+  "xyz:SLV",
+  "xyz:TLT",
+  "xyz:UVXY",
+];
+
 // 获取所有永续合约市场的资金费率
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   try {
@@ -121,63 +145,83 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-// 获取所有现货市场（HIP-3）的资金费率
-export async function getSpotFundingRates(): Promise<FundingRate[]> {
+// 获取单个 HIP-3 资产的当前资金费率（通过获取最近24小时的历史数据）
+async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
   try {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "spotMetaAndAssetCtxs" }),
-    });
-
-    if (!response.ok) throw new Error("Failed to fetch spot funding rates");
-
-    const data = await response.json();
+    const endTime = Date.now();
+    const startTime = endTime - 24 * 60 * 60 * 1000; // 过去24小时
     
-    // data is an array: [meta, assetCtxs]
-    const meta: SpotMetaAndAssetCtxs = data[0];
-    const assetCtxs: SpotAssetContext[] = data[1];
+    const history = await getFundingHistory(coin, startTime, endTime);
     
-    if (!meta?.universe || !assetCtxs) {
-      throw new Error("Invalid spot response format");
+    if (history.length === 0) {
+      return null;
     }
-
-    const rates: FundingRate[] = [];
-    meta.universe.forEach((market: SpotMarketInfo, index: number) => {
-      const ctx = assetCtxs[index];
-      // 只返回有资金费率的 HIP-3 资产
-      if (ctx?.funding && parseFloat(ctx.funding) !== 0) {
-        rates.push({
-          coin: market.name,
-          fundingRate: ctx.funding || "0",
-          markPrice: ctx.markPx || "0",
-          indexPrice: ctx.oraclePx || "0",
-          premium: ctx.premium || "0",
-          openInterest: ctx.openInterest || "0",
-          dayVolume: ctx.dayNtlVlm || "0",
-          isSpot: true,
-        });
-      }
-    });
-    return rates;
+    
+    // 获取最新的资金费率
+    const latest = history[history.length - 1];
+    
+    return {
+      coin: coin,
+      fundingRate: latest.fundingRate,
+      markPrice: latest.markPrice || "0",
+      indexPrice: latest.indexPrice || "0",
+      premium: "0", // HIP-3 可能没有 premium 数据
+      openInterest: "0",
+      dayVolume: "0",
+      isSpot: true,
+    };
   } catch (error) {
-    console.error("Error fetching spot funding rates:", error);
-    return [];
+    console.error(`Error fetching HIP-3 funding rate for ${coin}:`, error);
+    return null;
   }
 }
 
-// 获取所有资金费率（永续合约）
+// 获取所有 HIP-3 资产的资金费率
+export async function getHip3FundingRates(): Promise<FundingRate[]> {
+  // 串行获取 HIP-3 资产数据，避免请求过多
+  const rates: FundingRate[] = [];
+  
+  for (const coin of KNOWN_HIP3_ASSETS) {
+    try {
+      const rate = await getHip3FundingRate(coin);
+      if (rate) {
+        rates.push(rate);
+      }
+      // 添加小延迟避免请求过快
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (error) {
+      console.error(`Failed to fetch ${coin}:`, error);
+    }
+  }
+  
+  return rates;
+}
+
+// 获取所有资金费率（永续合约 + HIP-3 资产）
 export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
   try {
-    // 只获取永续合约数据（现货市场API没有资金费率数据）
-    const perpRates = await getAllFundingRates();
+    // 同时获取永续合约和 HIP-3 资产数据
+    const [perpRates, hip3Rates] = await Promise.all([
+      getAllFundingRates(),
+      getHip3FundingRates(),
+    ]);
     
-    if (perpRates.length === 0) {
-      console.error("No perpetual funding rates returned");
+    if (perpRates.length === 0 && hip3Rates.length === 0) {
+      console.error("No funding rates returned");
       return [];
     }
 
-    return perpRates;
+    // 合并并去重（HIP-3 资产可能已经在永续合约中）
+    const allRates = [...perpRates];
+    
+    for (const hip3Rate of hip3Rates) {
+      const exists = allRates.some(r => r.coin === hip3Rate.coin);
+      if (!exists) {
+        allRates.push(hip3Rate);
+      }
+    }
+
+    return allRates;
   } catch (error) {
     console.error("Error fetching all funding rates:", error);
     return [];
@@ -280,10 +324,11 @@ export async function getMeta(): Promise<MarketInfo[]> {
   }
 }
 
-// 将资金费率转换为年化（Hyperliquid 每8小时结算一次）
+// 将资金费率转换为年化（使用用户提供的公式：fundingRate * 24 * 365 * 100）
 export function toAnnualizedRate(rate: string | number): number {
   const rateNum = typeof rate === "string" ? parseFloat(rate) : rate;
-  return rateNum * FUNDING_PERIODS_PER_YEAR;
+  // 用户的 Python 代码使用：fundingRate * 24 * 365 * 100
+  return rateNum * 24 * 365 * 100;
 }
 
 // 格式化资金费率为百分比（原始值）

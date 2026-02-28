@@ -127,6 +127,9 @@ export default function FundingMonitor() {
   const zeroRates = fundingRates.filter(
     (r) => parseFloat(r.fundingRate) === 0
   ).length;
+  const hip3Count = fundingRates.filter(
+    (r) => r.coin.startsWith("xyz:")
+  ).length;
   
   // 计算平均年化资金费率
   const avgRate =
@@ -176,10 +179,14 @@ export default function FundingMonitor() {
   return (
     <div className="space-y-6">
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">交易对数量</p>
           <p className="text-2xl font-bold text-white">{fundingRates.length}</p>
+        </div>
+        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <p className="text-gray-400 text-sm">HIP-3 资产</p>
+          <p className="text-2xl font-bold text-purple-400">{hip3Count}</p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">正资金费率</p>
@@ -302,9 +309,16 @@ export default function FundingMonitor() {
                     }`}
                   >
                     <td className="px-4 py-3">
-                      <span className="font-medium text-white">
-                        {rate.coin}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white">
+                          {rate.coin}
+                        </span>
+                        {rate.coin.startsWith("xyz:") && (
+                          <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 text-xs rounded">
+                            HIP-3
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span
@@ -339,9 +353,16 @@ export default function FundingMonitor() {
         {/* 历史数据图表 */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
-            <h2 className="text-lg font-semibold text-white">
-              {selectedCoin ? `${selectedCoin} 历史资金费率` : "选择交易对查看历史"}
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-white">
+                {selectedCoin ? `${selectedCoin} 历史资金费率` : "选择交易对查看历史"}
+              </h2>
+              {selectedCoin && selectedCoin.startsWith("xyz:") && (
+                <span className="px-2 py-0.5 bg-purple-500/20 text-purple-400 text-xs rounded">
+                  HIP-3
+                </span>
+              )}
+            </div>
             {selectedCoin && (
               <p className="text-sm text-gray-400">过去30天数据</p>
             )}
