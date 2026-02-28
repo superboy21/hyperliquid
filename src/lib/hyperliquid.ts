@@ -298,6 +298,8 @@ export async function getFundingHistory(
       body.startTime = startTimeSeconds * 1000;
     }
 
+    console.log(`[API] Request fundingHistory for ${coin}:`, body);
+
     const response = await fetch("https://api.hyperliquid.xyz/info", {
       method: "POST",
       headers: { 
@@ -309,15 +311,17 @@ export async function getFundingHistory(
     });
 
     if (!response.ok) {
-      // fundingHistory might not be available for all coins
-      console.log(`No funding history available for ${coin}`);
+      console.log(`[API] Response not OK for ${coin}:`, response.status);
       return [];
     }
 
     const data = await response.json();
     
+    console.log(`[API] Response for ${coin}:`, Array.isArray(data) ? `${data.length} items` : data);
+    
     // Check if data is an array
     if (!Array.isArray(data)) {
+      console.log(`[API] Data is not an array for ${coin}:`, typeof data);
       return [];
     }
     
@@ -329,7 +333,7 @@ export async function getFundingHistory(
       indexPrice: item.indexPrice || "0",
     }));
   } catch (error) {
-    console.error("Error fetching funding history:", error);
+    console.error("[API] Error fetching funding history:", error);
     return [];
   }
 }

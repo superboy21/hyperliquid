@@ -75,16 +75,22 @@ export default function FundingMonitor() {
   // 获取历史数据
   const fetchHistory = useCallback(async (coin: string) => {
     setHistoryLoading(true);
+    setHistory([]); // 清空旧数据
     try {
       // 获取过去48小时的历史数据（使用秒级时间戳）
       const endTime = Math.floor(Date.now() / 1000);
       const startTime = endTime - 48 * 60 * 60;
       
-      console.log(`Fetching history for ${coin}: startTime=${startTime} (48h ago)`);
+      console.log(`Fetching history for ${coin}: startTime=${startTime} (${new Date(startTime * 1000).toISOString()})`);
+      console.log(`Current time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);
       
       const historyData = await getFundingHistory(coin, startTime);
       
-      console.log(`History for ${coin}: ${historyData.length} items`);
+      console.log(`History for ${coin}: ${historyData.length} items received`);
+      if (historyData.length > 0) {
+        console.log(`First item time: ${historyData[0].time} (${new Date(historyData[0].time).toISOString()})`);
+        console.log(`Last item time: ${historyData[historyData.length-1].time} (${new Date(historyData[historyData.length-1].time).toISOString()})`);
+      }
       
       setHistory(historyData);
     } catch (error) {
