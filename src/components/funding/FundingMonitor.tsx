@@ -7,6 +7,7 @@ import {
   formatFundingRate,
   formatPrice,
   formatTime,
+  formatVolume,
   type FundingRate,
   type FundingHistoryItem,
 } from "@/lib/hyperliquid";
@@ -14,20 +15,30 @@ import {
 export default function FundingMonitor() {
   const [fundingRates, setFundingRates] = useState<FundingRate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const [history, setHistory] = useState<FundingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name">("rate");
+  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("rate");
   const [sortDesc, setSortDesc] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   // 获取资金费率数据
   const fetchData = useCallback(async () => {
     try {
+      setError(null);
       const rates = await getAllFundingRates();
-      setFundingRates(rates);
-    } catch (error) {
-      console.error("Error fetching data:", error);
+      
+      if (rates.length === 0) {
+        setError("未能获取到资金费率数据，请稍后重试");
+      } else {
+        setFundingRates(rates);
+        setLastUpdate(new Date());
+      }
+    } catch (err) {
+      console.error("Error fetching data:", err);
+      setError("获取数据时发生错误");
     } finally {
       setLoading(false);
     }
@@ -51,6 +62,7 @@ export default function FundingMonitor() {
       setHistory(historyData);
     } catch (error) {
       console.error("Error fetching history:", error);
+      setHistory([]);
     } finally {
       setHistoryLoading(false);
     }
@@ -74,6 +86,10 @@ export default function FundingMonitor() {
         const rateA = parseFloat(a.fundingRate);
         const rateB = parseFloat(b.fundingRate);
         return sortDesc ? rateB - rateA : rateA - rateB;
+      } else if (sortBy === "volume") {
+        const volA = parseFloat(a.dayVolume);
+        const volB = parseFloat(b.dayVolume);
+        return sortDesc ? volB - volA : volA - volB;
       } else {
         return sortDesc
           ? b.coin.localeCompare(a.coin)
@@ -88,18 +104,46 @@ export default function FundingMonitor() {
   const negativeRates = fundingRates.filter(
     (r) => parseFloat(r.fundingRate) < 0
   ).length;
+  const zeroRates = fundingRates.filter(
+    (r) => parseFloat(r.fundingRate) === 0
+  ).length;
   const avgRate =
     fundingRates.length > 0
       ? fundingRates.reduce((sum, r) => sum + parseFloat(r.fundingRate), 0) /
         fundingRates.length
       : 0;
+  const totalVolume = fundingRates.reduce(
+    (sum, r) => sum + parseFloat(r.dayVolume),
+    0
+  );
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="mt-4 text-gray-400">加载资金费率数据...</p>
+          <p className="mt-4 text-gray-400">正在加载资金费率数据...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="w-12 h-12 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <p className="text-red-400 mb-4">{error}</p>
+          <button
+            onClick={fetchData}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+          >
+            重新加载
+          </button>
         </div>
       </div>
     );
@@ -108,7 +152,7 @@ export default function FundingMonitor() {
   return (
     <div className="space-y-6">
       {/* 统计卡片 */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">交易对数量</p>
           <p className="text-2xl font-bold text-white">{fundingRates.length}</p>
@@ -122,6 +166,10 @@ export default function FundingMonitor() {
           <p className="text-2xl font-bold text-red-400">{negativeRates}</p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <p className="text-gray-400 text-sm">零资金费率</p>
+          <p className="text-2xl font-bold text-gray-400">{zeroRates}</p>
+        </div>
+        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">平均资金费率</p>
           <p
             className={`text-2xl font-bold ${
@@ -131,6 +179,10 @@ export default function FundingMonitor() {
             {formatFundingRate(avgRate.toString())}
           </p>
         </div>
+        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+          <p className="text-gray-400 text-sm">24h 总交易量</p>
+          <p className="text-2xl font-bold text-blue-400">{formatVolume(totalVolume.toString())}</p>
+        </div>
       </div>
 
       {/* 搜索和排序 */}
@@ -138,13 +190,13 @@ export default function FundingMonitor() {
         <div className="flex-1">
           <input
             type="text"
-            placeholder="搜索交易对..."
+            placeholder="搜索交易对 (如: BTC, ETH)..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => {
               setSortBy("rate");
@@ -157,6 +209,19 @@ export default function FundingMonitor() {
             }`}
           >
             按费率 {sortDesc ? "↓" : "↑"}
+          </button>
+          <button
+            onClick={() => {
+              setSortBy("volume");
+              setSortDesc(!sortDesc);
+            }}
+            className={`px-4 py-2 rounded-lg border transition-colors ${
+              sortBy === "volume"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            按交易量 {sortDesc ? "↓" : "↑"}
           </button>
           <button
             onClick={() => {
@@ -174,13 +239,23 @@ export default function FundingMonitor() {
         </div>
       </div>
 
+      {/* 更新时间 */}
+      {lastUpdate && (
+        <div className="text-sm text-gray-500">
+          最后更新: {lastUpdate.toLocaleTimeString("zh-CN")} (每30秒自动刷新)
+        </div>
+      )}
+
       {/* 主内容区 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 资金费率列表 */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
             <h2 className="text-lg font-semibold text-white">实时资金费率</h2>
-            <p className="text-sm text-gray-400">每30秒自动刷新</p>
+            <p className="text-sm text-gray-400">
+              共 {filteredAndSortedRates.length} 个交易对
+              {searchTerm && ` (筛选自 ${fundingRates.length} 个)`}
+            </p>
           </div>
           <div className="max-h-[600px] overflow-y-auto">
             <table className="w-full">
@@ -192,8 +267,11 @@ export default function FundingMonitor() {
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     资金费率
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
                     标记价格
+                  </th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden md:table-cell">
+                    24h 交易量
                   </th>
                 </tr>
               </thead>
@@ -214,23 +292,35 @@ export default function FundingMonitor() {
                     <td className="px-4 py-3 text-right">
                       <span
                         className={`font-mono font-medium ${
-                          parseFloat(rate.fundingRate) >= 0
+                          parseFloat(rate.fundingRate) > 0
                             ? "text-green-400"
-                            : "text-red-400"
+                            : parseFloat(rate.fundingRate) < 0
+                            ? "text-red-400"
+                            : "text-gray-400"
                         }`}
                       >
                         {formatFundingRate(rate.fundingRate)}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right hidden sm:table-cell">
                       <span className="text-gray-300 font-mono">
                         {formatPrice(rate.markPrice)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right hidden md:table-cell">
+                      <span className="text-gray-400 font-mono text-sm">
+                        {formatVolume(rate.dayVolume)}
                       </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {filteredAndSortedRates.length === 0 && (
+              <div className="p-8 text-center text-gray-500">
+                没有找到匹配的交易对
+              </div>
+            )}
           </div>
         </div>
 
@@ -277,9 +367,11 @@ export default function FundingMonitor() {
                               <td className="px-3 py-2 text-right">
                                 <span
                                   className={`font-mono text-sm ${
-                                    parseFloat(item.fundingRate) >= 0
+                                    parseFloat(item.fundingRate) > 0
                                       ? "text-green-400"
-                                      : "text-red-400"
+                                      : parseFloat(item.fundingRate) < 0
+                                      ? "text-red-400"
+                                      : "text-gray-400"
                                   }`}
                                 >
                                   {formatFundingRate(item.fundingRate)}
@@ -317,7 +409,12 @@ export default function FundingMonitor() {
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-[400px] text-gray-400">
-                  暂无历史数据
+                  <div className="text-center">
+                    <p>暂无历史数据</p>
+                    <p className="text-sm text-gray-500 mt-2">
+                      {selectedCoin} 的历史数据不可用
+                    </p>
+                  </div>
                 </div>
               )
             ) : (
