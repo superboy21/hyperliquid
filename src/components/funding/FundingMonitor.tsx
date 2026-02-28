@@ -449,10 +449,10 @@ export default function FundingMonitor() {
                       <p className="text-sm text-gray-400">7天平均年化</p>
                       <p className="text-lg font-mono text-blue-400">
                         {(() => {
-                          const endTime = Math.floor(Date.now() / 1000); // 秒级时间戳
-                          const sevenDaysAgo = endTime - 7 * 24 * 60 * 60; // 7天前的秒级时间戳
-                          // API返回和传入的时间都是秒级，直接比较
-                          const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+                          const endTimeMs = Date.now(); // 毫秒级时间戳
+                          const sevenDaysAgoMs = endTimeMs - 7 * 24 * 60 * 60 * 1000; // 7天前的毫秒级时间戳
+                          // API返回的time是毫秒级
+                          const last7Days = history.filter((h) => h.time >= sevenDaysAgoMs);
                           if (last7Days.length === 0) return "-";
                           const avg = last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length;
                           return formatAnnualizedRate(avg);
