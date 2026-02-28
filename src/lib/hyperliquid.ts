@@ -325,11 +325,13 @@ export async function getMeta(): Promise<MarketInfo[]> {
   }
 }
 
-// 将资金费率转换为年化（使用用户提供的公式：fundingRate * 24 * 365 * 100）
+// 将资金费率转换为年化
+// Hyperliquid 资金费率每8小时结算一次（每天3次）
+// 年化公式：fundingRate * 3 * 365 * 100
 export function toAnnualizedRate(rate: string | number): number {
   const rateNum = typeof rate === "string" ? parseFloat(rate) : rate;
-  // 用户的 Python 代码使用：fundingRate * 24 * 365 * 100
-  return rateNum * 24 * 365 * 100;
+  // 每8小时结算一次：每天3次 × 365天 = 1095次/年
+  return rateNum * 3 * 365 * 100;
 }
 
 // 格式化资金费率为百分比（原始值）
