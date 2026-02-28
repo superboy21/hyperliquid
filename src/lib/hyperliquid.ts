@@ -166,61 +166,51 @@ export async function getSpotFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-// 获取所有资金费率（包括永续合约和 HIP-3 现货）
+// 获取所有资金费率（永续合约）
 export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
   try {
-    // 并行获取永续合约和现货数据
-    const [perpRates, spotRates] = await Promise.all([
-      getAllFundingRates(),
-      getSpotFundingRates(),
-    ]);
+    // 只获取永续合约数据（现货市场API没有资金费率数据）
+    const perpRates = await getAllFundingRates();
+    
+    if (perpRates.length === 0) {
+      console.error("No perpetual funding rates returned");
+      return [];
+    }
 
-    // 合并数据
-    const allRates = [...perpRates, ...spotRates];
-
-    // 获取每个币种的历史数据（用于计算平均值）
-    const ratesWithHistory = await Promise.all(
-      allRates.map(async (rate) => {
-        try {
-          // 获取30天的历史数据
-          const endTime = Date.now();
-          const startTime = endTime - 30 * 24 * 60 * 60 * 1000;
-          const history = await getFundingHistory(rate.coin, startTime, endTime);
-
-          if (history.length === 0) {
-            return rate;
-          }
-
-          // 计算7天平均
-          const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
-          const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
-          const avg7d =
-            last7Days.length > 0
-              ? last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) /
-                last7Days.length
-              : 0;
-
-          // 计算30天平均
-          const avg30d =
-            history.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) /
-            history.length;
-
-          return {
-            ...rate,
-            avg7d,
-            avg30d,
-          };
-        } catch (error) {
-          console.error(`Error fetching history for ${rate.coin}:`, error);
-          return rate;
-        }
-      })
-    );
-
-    return ratesWithHistory;
+    return perpRates;
   } catch (error) {
     console.error("Error fetching all funding rates:", error);
     return [];
+  }
+}
+
+// 获取单个币种的历史平均值（按需调用）
+export async function getFundingAverages(coin: string): Promise<{ avg7d: number; avg30d: number } | null> {
+  try {
+    const endTime = Date.now();
+    const startTime = endTime - 30 * 24 * 60 * 60 * 1000;
+    const history = await getFundingHistory(coin, startTime, endTime);
+
+    if (history.length === 0) {
+      return null;
+    }
+
+    // 计算7天平均
+    const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
+    const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+    const avg7d =
+      last7Days.length > 0
+        ? last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length
+        : 0;
+
+    // 计算30天平均
+    const avg30d =
+      history.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / history.length;
+
+    return { avg7d, avg30d };
+  } catch (error) {
+    console.error(`Error fetching averages for ${coin}:`, error);
+    return null;
   }
 }
 

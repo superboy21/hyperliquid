@@ -13,6 +13,25 @@ import {
   type FundingHistoryItem,
 } from "@/lib/hyperliquid";
 
+// Helper function to calculate averages from history
+function calculateAveragesFromHistory(history: FundingHistoryItem[]) {
+  if (history.length === 0) return { avg7d: null, avg30d: null };
+
+  const endTime = Date.now();
+  const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
+  const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+
+  const avg7d =
+    last7Days.length > 0
+      ? last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length
+      : null;
+
+  const avg30d =
+    history.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / history.length;
+
+  return { avg7d, avg30d };
+}
+
 export default function FundingMonitor() {
   const [fundingRates, setFundingRates] = useState<FundingRate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,7 +40,7 @@ export default function FundingMonitor() {
   const [history, setHistory] = useState<FundingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume" | "avg7d" | "avg30d">("rate");
+  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("rate");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
@@ -91,14 +110,6 @@ export default function FundingMonitor() {
         const volA = parseFloat(a.dayVolume);
         const volB = parseFloat(b.dayVolume);
         return sortDesc ? volB - volA : volA - volB;
-      } else if (sortBy === "avg7d") {
-        const avgA = a.avg7d || 0;
-        const avgB = b.avg7d || 0;
-        return sortDesc ? avgB - avgA : avgA - avgB;
-      } else if (sortBy === "avg30d") {
-        const avgA = a.avg30d || 0;
-        const avgB = b.avg30d || 0;
-        return sortDesc ? avgB - avgA : avgA - avgB;
       } else {
         return sortDesc
           ? b.coin.localeCompare(a.coin)
@@ -124,24 +135,11 @@ export default function FundingMonitor() {
         fundingRates.length
       : 0;
   const avgAnnualized = toAnnualizedRate(avgRate);
-  
-  // 计算历史平均年化
-  const avg7dAnnualized =
-    fundingRates.length > 0
-      ? fundingRates.reduce((sum, r) => sum + (r.avg7d || 0), 0) / fundingRates.filter(r => r.avg7d !== undefined).length
-      : 0;
-  const avg30dAnnualized =
-    fundingRates.length > 0
-      ? fundingRates.reduce((sum, r) => sum + (r.avg30d || 0), 0) / fundingRates.filter(r => r.avg30d !== undefined).length
-      : 0;
-      
+
   const totalVolume = fundingRates.reduce(
     (sum, r) => sum + parseFloat(r.dayVolume),
     0
   );
-  
-  // HIP-3 资产数量
-  const hip3Count = fundingRates.filter(r => r.isSpot).length;
 
   if (loading) {
     return (
@@ -178,14 +176,10 @@ export default function FundingMonitor() {
   return (
     <div className="space-y-6">
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">交易对数量</p>
           <p className="text-2xl font-bold text-white">{fundingRates.length}</p>
-        </div>
-        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">HIP-3 资产</p>
-          <p className="text-2xl font-bold text-purple-400">{hip3Count}</p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">正资金费率</p>
@@ -207,26 +201,6 @@ export default function FundingMonitor() {
             }`}
           >
             {formatAnnualizedRate(avgRate)}
-          </p>
-        </div>
-        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">7天平均年化</p>
-          <p
-            className={`text-lg font-bold ${
-              avg7dAnnualized >= 0 ? "text-green-400" : "text-red-400"
-            }`}
-          >
-            {avg7dAnnualized !== 0 ? formatAnnualizedRate(avg7dAnnualized) : "-"}
-          </p>
-        </div>
-        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">30天平均年化</p>
-          <p
-            className={`text-lg font-bold ${
-              avg30dAnnualized >= 0 ? "text-green-400" : "text-red-400"
-            }`}
-          >
-            {avg30dAnnualized !== 0 ? formatAnnualizedRate(avg30dAnnualized) : "-"}
           </p>
         </div>
       </div>
@@ -255,32 +229,6 @@ export default function FundingMonitor() {
             }`}
           >
             当前年化 {sortDesc ? "↓" : "↑"}
-          </button>
-          <button
-            onClick={() => {
-              setSortBy("avg7d");
-              setSortDesc(!sortDesc);
-            }}
-            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
-              sortBy === "avg7d"
-                ? "bg-blue-600 border-blue-600 text-white"
-                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
-            }`}
-          >
-            7天平均 {sortDesc ? "↓" : "↑"}
-          </button>
-          <button
-            onClick={() => {
-              setSortBy("avg30d");
-              setSortDesc(!sortDesc);
-            }}
-            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
-              sortBy === "avg30d"
-                ? "bg-blue-600 border-blue-600 text-white"
-                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
-            }`}
-          >
-            30天平均 {sortDesc ? "↓" : "↑"}
           </button>
           <button
             onClick={() => {
@@ -339,12 +287,6 @@ export default function FundingMonitor() {
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     当前年化
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
-                    7天平均
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden md:table-cell">
-                    30天平均
-                  </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
                     24h 交易量
                   </th>
@@ -360,16 +302,9 @@ export default function FundingMonitor() {
                     }`}
                   >
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-white">
-                          {rate.coin}
-                        </span>
-                        {rate.isSpot && (
-                          <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded">
-                            HIP-3
-                          </span>
-                        )}
-                      </div>
+                      <span className="font-medium text-white">
+                        {rate.coin}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span
@@ -382,36 +317,6 @@ export default function FundingMonitor() {
                         }`}
                       >
                         {formatAnnualizedRate(rate.fundingRate)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right hidden sm:table-cell">
-                      <span
-                        className={`font-mono text-sm ${
-                          (rate.avg7d || 0) > 0
-                            ? "text-green-400"
-                            : (rate.avg7d || 0) < 0
-                            ? "text-red-400"
-                            : "text-gray-400"
-                        }`}
-                      >
-                        {rate.avg7d !== undefined
-                          ? formatAnnualizedRate(rate.avg7d)
-                          : "-"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right hidden md:table-cell">
-                      <span
-                        className={`font-mono text-sm ${
-                          (rate.avg30d || 0) > 0
-                            ? "text-green-400"
-                            : (rate.avg30d || 0) < 0
-                            ? "text-red-400"
-                            : "text-gray-400"
-                        }`}
-                      >
-                        {rate.avg30d !== undefined
-                          ? formatAnnualizedRate(rate.avg30d)
-                          : "-"}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right hidden lg:table-cell">
