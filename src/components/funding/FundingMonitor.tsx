@@ -17,10 +17,10 @@ import {
 function calculateAveragesFromHistory(history: FundingHistoryItem[]) {
   if (history.length === 0) return { avg7d: null, avg30d: null };
 
-  const endTime = Date.now();
-  const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
-  // API返回的时间是秒级，需要转换为毫秒进行比较
-  const last7Days = history.filter((h) => h.time * 1000 >= sevenDaysAgo);
+  const endTime = Math.floor(Date.now() / 1000); // 秒级时间戳
+  const sevenDaysAgo = endTime - 7 * 24 * 60 * 60; // 7天前的秒级时间戳
+  // API返回和传入的时间都是秒级，直接比较
+  const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
 
   const avg7d =
     last7Days.length > 0
@@ -443,10 +443,10 @@ export default function FundingMonitor() {
                       <p className="text-sm text-gray-400">7天平均年化</p>
                       <p className="text-lg font-mono text-blue-400">
                         {(() => {
-                          const endTime = Date.now();
-                          const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
-                          // API返回的时间是秒级，需要转换为毫秒进行比较
-  const last7Days = history.filter((h) => h.time * 1000 >= sevenDaysAgo);
+                          const endTime = Math.floor(Date.now() / 1000); // 秒级时间戳
+                          const sevenDaysAgo = endTime - 7 * 24 * 60 * 60; // 7天前的秒级时间戳
+                          // API返回和传入的时间都是秒级，直接比较
+                          const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
                           if (last7Days.length === 0) return "-";
                           const avg = last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length;
                           return formatAnnualizedRate(avg);

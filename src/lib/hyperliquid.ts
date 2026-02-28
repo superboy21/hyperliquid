@@ -148,8 +148,8 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 // 获取单个 HIP-3 资产的当前资金费率（通过获取最近24小时的历史数据）
 async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
   try {
-    const endTime = Date.now();
-    const startTime = endTime - 24 * 60 * 60 * 1000; // 过去24小时
+    const endTime = Math.floor(Date.now() / 1000); // 秒级时间戳
+    const startTime = endTime - 24 * 60 * 60; // 过去24小时的秒级时间戳
     
     const history = await getFundingHistory(coin, startTime, endTime);
     
@@ -231,8 +231,8 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
 // 获取单个币种的历史平均值（按需调用）
 export async function getFundingAverages(coin: string): Promise<{ avg7d: number; avg30d: number } | null> {
   try {
-    const endTime = Date.now();
-    const startTime = endTime - 30 * 24 * 60 * 60 * 1000;
+    const endTime = Math.floor(Date.now() / 1000); // 转换为秒级时间戳
+    const startTime = endTime - 30 * 24 * 60 * 60; // 30天前的秒级时间戳
     const history = await getFundingHistory(coin, startTime, endTime);
 
     if (history.length === 0) {
@@ -240,9 +240,9 @@ export async function getFundingAverages(coin: string): Promise<{ avg7d: number;
     }
 
     // 计算7天平均
-    const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
-    // API返回的时间是秒级，需要转换为毫秒进行比较
-    const last7Days = history.filter((h) => h.time * 1000 >= sevenDaysAgo);
+    const sevenDaysAgo = endTime - 7 * 24 * 60 * 60; // 秒级时间戳
+    // API返回和传入的时间都是秒级，直接比较
+    const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
     const avg7d =
       last7Days.length > 0
         ? last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length
