@@ -17,10 +17,10 @@ import {
 function calculateAveragesFromHistory(history: FundingHistoryItem[]) {
   if (history.length === 0) return { avg7d: null, avg30d: null };
 
-  const endTime = Math.floor(Date.now() / 1000); // 秒级时间戳
-  const sevenDaysAgo = endTime - 7 * 24 * 60 * 60; // 7天前的秒级时间戳
-  // API返回和传入的时间都是秒级，直接比较
-  const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+  const endTimeMs = Date.now(); // 毫秒级时间戳
+  const sevenDaysAgoMs = endTimeMs - 7 * 24 * 60 * 60 * 1000; // 7天前的毫秒级时间戳
+  // API返回的time是毫秒级
+  const last7Days = history.filter((h) => h.time >= sevenDaysAgoMs);
 
   const avg7d =
     last7Days.length > 0
@@ -80,9 +80,9 @@ export default function FundingMonitor() {
       const endTime = Math.floor(Date.now() / 1000);
       const startTime = endTime - 48 * 60 * 60;
       
-      console.log(`Fetching history for ${coin}: ${startTime} to ${endTime} (48h)`);
+      console.log(`Fetching history for ${coin}: startTime=${startTime} (48h ago)`);
       
-      const historyData = await getFundingHistory(coin, startTime, endTime);
+      const historyData = await getFundingHistory(coin, startTime);
       
       console.log(`History for ${coin}: ${historyData.length} items`);
       

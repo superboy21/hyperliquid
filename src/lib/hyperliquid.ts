@@ -146,16 +146,14 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 }
 
 // 获取单个 HIP-3 资产的当前资金费率
-// 注意：HIP-3 资产的资金费率需要通过专门的 API 获取
-// 但由于 fundingHistory API 目前返回空数组，我们暂时返回 null
 async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
   try {
     const endTime = Math.floor(Date.now() / 1000);
-    const startTime = endTime - 48 * 60 * 60; // 48小时范围
+    const startTime = endTime - 48 * 60 * 60; // 48小时前（秒级）
     
-    console.log(`Fetching HIP-3 rate for ${coin}, time range: ${startTime} to ${endTime} (48h)`);
+    console.log(`Fetching HIP-3 rate for ${coin}, startTime: ${startTime} (48h ago)`);
     
-    const history = await getFundingHistory(coin, startTime, endTime);
+    const history = await getFundingHistory(coin, startTime);
     
     console.log(`${coin} history returned ${history.length} items`);
     
@@ -247,15 +245,14 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
 }
 
 // 获取单个币种的历史平均值（按需调用）
-// 注意：当前 fundingHistory API 返回空数组，因此该函数暂时无法获取历史数据
 export async function getFundingAverages(coin: string): Promise<{ avg7d: number; avg30d: number } | null> {
   try {
     const endTime = Math.floor(Date.now() / 1000);
-    const startTime = endTime - 30 * 24 * 60 * 60;
+    const startTime = endTime - 30 * 24 * 60 * 60; // 30天前（秒级）
     
-    console.log(`Fetching averages for ${coin}, range: ${startTime} to ${endTime}`);
+    console.log(`Fetching averages for ${coin}, startTime: ${startTime} (30d ago)`);
     
-    const history = await getFundingHistory(coin, startTime, endTime);
+    const history = await getFundingHistory(coin, startTime);
     
     console.log(`${coin} history for averages: ${history.length} items`);
 
@@ -286,8 +283,8 @@ export async function getFundingAverages(coin: string): Promise<{ avg7d: number;
 // 获取历史资金费率
 export async function getFundingHistory(
   coin: string,
-  startTime?: number,
-  endTime?: number
+  startTimeSeconds?: number,
+  endTimeSeconds?: number
 ): Promise<FundingHistoryItem[]> {
   try {
     const body: any = {
@@ -295,12 +292,18 @@ export async function getFundingHistory(
       coin,
     };
 
-    if (startTime) body.startTime = startTime;
-    if (endTime) body.endTime = endTime;
+    // startTime 需要毫秒级时间戳，且只传 startTime 不传 endTime
+    if (startTimeSeconds) {
+      body.startTime = startTimeSeconds * 1000;
+    }
 
     const response = await fetch("https://api.hyperliquid.xyz/info", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Origin": "https://app.hyperliquid.xyz",
+        "Referer": "https://app.hyperliquid.xyz/"
+      },
       body: JSON.stringify(body),
     });
 
