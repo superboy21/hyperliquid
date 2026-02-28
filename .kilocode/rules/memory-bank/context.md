@@ -1,10 +1,10 @@
-# Active Context: Next.js Starter Template
+# Active Context: Next.js Starter Template with Funding Monitor
 
 ## Current State
 
-**Template Status**: ✅ Ready for development
+**Template Status**: ✅ Active Development - Funding Monitor Added
 
-The template is a clean Next.js 16 starter with TypeScript and Tailwind CSS 4. It's ready for AI-assisted expansion to build any type of application.
+The project now includes a Hyperliquid funding rate monitoring page with real-time data and historical tracking.
 
 ## Recently Completed
 
@@ -14,14 +14,22 @@ The template is a clean Next.js 16 starter with TypeScript and Tailwind CSS 4. I
 - [x] ESLint configuration
 - [x] Memory bank documentation
 - [x] Recipe system for common features
+- [x] Hyperliquid funding rate monitoring page
+- [x] Real-time funding rate display with 30s auto-refresh
+- [x] Historical funding rate data (7-day view)
+- [x] Search and sort functionality
+- [x] Statistics dashboard (positive/negative rates, average)
 
 ## Current Structure
 
 | File/Directory | Purpose | Status |
 |----------------|---------|--------|
-| `src/app/page.tsx` | Home page | ✅ Ready |
+| `src/app/page.tsx` | Home page with feature cards | ✅ Ready |
 | `src/app/layout.tsx` | Root layout | ✅ Ready |
 | `src/app/globals.css` | Global styles | ✅ Ready |
+| `src/app/funding/page.tsx` | Funding rate monitor page | ✅ Ready |
+| `src/components/funding/FundingMonitor.tsx` | Main funding monitor component | ✅ Ready |
+| `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
 
 ## Current Focus
