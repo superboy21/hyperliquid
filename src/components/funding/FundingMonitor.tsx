@@ -19,7 +19,8 @@ function calculateAveragesFromHistory(history: FundingHistoryItem[]) {
 
   const endTime = Date.now();
   const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
-  const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+  // API返回的时间是秒级，需要转换为毫秒进行比较
+  const last7Days = history.filter((h) => h.time * 1000 >= sevenDaysAgo);
 
   const avg7d =
     last7Days.length > 0
@@ -444,7 +445,8 @@ export default function FundingMonitor() {
                         {(() => {
                           const endTime = Date.now();
                           const sevenDaysAgo = endTime - 7 * 24 * 60 * 60 * 1000;
-                          const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
+                          // API返回的时间是秒级，需要转换为毫秒进行比较
+  const last7Days = history.filter((h) => h.time * 1000 >= sevenDaysAgo);
                           if (last7Days.length === 0) return "-";
                           const avg = last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length;
                           return formatAnnualizedRate(avg);
