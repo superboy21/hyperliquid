@@ -151,9 +151,9 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
   try {
     const endTime = Math.floor(Date.now() / 1000);
-    const startTime = endTime - 30 * 24 * 60 * 60; // 尝试30天范围
+    const startTime = endTime - 48 * 60 * 60; // 48小时范围
     
-    console.log(`Fetching HIP-3 rate for ${coin}, time range: ${startTime} to ${endTime}`);
+    console.log(`Fetching HIP-3 rate for ${coin}, time range: ${startTime} to ${endTime} (48h)`);
     
     const history = await getFundingHistory(coin, startTime, endTime);
     
@@ -161,6 +161,7 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
     
     if (history.length === 0) {
       // API 返回空数组，暂时无法获取该资产数据
+      console.warn(`${coin}: fundingHistory API returned empty array`);
       return null;
     }
     
