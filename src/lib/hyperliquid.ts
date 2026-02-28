@@ -145,15 +145,22 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-// 获取单个 HIP-3 资产的当前资金费率（通过获取最近24小时的历史数据）
+// 获取单个 HIP-3 资产的当前资金费率
+// 注意：HIP-3 资产的资金费率需要通过专门的 API 获取
+// 但由于 fundingHistory API 目前返回空数组，我们暂时返回 null
 async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
   try {
-    const endTime = Math.floor(Date.now() / 1000); // 秒级时间戳
-    const startTime = endTime - 24 * 60 * 60; // 过去24小时的秒级时间戳
+    const endTime = Math.floor(Date.now() / 1000);
+    const startTime = endTime - 30 * 24 * 60 * 60; // 尝试30天范围
+    
+    console.log(`Fetching HIP-3 rate for ${coin}, time range: ${startTime} to ${endTime}`);
     
     const history = await getFundingHistory(coin, startTime, endTime);
     
+    console.log(`${coin} history returned ${history.length} items`);
+    
     if (history.length === 0) {
+      // API 返回空数组，暂时无法获取该资产数据
       return null;
     }
     
@@ -165,7 +172,7 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
       fundingRate: latest.fundingRate,
       markPrice: latest.markPrice || "0",
       indexPrice: latest.indexPrice || "0",
-      premium: "0", // HIP-3 可能没有 premium 数据
+      premium: "0",
       openInterest: "0",
       dayVolume: "0",
       isSpot: true,
@@ -200,18 +207,27 @@ export async function getHip3FundingRates(): Promise<FundingRate[]> {
 // 获取所有资金费率（永续合约 + HIP-3 资产）
 export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
   try {
-    // 同时获取永续合约和 HIP-3 资产数据
-    const [perpRates, hip3Rates] = await Promise.all([
-      getAllFundingRates(),
-      getHip3FundingRates(),
-    ]);
+    console.log("Starting to fetch all funding rates...");
+    
+    // 获取永续合约数据
+    const perpRates = await getAllFundingRates();
+    console.log(`Got ${perpRates.length} perpetual rates`);
+    
+    // 获取 HIP-3 资产数据（暂时可能因为 API 限制而无法获取）
+    let hip3Rates: FundingRate[] = [];
+    try {
+      hip3Rates = await getHip3FundingRates();
+      console.log(`Got ${hip3Rates.length} HIP-3 rates`);
+    } catch (e) {
+      console.log("HIP-3 rates fetch failed (expected if API unavailable):", e);
+    }
     
     if (perpRates.length === 0 && hip3Rates.length === 0) {
       console.error("No funding rates returned");
       return [];
     }
 
-    // 合并并去重（HIP-3 资产可能已经在永续合约中）
+    // 合并并去重
     const allRates = [...perpRates];
     
     for (const hip3Rate of hip3Rates) {
@@ -220,7 +236,8 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
         allRates.push(hip3Rate);
       }
     }
-
+    
+    console.log(`Total rates: ${allRates.length}`);
     return allRates;
   } catch (error) {
     console.error("Error fetching all funding rates:", error);
@@ -229,19 +246,25 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
 }
 
 // 获取单个币种的历史平均值（按需调用）
+// 注意：当前 fundingHistory API 返回空数组，因此该函数暂时无法获取历史数据
 export async function getFundingAverages(coin: string): Promise<{ avg7d: number; avg30d: number } | null> {
   try {
-    const endTime = Math.floor(Date.now() / 1000); // 转换为秒级时间戳
-    const startTime = endTime - 30 * 24 * 60 * 60; // 30天前的秒级时间戳
+    const endTime = Math.floor(Date.now() / 1000);
+    const startTime = endTime - 30 * 24 * 60 * 60;
+    
+    console.log(`Fetching averages for ${coin}, range: ${startTime} to ${endTime}`);
+    
     const history = await getFundingHistory(coin, startTime, endTime);
+    
+    console.log(`${coin} history for averages: ${history.length} items`);
 
     if (history.length === 0) {
+      console.log(`No history data available for ${coin}`);
       return null;
     }
 
     // 计算7天平均
-    const sevenDaysAgo = endTime - 7 * 24 * 60 * 60; // 秒级时间戳
-    // API返回和传入的时间都是秒级，直接比较
+    const sevenDaysAgo = endTime - 7 * 24 * 60 * 60;
     const last7Days = history.filter((h) => h.time >= sevenDaysAgo);
     const avg7d =
       last7Days.length > 0

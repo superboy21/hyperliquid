@@ -79,7 +79,13 @@ export default function FundingMonitor() {
       // 获取过去30天的历史数据（使用秒级时间戳）
       const endTime = Math.floor(Date.now() / 1000);
       const startTime = endTime - 30 * 24 * 60 * 60;
+      
+      console.log(`Fetching history for ${coin}: ${startTime} to ${endTime}`);
+      
       const historyData = await getFundingHistory(coin, startTime, endTime);
+      
+      console.log(`History for ${coin}: ${historyData.length} items`);
+      
       setHistory(historyData);
     } catch (error) {
       console.error("Error fetching history:", error);
