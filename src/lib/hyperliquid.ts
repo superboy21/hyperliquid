@@ -253,7 +253,8 @@ async function getHip3MarketData(): Promise<Map<string, Partial<FundingRate>>> {
     
     meta.universe.forEach((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
-      const coin = `xyz:${market.name}`;
+      // API 返回的 market.name 已经包含 xyz: 前缀，直接使用
+      const coin = market.name;
       marketData.set(coin, {
         coin: coin,
         markPrice: ctx?.markPx || "0",
