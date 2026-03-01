@@ -405,7 +405,7 @@ export default function FundingMonitor() {
       )}
 
       {/* 主内容区 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6">
         {/* 资金费率列表 */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
