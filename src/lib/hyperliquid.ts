@@ -265,8 +265,8 @@ export async function getFundingAverages(coin: string): Promise<{ avg7d: number;
     const combinedHistory = [...history1, ...history2].sort((a, b) => b.time - a.time);
     console.log(`${coin} combined history: ${combinedHistory.length} items`);
     
-    // 取最近的30天数据
-    const thirtyDaysAgoMs = (endTime * 1000) - 30 * 24 * 60 * 60 * 1000;
+    // 取最近的30天数据（API返回的time是毫秒级）
+    const thirtyDaysAgoMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const last30Days = combinedHistory.filter((h) => h.time >= thirtyDaysAgoMs);
     console.log(`${coin} last 30 days: ${last30Days.length} items`);
 

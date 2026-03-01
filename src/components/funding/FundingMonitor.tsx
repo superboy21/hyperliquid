@@ -98,8 +98,8 @@ export default function FundingMonitor() {
       const combinedHistory = [...history1, ...history2].sort((a, b) => b.time - a.time);
       console.log(`Combined history for ${coin}: ${combinedHistory.length} items`);
       
-      // 取最近的30天数据
-      const thirtyDaysAgoMs = (endTime * 1000) - 30 * 24 * 60 * 60 * 1000;
+      // 取最近的30天数据（API返回的time是毫秒级）
+      const thirtyDaysAgoMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
       const last30Days = combinedHistory.filter((h) => h.time >= thirtyDaysAgoMs);
       console.log(`Last 30 days for ${coin}: ${last30Days.length} items`);
       
