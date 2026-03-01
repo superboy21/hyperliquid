@@ -399,7 +399,7 @@ export default function FundingMonitor() {
                 : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
             }`}
           >
-            持仓量 {sortDesc ? "↓" : "↑"}
+            持仓价值 {sortDesc ? "↓" : "↑"}
           </button>
           <button
             onClick={() => {
@@ -458,7 +458,7 @@ export default function FundingMonitor() {
                     24h交易量
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
-                    持仓量
+                    持仓价值
                   </th>
                 </tr>
               </thead>
