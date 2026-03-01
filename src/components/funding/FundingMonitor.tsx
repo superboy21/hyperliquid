@@ -468,10 +468,7 @@ export default function FundingMonitor() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-700">
-                        {history
-                          .slice()
-                          .reverse()
-                          .map((item, index) => (
+                        {history.map((item, index) => (
                             <tr key={index} className="hover:bg-gray-700/50">
                               <td className="px-3 py-2 text-sm text-gray-300">
                                 {formatTime(item.time)}
