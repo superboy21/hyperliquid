@@ -558,7 +558,7 @@ export default function FundingMonitor() {
               )}
             </div>
             {selectedCoin && (
-              <p className="text-sm text-gray-400">过去48小时数据</p>
+              <p className="text-sm text-gray-400">过去30天数据</p>
             )}
           </div>
           <div className="p-4">
@@ -709,10 +709,10 @@ export default function FundingMonitor() {
       <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
         <h3 className="text-sm font-medium text-gray-300 mb-2">资金费率说明</h3>
         <ul className="text-sm text-gray-400 space-y-1 list-disc list-inside">
-          <li><strong className="text-gray-300">最新结算年化</strong>：显示已结算的资金费率乘以 365×3 = 1095 次计算得出的年化值</li>
+          <li><strong className="text-gray-300">HIP-3 资产</strong>：Hyperliquid Improvement Proposal 3 支持的RWA资产，如大宗商品，股票等</li>
           <li>正资金费率：多头支付给空头，表示市场看涨情绪较强</li>
           <li>负资金费率：空头支付给多头，表示市场看跌情绪较强</li>
-          <li>资金费率每8小时结算一次（UTC 00:00, 08:00, 16:00）</li>
+          <li>资金费率每小时结算一次</li>
           <li>7天和30天平均基于历史资金费率数据计算</li>
           <li className="text-yellow-500">注：HIP-3 资产（如 xyz:gold、xyz:mstr 等）因 API 限制，暂无法获取资金费率数据</li>
         </ul>
