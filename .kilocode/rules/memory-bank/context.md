@@ -26,6 +26,7 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Annualized funding rate display** (rate × 1095)
 - [x] **7-day and 30-day average annualized funding rates**
 - [x] **Fixed HIP-3 predicted funding rates**: Using `premium` field from `fundingHistory` API instead of `fundingRate`
+- [x] **Differentiated rate labels**: Standard assets show "预测年化", HIP-3 assets show "最新结算年化"
 
 ## Current Structure
 
@@ -119,3 +120,4 @@ export async function GET() {
 | Initial | Template created with base setup |
 | 2026-02-28 | Added Hyperliquid funding monitor with HIP-3 assets, annualized rates, and historical averages |
 | 2026-03-01 | Fixed HIP-3 predicted funding rates: using `premium` field from `fundingHistory` API instead of `fundingRate` |
+| 2026-03-01 | Differentiated rate labels: standard assets show "预测年化", HIP-3 assets show "最新结算年化" |
