@@ -557,6 +557,9 @@ export default function FundingMonitor() {
                             时间
                           </th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-400">
+                            小时资金费率
+                          </th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-400">
                             年化资金费率
                           </th>
                         </tr>
@@ -566,6 +569,19 @@ export default function FundingMonitor() {
                             <tr key={index} className="hover:bg-gray-700/50">
                               <td className="px-3 py-2 text-sm text-gray-300">
                                 {formatTime(item.time)}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <span
+                                  className={`font-mono text-sm ${
+                                    parseFloat(item.fundingRate) > 0
+                                      ? "text-green-400"
+                                      : parseFloat(item.fundingRate) < 0
+                                      ? "text-red-400"
+                                      : "text-gray-400"
+                                  }`}
+                                >
+                                  {(parseFloat(item.fundingRate) * 100).toFixed(4)}%
+                                </span>
                               </td>
                               <td className="px-3 py-2 text-right">
                                 <span
