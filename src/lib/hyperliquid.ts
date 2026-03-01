@@ -145,48 +145,50 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-// 获取所有 HIP-3 现货资产的当前资金费率（使用 spotMetaAndAssetCtxs API）
+// 获取所有 HIP-3 现货资产的当前资金费率
+// 注意：spotMetaAndAssetCtxs API 不返回 funding 字段，需要从 fundingHistory 获取
 export async function getSpotFundingRates(): Promise<FundingRate[]> {
-  try {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "spotMetaAndAssetCtxs" }),
-    });
-
-    if (!response.ok) throw new Error("Failed to fetch spot funding rates");
-
-    const data = await response.json();
-    
-    // data is an array: [tokens, universe, assetCtxs]
-    const tokens = data[0];
-    const universe = data[1];
-    const assetCtxs: SpotAssetContext[] = data[2];
-    
-    if (!universe || !assetCtxs) {
-      throw new Error("Invalid spot response format");
-    }
-
-    return universe.map((market: SpotMarketInfo, index: number) => {
-      const ctx = assetCtxs[index];
-      const tokenInfo = tokens[market.index];
-      const coinName = tokenInfo?.name || market.name;
+  const rates: FundingRate[] = [];
+  
+  for (const coin of KNOWN_HIP3_ASSETS) {
+    try {
+      const endTime = Math.floor(Date.now() / 1000);
+      const startTime = endTime - 48 * 60 * 60; // 最近48小时
       
-      return {
-        coin: coinName,
-        fundingRate: ctx?.funding || "0",
-        markPrice: ctx?.markPx || "0",
-        indexPrice: ctx?.oraclePx || "0",
-        premium: ctx?.premium || "0",
-        openInterest: ctx?.openInterest || "0",
-        dayVolume: ctx?.dayNtlVlm || "0",
+      const response = await fetch("https://api.hyperliquid.xyz/info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "fundingHistory", coin, startTime }),
+      });
+
+      if (!response.ok) continue;
+
+      const history = await response.json();
+      
+      if (!history || history.length === 0) continue;
+      
+      // 获取最新的资金费率
+      const latest = history[history.length - 1];
+      
+      rates.push({
+        coin: coin,
+        fundingRate: latest.fundingRate || "0",
+        markPrice: latest.markPrice || "0",
+        indexPrice: latest.indexPrice || "0",
+        premium: latest.premium || "0",
+        openInterest: "0",
+        dayVolume: "0",
         isSpot: true,
-      };
-    });
-  } catch (error) {
-    console.error("Error fetching spot funding rates:", error);
-    return [];
+      });
+      
+      // 添加小延迟避免请求过快
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } catch (error) {
+      console.error(`Error fetching spot rate for ${coin}:`, error);
+    }
   }
+  
+  return rates;
 }
 
 // 获取单个 HIP-3 资产的当前资金费率
