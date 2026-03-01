@@ -152,9 +152,9 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 // 获取所有 HIP-3 现货资产的当前资金费率
 // 注意：HIP-3 资产的 fundingHistory API 返回空数组，无法获取资金费率数据
 export async function getSpotFundingRates(): Promise<FundingRate[]> {
-  // HIP-3 资产的 fundingHistory API 返回空数组，暂无法获取资金费率数据
-  console.log("[HIP-3] 资金费率数据暂不可用（API 限制）");
-  return [];
+  // 尝试通过 fundingHistory API 获取 HIP-3 资产数据
+  // 如果 API 返回空数组，则该资产不会显示
+  return await getHip3FundingRates();
 }
 
 // 通过 WebSocket 获取 HIP-3 资产的实时资金费率
