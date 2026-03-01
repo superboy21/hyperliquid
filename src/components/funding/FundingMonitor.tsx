@@ -41,7 +41,7 @@ export default function FundingMonitor() {
   const [history, setHistory] = useState<FundingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("rate");
+  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("volume");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [filterType, setFilterType] = useState<"all" | "hip3" | "standard">("all");
