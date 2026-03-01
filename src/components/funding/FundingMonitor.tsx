@@ -173,19 +173,37 @@ export default function FundingMonitor() {
   const negativeRates = fundingRates.filter(
     (r) => parseFloat(r.fundingRate) < 0
   ).length;
-  const zeroRates = fundingRates.filter(
-    (r) => parseFloat(r.fundingRate) === 0
-  ).length;
   const hip3Count = fundingRates.filter(
     (r) => r.coin.startsWith("xyz:")
   ).length;
-  
-  // 计算平均年化资金费率
+
+  // 计算OI加权平均资金费率
+  const calculateWeightedAvg = (rates: FundingRate[]) => {
+    if (rates.length === 0) return 0;
+    const totalOI = rates.reduce((sum, r) => sum + parseFloat(r.openInterest), 0);
+    if (totalOI === 0) return 0;
+    const weightedSum = rates.reduce(
+      (sum, r) => sum + parseFloat(r.fundingRate) * parseFloat(r.openInterest),
+      0
+    );
+    return weightedSum / totalOI;
+  };
+
+  // 分别计算各类型的加权平均
+  const standardRates = fundingRates.filter((r) => !r.coin.startsWith("xyz:"));
+  const hip3Rates = fundingRates.filter((r) => r.coin.startsWith("xyz:"));
+
+  const weightedAvgAll = calculateWeightedAvg(fundingRates);
+  const weightedAvgStandard = calculateWeightedAvg(standardRates);
+  const weightedAvgHip3 = calculateWeightedAvg(hip3Rates);
+
+  // 根据当前筛选类型显示对应的加权平均值
   const avgRate =
-    fundingRates.length > 0
-      ? fundingRates.reduce((sum, r) => sum + parseFloat(r.fundingRate), 0) /
-        fundingRates.length
-      : 0;
+    filterType === "standard"
+      ? weightedAvgStandard
+      : filterType === "hip3"
+        ? weightedAvgHip3
+        : weightedAvgAll;
   const avgAnnualized = toAnnualizedRate(avgRate);
 
   const totalVolume = fundingRates.reduce(
@@ -228,7 +246,7 @@ export default function FundingMonitor() {
   return (
     <div className="space-y-6">
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <p className="text-gray-400 text-sm">交易对数量</p>
           <p className="text-2xl font-bold text-white">{fundingRates.length}</p>
@@ -246,11 +264,7 @@ export default function FundingMonitor() {
           <p className="text-2xl font-bold text-red-400">{negativeRates}</p>
         </div>
         <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">零资金费率</p>
-          <p className="text-2xl font-bold text-gray-400">{zeroRates}</p>
-        </div>
-        <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-          <p className="text-gray-400 text-sm">当前平均年化</p>
+          <p className="text-gray-400 text-sm">当前平均年化 (OI加权)</p>
           <p
             className={`text-lg font-bold ${
               avgAnnualized >= 0 ? "text-green-400" : "text-red-400"
