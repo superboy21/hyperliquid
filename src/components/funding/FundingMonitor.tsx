@@ -156,9 +156,9 @@ export default function FundingMonitor() {
         const changeB = (parseFloat(b.markPrice) - parseFloat(b.prevDayPx)) / parseFloat(b.prevDayPx);
         return sortDesc ? changeB - changeA : changeA - changeB;
       } else if (sortBy === "oi") {
-        const oiA = parseFloat(a.openInterest);
-        const oiB = parseFloat(b.openInterest);
-        return sortDesc ? oiB - oiA : oiA - oiB;
+        const valueA = parseFloat(a.openInterest) * parseFloat(a.markPrice);
+        const valueB = parseFloat(b.openInterest) * parseFloat(b.markPrice);
+        return sortDesc ? valueB - valueA : valueA - valueB;
       } else {
         return sortDesc
           ? b.coin.localeCompare(a.coin)
@@ -528,7 +528,7 @@ export default function FundingMonitor() {
                       </td>
                       <td className="px-4 py-3 text-right hidden lg:table-cell">
                         <span className="text-gray-400 font-mono text-sm">
-                          {formatVolume(rate.openInterest)}
+                          {formatVolume(String(parseFloat(rate.openInterest) * parseFloat(rate.markPrice)))}
                         </span>
                       </td>
                     </tr>
