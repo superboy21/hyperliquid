@@ -44,6 +44,7 @@ export default function FundingMonitor() {
   const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("rate");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [filterType, setFilterType] = useState<"all" | "hip3" | "standard">("all");
 
   // 获取资金费率数据
   const fetchData = useCallback(async () => {
@@ -108,8 +109,15 @@ export default function FundingMonitor() {
     }
   }, [selectedCoin, fetchHistory]);
 
+  // 根据类型筛选
+  const ratesByType = fundingRates.filter((rate) => {
+    if (filterType === "hip3") return rate.coin.startsWith("xyz:");
+    if (filterType === "standard") return !rate.coin.startsWith("xyz:");
+    return true;
+  });
+
   // 过滤和排序
-  const filteredAndSortedRates = fundingRates
+  const filteredAndSortedRates = ratesByType
     .filter(
       (rate) =>
         rate.coin.toLowerCase().includes(searchTerm.toLowerCase())
@@ -225,18 +233,60 @@ export default function FundingMonitor() {
         </div>
       </div>
 
-      {/* 搜索和排序 */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="flex-1">
-          <input
-            type="text"
-            placeholder="搜索交易对 (如: BTC, ETH, xyz:gold...)"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+      {/* 搜索、筛选和排序 */}
+      <div className="flex flex-col gap-4">
+        {/* 资产类型切换 */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setFilterType("all")}
+            className={`px-4 py-2 rounded-lg border transition-colors font-medium ${
+              filterType === "all"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            全部资产
+          </button>
+          <button
+            onClick={() => setFilterType("standard")}
+            className={`px-4 py-2 rounded-lg border transition-colors font-medium ${
+              filterType === "standard"
+                ? "bg-cyan-600 border-cyan-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+              标准资产
+            </span>
+          </button>
+          <button
+            onClick={() => setFilterType("hip3")}
+            className={`px-4 py-2 rounded-lg border transition-colors font-medium ${
+              filterType === "hip3"
+                ? "bg-purple-600 border-purple-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+              HIP-3 资产
+            </span>
+          </button>
         </div>
-        <div className="flex gap-2 flex-wrap">
+
+        {/* 搜索和排序 */}
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1">
+            <input
+              type="text"
+              placeholder="搜索交易对 (如: BTC, ETH, xyz:gold...)"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => {
               setSortBy("rate");
@@ -276,8 +326,9 @@ export default function FundingMonitor() {
           >
             名称 {sortDesc ? "↓" : "↑"}
           </button>
+          </div>
+          </div>
         </div>
-      </div>
 
       {/* 更新时间 */}
       {lastUpdate && (
