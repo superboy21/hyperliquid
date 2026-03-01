@@ -188,10 +188,10 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
     // 对于 HIP-3 资产:
     // - fundingRate: 上期结算费率（实际收取的）
     // - premium: 下期预测费率（预测的）
-    // 使用 premium（预测费率）作为当前费率
+    // 使用 fundingRate（结算费率）作为当前费率
     return {
       coin: coin,
-      fundingRate: latest.premium || latest.fundingRate,
+      fundingRate: latest.fundingRate,
       markPrice: latest.markPrice || "0",
       indexPrice: latest.indexPrice || "0",
       premium: latest.premium || "0",
