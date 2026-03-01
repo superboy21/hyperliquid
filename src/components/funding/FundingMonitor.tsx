@@ -454,10 +454,10 @@ export default function FundingMonitor() {
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "年化资金费率"}
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     24h交易量
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     持仓价值
                   </th>
                 </tr>
@@ -521,12 +521,12 @@ export default function FundingMonitor() {
                           {formatAnnualizedRate(rate.fundingRate)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">
+                      <td className="px-4 py-3 text-right">
                         <span className="text-gray-400 font-mono text-sm">
                           {formatVolume(rate.dayVolume)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">
+                      <td className="px-4 py-3 text-right">
                         <span className="text-gray-400 font-mono text-sm">
                           {formatVolume(String(parseFloat(rate.openInterest) * parseFloat(rate.markPrice)))}
                         </span>
