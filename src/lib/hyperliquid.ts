@@ -106,7 +106,7 @@ const KNOWN_HIP3_ASSETS = [
   "xyz:UVXY",
 ];
 
-// 获取所有永续合约市场的资金费率
+// 获取所有永续合约市场的资金费率（使用结算费率 funding）
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   try {
     const response = await fetch("https://api.hyperliquid.xyz/info", {
@@ -129,9 +129,12 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 
     return meta.universe.map((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
+      // 使用 funding（结算费率）作为当前费率，而不是 premium（预测费率）
+      // 因为预测费率可能不稳定，结算费率是实际已发生的
+      const fundingRate = ctx?.funding || "0";
       return {
         coin: market.name,
-        fundingRate: ctx?.funding || "0",
+        fundingRate: fundingRate,
         markPrice: ctx?.markPx || "0",
         indexPrice: ctx?.oraclePx || "0",
         premium: ctx?.premium || "0",
@@ -147,62 +150,11 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 }
 
 // 获取所有 HIP-3 现货资产的当前资金费率
-// 注意：spotMetaAndAssetCtxs API 不返回 funding 字段，需要从 fundingHistory 获取
+// 注意：HIP-3 资产的 fundingHistory API 返回空数组，无法获取资金费率数据
 export async function getSpotFundingRates(): Promise<FundingRate[]> {
-  // 首先尝试通过 WebSocket 获取实时数据
-  const wsRates = await getSpotRatesFromWebSocket();
-  if (wsRates.length > 0) {
-    console.log(`[WebSocket] Got ${wsRates.length} real-time HIP-3 rates`);
-    return wsRates;
-  }
-  
-  // Fallback: 使用 fundingHistory API
-  console.log("[WebSocket] Failed, falling back to fundingHistory API");
-  const rates: FundingRate[] = [];
-  
-  for (const coin of KNOWN_HIP3_ASSETS) {
-    try {
-      const endTime = Math.floor(Date.now() / 1000);
-      const startTime = endTime - 48 * 60 * 60; // 最近48小时
-      
-      const response = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "fundingHistory", coin, startTime }),
-      });
-
-      if (!response.ok) continue;
-
-      const history = await response.json();
-      
-      if (!history || history.length === 0) continue;
-      
-      // 获取最新的资金费率
-      const latest = history[history.length - 1];
-      
-      // 对于 HIP-3 资产，fundingHistory 返回:
-      // - fundingRate: 上期结算费率（实际收取的）
-      // - premium: 下期预测费率（预测的）
-      // 使用 premium（预测费率）作为当前费率
-      rates.push({
-        coin: coin,
-        fundingRate: latest.premium || latest.fundingRate || "0", // 使用预测费率（premium）
-        markPrice: latest.markPrice || "0",
-        indexPrice: latest.indexPrice || "0",
-        premium: latest.premium || "0",
-        openInterest: "0",
-        dayVolume: "0",
-        isSpot: true,
-      });
-      
-      // 添加小延迟避免请求过快
-      await new Promise(resolve => setTimeout(resolve, 50));
-    } catch (error) {
-      console.error(`Error fetching spot rate for ${coin}:`, error);
-    }
-  }
-  
-  return rates;
+  // HIP-3 资产的 fundingHistory API 返回空数组，暂无法获取资金费率数据
+  console.log("[HIP-3] 资金费率数据暂不可用（API 限制）");
+  return [];
 }
 
 // 通过 WebSocket 获取 HIP-3 资产的实时资金费率

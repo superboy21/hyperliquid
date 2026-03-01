@@ -357,7 +357,7 @@ export default function FundingMonitor() {
         {/* 资金费率列表 */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
-            <h2 className="text-lg font-semibold text-white">实时年化资金费率</h2>
+            <h2 className="text-lg font-semibold text-white">最新结算年化</h2>
             <p className="text-sm text-gray-400">
               共 {filteredAndSortedRates.length} 个交易对
               {searchTerm && ` (筛选自 ${fundingRates.length} 个)`}
@@ -371,7 +371,7 @@ export default function FundingMonitor() {
                     交易对
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
-                    当前年化
+                    最新结算年化
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
                     24h 交易量
@@ -578,12 +578,12 @@ export default function FundingMonitor() {
       <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
         <h3 className="text-sm font-medium text-gray-300 mb-2">资金费率说明</h3>
         <ul className="text-sm text-gray-400 space-y-1 list-disc list-inside">
-          <li><strong className="text-purple-300">HIP-3 资产</strong>：Hyperliquid Improvement Proposal 3 支持的现货代币，如 xyz:gold、xyz:mstr 等</li>
-          <li><strong className="text-gray-300">年化资金费率</strong>：将8小时一次的资金费率乘以 365×3 = 1095 次计算得出</li>
+          <li><strong className="text-gray-300">最新结算年化</strong>：显示已结算的资金费率乘以 365×3 = 1095 次计算得出的年化值</li>
           <li>正资金费率：多头支付给空头，表示市场看涨情绪较强</li>
           <li>负资金费率：空头支付给多头，表示市场看跌情绪较强</li>
           <li>资金费率每8小时结算一次（UTC 00:00, 08:00, 16:00）</li>
           <li>7天和30天平均基于历史资金费率数据计算</li>
+          <li className="text-yellow-500">注：HIP-3 资产（如 xyz:gold、xyz:mstr 等）因 API 限制，暂无法获取资金费率数据</li>
         </ul>
       </div>
     </div>
