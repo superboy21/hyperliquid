@@ -41,7 +41,7 @@ export default function FundingMonitor() {
   const [history, setHistory] = useState<FundingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume">("volume");
+  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume" | "price" | "change" | "oi">("volume");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [filterType, setFilterType] = useState<"all" | "hip3" | "standard">("all");
@@ -146,6 +146,19 @@ export default function FundingMonitor() {
         const volA = parseFloat(a.dayVolume);
         const volB = parseFloat(b.dayVolume);
         return sortDesc ? volB - volA : volA - volB;
+      } else if (sortBy === "price") {
+        const priceA = parseFloat(a.markPrice);
+        const priceB = parseFloat(b.markPrice);
+        return sortDesc ? priceB - priceA : priceA - priceB;
+      } else if (sortBy === "change") {
+        // 计算24小时涨跌幅
+        const changeA = (parseFloat(a.markPrice) - parseFloat(a.prevDayPx)) / parseFloat(a.prevDayPx);
+        const changeB = (parseFloat(b.markPrice) - parseFloat(b.prevDayPx)) / parseFloat(b.prevDayPx);
+        return sortDesc ? changeB - changeA : changeA - changeB;
+      } else if (sortBy === "oi") {
+        const oiA = parseFloat(a.openInterest);
+        const oiB = parseFloat(b.openInterest);
+        return sortDesc ? oiB - oiA : oiA - oiB;
       } else {
         return sortDesc
           ? b.coin.localeCompare(a.coin)
@@ -317,6 +330,32 @@ export default function FundingMonitor() {
           </button>
           <button
             onClick={() => {
+              setSortBy("price");
+              setSortDesc(!sortDesc);
+            }}
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
+              sortBy === "price"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            价格 {sortDesc ? "↓" : "↑"}
+          </button>
+          <button
+            onClick={() => {
+              setSortBy("change");
+              setSortDesc(!sortDesc);
+            }}
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
+              sortBy === "change"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            24h涨跌 {sortDesc ? "↓" : "↑"}
+          </button>
+          <button
+            onClick={() => {
               setSortBy("volume");
               setSortDesc(!sortDesc);
             }}
@@ -327,6 +366,19 @@ export default function FundingMonitor() {
             }`}
           >
             交易量 {sortDesc ? "↓" : "↑"}
+          </button>
+          <button
+            onClick={() => {
+              setSortBy("oi");
+              setSortDesc(!sortDesc);
+            }}
+            className={`px-3 py-2 rounded-lg border transition-colors text-sm ${
+              sortBy === "oi"
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700"
+            }`}
+          >
+            持仓量 {sortDesc ? "↓" : "↑"}
           </button>
           <button
             onClick={() => {
@@ -373,54 +425,94 @@ export default function FundingMonitor() {
                     交易对
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
+                    价格
+                  </th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
+                    24h涨跌
+                  </th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "年化资金费率"}
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
-                    24h 交易量
+                    24h交易量
+                  </th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
+                    持仓量
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
-                {filteredAndSortedRates.map((rate) => (
-                  <tr
-                    key={rate.coin}
-                    onClick={() => setSelectedCoin(rate.coin)}
-                    className={`cursor-pointer transition-colors hover:bg-gray-700 ${
-                      selectedCoin === rate.coin ? "bg-gray-700" : ""
-                    }`}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-white">
-                          {rate.coin}
-                        </span>
-                        {rate.coin.startsWith("xyz:") && (
-                          <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 text-xs rounded">
-                            HIP-3
+                {filteredAndSortedRates.map((rate) => {
+                  // 计算24小时涨跌幅
+                  const markPx = parseFloat(rate.markPrice);
+                  const prevDayPx = parseFloat(rate.prevDayPx);
+                  const change24h = prevDayPx > 0 ? ((markPx - prevDayPx) / prevDayPx) * 100 : 0;
+                  
+                  return (
+                    <tr
+                      key={rate.coin}
+                      onClick={() => setSelectedCoin(rate.coin)}
+                      className={`cursor-pointer transition-colors hover:bg-gray-700 ${
+                        selectedCoin === rate.coin ? "bg-gray-700" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-white">
+                            {rate.coin}
                           </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span
-                        className={`font-mono font-medium ${
-                          parseFloat(rate.fundingRate) > 0
-                            ? "text-green-400"
-                            : parseFloat(rate.fundingRate) < 0
-                            ? "text-red-400"
-                            : "text-gray-400"
-                        }`}
-                      >
-                        {formatAnnualizedRate(rate.fundingRate)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right hidden lg:table-cell">
-                      <span className="text-gray-400 font-mono text-sm">
-                        {formatVolume(rate.dayVolume)}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                          {rate.coin.startsWith("xyz:") && (
+                            <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 text-xs rounded">
+                              HIP-3
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-gray-300 font-mono text-sm">
+                          {formatPrice(rate.markPrice)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span
+                          className={`font-mono text-sm ${
+                            change24h > 0
+                              ? "text-green-400"
+                              : change24h < 0
+                              ? "text-red-400"
+                              : "text-gray-400"
+                          }`}
+                        >
+                          {change24h >= 0 ? "+" : ""}
+                          {change24h.toFixed(2)}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span
+                          className={`font-mono font-medium ${
+                            parseFloat(rate.fundingRate) > 0
+                              ? "text-green-400"
+                              : parseFloat(rate.fundingRate) < 0
+                              ? "text-red-400"
+                              : "text-gray-400"
+                          }`}
+                        >
+                          {formatAnnualizedRate(rate.fundingRate)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right hidden lg:table-cell">
+                        <span className="text-gray-400 font-mono text-sm">
+                          {formatVolume(rate.dayVolume)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right hidden lg:table-cell">
+                        <span className="text-gray-400 font-mono text-sm">
+                          {formatVolume(rate.openInterest)}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             {filteredAndSortedRates.length === 0 && (

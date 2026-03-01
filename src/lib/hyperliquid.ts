@@ -8,6 +8,7 @@ export interface FundingRate {
   premium: string;
   openInterest: string;
   dayVolume: string;
+  prevDayPx: string;  // 前一天价格，用于计算涨跌幅
   isSpot?: boolean;
   // 历史平均值
   avg7d?: number;
@@ -162,6 +163,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
         premium: ctx?.premium || "0",
         openInterest: ctx?.openInterest || "0",
         dayVolume: ctx?.dayNtlVlm || "0",
+        prevDayPx: ctx?.prevDayPx || "0",
         isSpot: false,
       };
     });
@@ -219,6 +221,7 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
       premium: latest.premium || "0",
       openInterest: "0",
       dayVolume: "0",
+      prevDayPx: "0",
       isSpot: true,
     };
   } catch (error) {
@@ -227,19 +230,92 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
   }
 }
 
+// 获取 HIP-3 资产的市场数据（使用 metaAndAssetCtxs + dex 参数）
+async function getHip3MarketData(): Promise<Map<string, Partial<FundingRate>>> {
+  try {
+    const response = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "metaAndAssetCtxs", dex: "xyz" }),
+    });
+
+    if (!response.ok) throw new Error("Failed to fetch HIP-3 market data");
+
+    const data = await response.json();
+    const meta = data[0];
+    const assetCtxs: AssetContext[] = data[1];
+    
+    if (!meta?.universe || !assetCtxs) {
+      throw new Error("Invalid HIP-3 response format");
+    }
+
+    const marketData = new Map<string, Partial<FundingRate>>();
+    
+    meta.universe.forEach((market: MarketInfo, index: number) => {
+      const ctx = assetCtxs[index];
+      const coin = `xyz:${market.name}`;
+      marketData.set(coin, {
+        coin: coin,
+        markPrice: ctx?.markPx || "0",
+        indexPrice: ctx?.oraclePx || "0",
+        openInterest: ctx?.openInterest || "0",
+        dayVolume: ctx?.dayNtlVlm || "0",
+        prevDayPx: ctx?.prevDayPx || "0",
+        isSpot: true,
+      });
+    });
+    
+    return marketData;
+  } catch (error) {
+    console.error("Error fetching HIP-3 market data:", error);
+    return new Map();
+  }
+}
+
 // 获取所有 HIP-3 资产的资金费率
 export async function getHip3FundingRates(): Promise<FundingRate[]> {
-  // 串行获取 HIP-3 资产数据，避免请求过多
+  // 首先获取市场数据（价格、volume、OI 等）
+  const marketData = await getHip3MarketData();
+  
+  // 然后获取资金费率（从 fundingHistory）
   const rates: FundingRate[] = [];
   
   for (const coin of KNOWN_HIP3_ASSETS) {
     try {
-      const rate = await getHip3FundingRate(coin);
-      if (rate) {
-        rates.push(rate);
+      // 获取资金费率历史
+      const history = await getFundingHistory(coin, Math.floor(Date.now() / 1000) - 48 * 60 * 60);
+      const marketInfo = marketData.get(coin);
+      
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        rates.push({
+          coin: coin,
+          fundingRate: latest.fundingRate,
+          markPrice: marketInfo?.markPrice || latest.markPrice || "0",
+          indexPrice: marketInfo?.indexPrice || latest.indexPrice || "0",
+          premium: latest.premium || "0",
+          openInterest: marketInfo?.openInterest || "0",
+          dayVolume: marketInfo?.dayVolume || "0",
+          prevDayPx: marketInfo?.prevDayPx || "0",
+          isSpot: true,
+        });
+      } else if (marketInfo) {
+        // 没有资金费率数据，但有市场数据，仍然显示
+        rates.push({
+          coin: coin,
+          fundingRate: "0",
+          markPrice: marketInfo.markPrice || "0",
+          indexPrice: marketInfo.indexPrice || "0",
+          premium: "0",
+          openInterest: marketInfo.openInterest || "0",
+          dayVolume: marketInfo.dayVolume || "0",
+          prevDayPx: marketInfo.prevDayPx || "0",
+          isSpot: true,
+        });
       }
+      
       // 添加小延迟避免请求过快
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 50));
     } catch (error) {
       console.error(`Failed to fetch ${coin}:`, error);
     }
