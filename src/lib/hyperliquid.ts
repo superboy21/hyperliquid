@@ -248,17 +248,29 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
 export async function getFundingAverages(coin: string): Promise<{ avg7d: number; avg30d: number } | null> {
   try {
     const endTime = Math.floor(Date.now() / 1000);
-    // 注意：API最多返回500条记录，超过会导致最新数据丢失
-    // 15天约360条记录，可以确保获取完整数据
-    const startTime = endTime - 15 * 24 * 60 * 60;
+    // API最多返回500条记录，超过会导致最新数据丢失
+    // 请求两次15天数据并拼接：15天约360条，两个15天共720条，取最新的30天(约360条)
     
-    console.log(`Fetching averages for ${coin}, startTime: ${startTime} (30d ago)`);
+    // 第一次请求：最近15天
+    const startTime1 = endTime - 15 * 24 * 60 * 60;
+    const history1 = await getFundingHistory(coin, startTime1);
+    console.log(`${coin} history (first 15d): ${history1.length} items`);
     
-    const history = await getFundingHistory(coin, startTime);
+    // 第二次请求：更早的15天
+    const startTime2 = startTime1 - 15 * 24 * 60 * 60;
+    const history2 = await getFundingHistory(coin, startTime2);
+    console.log(`${coin} history (second 15d): ${history2.length} items`);
     
-    console.log(`${coin} history for averages: ${history.length} items`);
+    // 合并并按时间排序（最新的在前）
+    const combinedHistory = [...history1, ...history2].sort((a, b) => b.time - a.time);
+    console.log(`${coin} combined history: ${combinedHistory.length} items`);
+    
+    // 取最近的30天数据
+    const thirtyDaysAgoMs = (endTime * 1000) - 30 * 24 * 60 * 60 * 1000;
+    const last30Days = combinedHistory.filter((h) => h.time >= thirtyDaysAgoMs);
+    console.log(`${coin} last 30 days: ${last30Days.length} items`);
 
-    if (history.length === 0) {
+    if (last30Days.length === 0) {
       console.log(`No history data available for ${coin}`);
       return null;
     }
@@ -266,7 +278,7 @@ export async function getFundingAverages(coin: string): Promise<{ avg7d: number;
     // 计算7天平均（API返回的time是毫秒级）
     const endTimeMs = endTime * 1000; // 转换为毫秒
     const sevenDaysAgoMs = endTimeMs - 7 * 24 * 60 * 60 * 1000;
-    const last7Days = history.filter((h) => h.time >= sevenDaysAgoMs);
+    const last7Days = last30Days.filter((h) => h.time >= sevenDaysAgoMs);
     const avg7d =
       last7Days.length > 0
         ? last7Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last7Days.length
@@ -274,7 +286,7 @@ export async function getFundingAverages(coin: string): Promise<{ avg7d: number;
 
     // 计算30天平均
     const avg30d =
-      history.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / history.length;
+      last30Days.reduce((sum, h) => sum + parseFloat(h.fundingRate), 0) / last30Days.length;
 
     return { avg7d, avg30d };
   } catch (error) {

@@ -78,23 +78,37 @@ export default function FundingMonitor() {
     setHistoryLoading(true);
     setHistory([]); // 清空旧数据
     try {
-      // 获取过去15天的历史数据（API最多返回500条，超过会丢失最新数据）
-      // 注意：Hyperliquid资金费率每8小时更新一次，15天约360条数据
+      // API最多返回500条记录，超过会丢失最新数据
+      // 请求两次15天数据并拼接：15天约360条，两个15天共720条，取最新的30天
       const endTime = Math.floor(Date.now() / 1000);
-      const startTime = endTime - 15 * 24 * 60 * 60;
       
-      console.log(`Fetching history for ${coin}: startTime=${startTime} (${new Date(startTime * 1000).toISOString()})`);
-      console.log(`Current time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);
+      // 第一次请求：最近15天
+      const startTime1 = endTime - 15 * 24 * 60 * 60;
+      console.log(`Fetching history for ${coin}: startTime1=${startTime1} (${new Date(startTime1 * 1000).toISOString()})`);
+      const history1 = await getFundingHistory(coin, startTime1);
+      console.log(`History1 (last 15d) for ${coin}: ${history1.length} items`);
       
-      const historyData = await getFundingHistory(coin, startTime);
+      // 第二次请求：更早的15天
+      const startTime2 = startTime1 - 15 * 24 * 60 * 60;
+      console.log(`Fetching history for ${coin}: startTime2=${startTime2} (${new Date(startTime2 * 1000).toISOString()})`);
+      const history2 = await getFundingHistory(coin, startTime2);
+      console.log(`History2 (15d-30d ago) for ${coin}: ${history2.length} items`);
       
-      console.log(`History for ${coin}: ${historyData.length} items received`);
-      if (historyData.length > 0) {
-        console.log(`First item time: ${historyData[0].time} (${new Date(historyData[0].time).toISOString()})`);
-        console.log(`Last item time: ${historyData[historyData.length-1].time} (${new Date(historyData[historyData.length-1].time).toISOString()})`);
+      // 合并并按时间排序（最新的在前）
+      const combinedHistory = [...history1, ...history2].sort((a, b) => b.time - a.time);
+      console.log(`Combined history for ${coin}: ${combinedHistory.length} items`);
+      
+      // 取最近的30天数据
+      const thirtyDaysAgoMs = (endTime * 1000) - 30 * 24 * 60 * 60 * 1000;
+      const last30Days = combinedHistory.filter((h) => h.time >= thirtyDaysAgoMs);
+      console.log(`Last 30 days for ${coin}: ${last30Days.length} items`);
+      
+      if (last30Days.length > 0) {
+        console.log(`First item time: ${last30Days[0].time} (${new Date(last30Days[0].time).toISOString()})`);
+        console.log(`Last item time: ${last30Days[last30Days.length-1].time} (${new Date(last30Days[last30Days.length-1].time).toISOString()})`);
       }
       
-      setHistory(historyData);
+      setHistory(last30Days);
     } catch (error) {
       console.error("Error fetching history:", error);
       setHistory([]);
