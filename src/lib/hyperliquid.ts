@@ -201,89 +201,10 @@ export async function getSpotFundingRates(): Promise<FundingRate[]> {
 }
 
 // 通过 WebSocket 获取 HIP-3 资产的实时资金费率
+// 注意：WebSocket 订阅格式可能不正确，暂时禁用，改用 fundingHistory API
 async function getSpotRatesFromWebSocket(): Promise<FundingRate[]> {
-  return new Promise((resolve) => {
-    const rates: FundingRate[] = [];
-    
-    try {
-      const ws = new WebSocket("wss://api.hyperliquid.xyz/ws");
-      let resolved = false;
-      
-      const cleanup = () => {
-        if (!resolved) {
-          resolved = true;
-          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-            ws.close();
-          }
-        }
-      };
-      
-      // 5秒超时
-      setTimeout(() => {
-        cleanup();
-        resolve([]);
-      }, 5000);
-      
-      ws.onopen = () => {
-        // 订阅 webData2 频道
-        ws.send(JSON.stringify({ type: "subscribe", channel: "webData2" }));
-      };
-      
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          // 检查是否是 webData2 消息
-          if (data.type === "webData2") {
-            const perpDexs = data.data?.perpDexs || [];
-            
-            for (const dex of perpDexs) {
-              const assetCtxs = dex.assetCtxs || [];
-              
-              for (const ctx of assetCtxs) {
-                const coin = ctx.coin;
-                
-                // 只处理 HIP-3 资产
-                if (coin && (coin.startsWith("xyz:") || KNOWN_HIP3_ASSETS.includes(coin))) {
-                  rates.push({
-                    coin: coin,
-                    fundingRate: ctx.funding || "0",
-                    markPrice: ctx.markPx || "0",
-                    indexPrice: ctx.oraclePx || "0",
-                    premium: ctx.premium || "0",
-                    openInterest: ctx.openInterest || "0",
-                    dayVolume: ctx.dayNtlVlm || "0",
-                    isSpot: true,
-                  });
-                }
-              }
-            }
-            
-            // 收到数据后立即关闭
-            cleanup();
-            resolve(rates);
-          }
-        } catch (e) {
-          console.error("[WebSocket] Parse error:", e);
-        }
-      };
-      
-      ws.onerror = () => {
-        cleanup();
-        resolve([]);
-      };
-      
-      ws.onclose = () => {
-        if (!resolved) {
-          resolved = true;
-          resolve(rates);
-        }
-      };
-    } catch (error) {
-      console.error("[WebSocket] Error:", error);
-      resolve([]);
-    }
-  });
+  console.log("[WebSocket] WebSocket currently disabled, using fundingHistory API instead");
+  return [];
 }
 
 // 获取单个 HIP-3 资产的当前资金费率
