@@ -78,9 +78,10 @@ export default function FundingMonitor() {
     setHistoryLoading(true);
     setHistory([]); // 清空旧数据
     try {
-      // 获取过去30天的历史数据（使用秒级时间戳）
+      // 获取过去15天的历史数据（API最多返回500条，超过会丢失最新数据）
+      // 注意：Hyperliquid资金费率每8小时更新一次，15天约360条数据
       const endTime = Math.floor(Date.now() / 1000);
-      const startTime = endTime - 30 * 24 * 60 * 60;
+      const startTime = endTime - 15 * 24 * 60 * 60;
       
       console.log(`Fetching history for ${coin}: startTime=${startTime} (${new Date(startTime * 1000).toISOString()})`);
       console.log(`Current time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);

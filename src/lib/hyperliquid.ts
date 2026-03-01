@@ -248,7 +248,9 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
 export async function getFundingAverages(coin: string): Promise<{ avg7d: number; avg30d: number } | null> {
   try {
     const endTime = Math.floor(Date.now() / 1000);
-    const startTime = endTime - 30 * 24 * 60 * 60; // 30天前（秒级）
+    // 注意：API最多返回500条记录，超过会导致最新数据丢失
+    // 15天约360条记录，可以确保获取完整数据
+    const startTime = endTime - 15 * 24 * 60 * 60;
     
     console.log(`Fetching averages for ${coin}, startTime: ${startTime} (30d ago)`);
     
