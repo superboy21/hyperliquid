@@ -177,16 +177,23 @@ export default function FundingMonitor() {
     (r) => r.coin.startsWith("xyz:")
   ).length;
 
-  // 计算OI加权平均资金费率
+  // 计算持仓价值加权平均资金费率 (持仓价值 = 持仓量 × 标记价格)
   const calculateWeightedAvg = (rates: FundingRate[]) => {
     if (rates.length === 0) return 0;
-    const totalOI = rates.reduce((sum, r) => sum + parseFloat(r.openInterest), 0);
-    if (totalOI === 0) return 0;
-    const weightedSum = rates.reduce(
-      (sum, r) => sum + parseFloat(r.fundingRate) * parseFloat(r.openInterest),
+    const totalPositionValue = rates.reduce(
+      (sum, r) => sum + parseFloat(r.openInterest) * parseFloat(r.markPrice),
       0
     );
-    return weightedSum / totalOI;
+    if (totalPositionValue === 0) return 0;
+    const weightedSum = rates.reduce(
+      (sum, r) =>
+        sum +
+        parseFloat(r.fundingRate) *
+          parseFloat(r.openInterest) *
+          parseFloat(r.markPrice),
+      0
+    );
+    return weightedSum / totalPositionValue;
   };
 
   // 分别计算各类型的加权平均
