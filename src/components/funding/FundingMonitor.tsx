@@ -78,9 +78,9 @@ export default function FundingMonitor() {
     setHistoryLoading(true);
     setHistory([]); // 清空旧数据
     try {
-      // 获取过去48小时的历史数据（使用秒级时间戳）
+      // 获取过去30天的历史数据（使用秒级时间戳）
       const endTime = Math.floor(Date.now() / 1000);
-      const startTime = endTime - 48 * 60 * 60;
+      const startTime = endTime - 30 * 24 * 60 * 60;
       
       console.log(`Fetching history for ${coin}: startTime=${startTime} (${new Date(startTime * 1000).toISOString()})`);
       console.log(`Current time: ${endTime} (${new Date(endTime * 1000).toISOString()})`);
