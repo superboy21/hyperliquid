@@ -180,11 +180,13 @@ export async function getSpotFundingRates(): Promise<FundingRate[]> {
       // 获取最新的资金费率
       const latest = history[history.length - 1];
       
-      // 对于 HIP-3 资产，fundingHistory 返回的 premium 字段就是预测资金费率
-      // fundingRate 是上期结算费率，premium 是下期预测费率
+      // 对于 HIP-3 资产，fundingHistory 返回:
+      // - fundingRate: 上期结算费率（实际收取的）
+      // - premium: 下期预测费率（预测的）
+      // 使用 premium（预测费率）作为当前费率
       rates.push({
         coin: coin,
-        fundingRate: latest.premium || latest.fundingRate || "0", // 使用预测费率（premium）作为当前费率
+        fundingRate: latest.premium || latest.fundingRate || "0", // 使用预测费率（premium）
         markPrice: latest.markPrice || "0",
         indexPrice: latest.indexPrice || "0",
         premium: latest.premium || "0",
@@ -231,7 +233,10 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
     // 获取最新的资金费率
     const latest = history[history.length - 1];
     
-    // 对于 HIP-3 资产，使用 premium（预测费率）作为当前费率，fundingRate 是上期结算费率
+    // 对于 HIP-3 资产:
+    // - fundingRate: 上期结算费率（实际收取的）
+    // - premium: 下期预测费率（预测的）
+    // 使用 premium（预测费率）作为当前费率
     return {
       coin: coin,
       fundingRate: latest.premium || latest.fundingRate,
