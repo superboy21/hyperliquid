@@ -30,6 +30,8 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Added all HIP-3 assets from spec**: Total 41 assets including XYZ100, PLATINUM, COPPER, CL, NATGAS, JPY, EUR, URNM, INTC, MU, PLTR, ORCL, HOOD, CRCL, SNDK, RIVN, USAR, TSM, SKHX, SMSN, HYUNDAI
 - [x] **Added market data columns**: Mark price, 24h change %, 24h volume, open interest
 - [x] **Enhanced sorting**: Added sort by price, 24h change, and open interest
+- [x] **OI-weighted average**: Current average annualized rate uses open interest weighted calculation
+- [x] **Position value weighted average**: Changed OI-weighted to position value (OI × markPrice) weighted for more accurate representation
 
 ## Current Structure
 
@@ -126,3 +128,4 @@ export async function GET() {
 | 2026-03-01 | Differentiated rate labels: standard assets show "预测年化", HIP-3 assets show "最新结算年化" |
 | 2026-03-01 | Added all 41 HIP-3 assets from specification list including XYZ100, PLATINUM, COPPER, CL, NATGAS, JPY, EUR, URNM, INTC, MU, PLTR, ORCL, HOOD, CRCL, SNDK, RIVN, USAR, TSM, SKHX, SMSN, HYUNDAI |
 | 2026-03-01 | Added market data columns: Mark price, 24h change %, 24h volume, open interest with sorting support |
+| 2026-03-01 | Changed weighted average calculation from OI-weighted to position value (OI × markPrice) weighted for more accurate representation |
