@@ -85,7 +85,7 @@ const FUNDING_PERIODS_PER_YEAR = 365 * 3; // 365天 * 每天3次
 // 已知的 HIP-3 资产列表（基于实际可用的资产）
 const KNOWN_HIP3_ASSETS = [
   "xyz:SILVER",
-  "xyz:GOLD", 
+  "xyz:GOLD",
   "xyz:MSTR",
   "xyz:COIN",
   "xyz:NVDA",
@@ -104,6 +104,28 @@ const KNOWN_HIP3_ASSETS = [
   "xyz:SLV",
   "xyz:TLT",
   "xyz:UVXY",
+  // 新增 HIP-3 资产（来自规格列表）
+  "xyz:XYZ100",
+  "xyz:PLATINUM",
+  "xyz:COPPER",
+  "xyz:CL",
+  "xyz:NATGAS",
+  "xyz:JPY",
+  "xyz:EUR",
+  "xyz:URNM",
+  "xyz:INTC",
+  "xyz:MU",
+  "xyz:PLTR",
+  "xyz:ORCL",
+  "xyz:HOOD",
+  "xyz:CRCL",
+  "xyz:SNDK",
+  "xyz:RIVN",
+  "xyz:USAR",
+  "xyz:TSM",
+  "xyz:SKHX",
+  "xyz:SMSN",
+  "xyz:HYUNDAI",
 ];
 
 // 获取所有永续合约市场的资金费率（使用结算费率 funding）
