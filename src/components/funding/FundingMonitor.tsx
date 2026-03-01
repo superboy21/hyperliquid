@@ -357,7 +357,9 @@ export default function FundingMonitor() {
         {/* 资金费率列表 */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
-            <h2 className="text-lg font-semibold text-white">最新结算年化</h2>
+            <h2 className="text-lg font-semibold text-white">
+              {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "资金费率年化"}
+            </h2>
             <p className="text-sm text-gray-400">
               共 {filteredAndSortedRates.length} 个交易对
               {searchTerm && ` (筛选自 ${fundingRates.length} 个)`}
@@ -371,7 +373,7 @@ export default function FundingMonitor() {
                     交易对
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
-                    最新结算年化
+                    {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "年化资金费率"}
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
                     24h 交易量
