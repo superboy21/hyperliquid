@@ -438,7 +438,7 @@ export default function FundingMonitor() {
               {searchTerm && ` (筛选自 ${fundingRates.length} 个)`}
             </p>
           </div>
-          <div className="max-h-[600px] overflow-y-auto">
+          <div className="max-h-[600px] overflow-y-auto overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-900 sticky top-0">
                 <tr>
@@ -454,10 +454,10 @@ export default function FundingMonitor() {
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "年化资金费率"}
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
                     24h交易量
                   </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden lg:table-cell">
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400 hidden sm:table-cell">
                     持仓价值
                   </th>
                 </tr>
@@ -521,12 +521,12 @@ export default function FundingMonitor() {
                           {formatAnnualizedRate(rate.fundingRate)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right hidden lg:table-cell">
+                      <td className="px-4 py-3 text-right hidden sm:table-cell">
                         <span className="text-gray-400 font-mono text-sm">
                           {formatVolume(rate.dayVolume)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-right hidden lg:table-cell">
+                      <td className="px-4 py-3 text-right hidden sm:table-cell">
                         <span className="text-gray-400 font-mono text-sm">
                           {formatVolume(String(parseFloat(rate.openInterest) * parseFloat(rate.markPrice)))}
                         </span>
