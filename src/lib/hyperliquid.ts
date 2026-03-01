@@ -18,8 +18,9 @@ export interface FundingHistoryItem {
   time: number;
   coin: string;
   fundingRate: string;
-  markPrice: string;
-  indexPrice: string;
+  premium: string;  // 预测资金费率
+  markPrice?: string;
+  indexPrice?: string;
 }
 
 export interface MarketInfo {
@@ -179,9 +180,11 @@ export async function getSpotFundingRates(): Promise<FundingRate[]> {
       // 获取最新的资金费率
       const latest = history[history.length - 1];
       
+      // 对于 HIP-3 资产，fundingHistory 返回的 premium 字段就是预测资金费率
+      // fundingRate 是上期结算费率，premium 是下期预测费率
       rates.push({
         coin: coin,
-        fundingRate: latest.fundingRate || "0",
+        fundingRate: latest.premium || latest.fundingRate || "0", // 使用预测费率（premium）作为当前费率
         markPrice: latest.markPrice || "0",
         indexPrice: latest.indexPrice || "0",
         premium: latest.premium || "0",
@@ -228,12 +231,13 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
     // 获取最新的资金费率
     const latest = history[history.length - 1];
     
+    // 对于 HIP-3 资产，使用 premium（预测费率）作为当前费率，fundingRate 是上期结算费率
     return {
       coin: coin,
-      fundingRate: latest.fundingRate,
+      fundingRate: latest.premium || latest.fundingRate,
       markPrice: latest.markPrice || "0",
       indexPrice: latest.indexPrice || "0",
-      premium: "0",
+      premium: latest.premium || "0",
       openInterest: "0",
       dayVolume: "0",
       isSpot: true,
@@ -405,6 +409,7 @@ export async function getFundingHistory(
       time: item.time,
       coin: item.coin,
       fundingRate: item.fundingRate,
+      premium: item.premium || "0",
       markPrice: item.markPrice || "0",
       indexPrice: item.indexPrice || "0",
     }));
