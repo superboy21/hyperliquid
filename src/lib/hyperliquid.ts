@@ -127,6 +127,11 @@ const KNOWN_HIP3_ASSETS = [
   "xyz:SKHX",
   "xyz:SMSN",
   "xyz:HYUNDAI",
+  "xyz:BRENTOIL",
+  "xyz:PALLADIUM",
+  "xyz:EWY",
+  "xyz:EWJ",
+  "xyz:BABA",
 ];
 
 // 获取所有永续合约市场的资金费率（使用结算费率 funding）
