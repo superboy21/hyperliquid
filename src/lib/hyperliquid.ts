@@ -152,8 +152,6 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 
     return meta.universe.map((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
-      // 使用 funding（结算费率）作为当前费率，而不是 premium（预测费率）
-      // 因为预测费率可能不稳定，结算费率是实际已发生的
       const fundingRate = ctx?.funding || "0";
       return {
         coin: market.name,
@@ -255,8 +253,11 @@ async function getHip3MarketData(): Promise<Map<string, Partial<FundingRate>>> {
       const ctx = assetCtxs[index];
       // API 返回的 market.name 已经包含 xyz: 前缀，直接使用
       const coin = market.name;
+      // ctx.funding 是预测资金费率（预测每小时费率）
+      const predictedFunding = ctx?.funding || "0";
       marketData.set(coin, {
         coin: coin,
+        fundingRate: predictedFunding,
         markPrice: ctx?.markPx || "0",
         indexPrice: ctx?.oraclePx || "0",
         openInterest: ctx?.openInterest || "0",
@@ -273,52 +274,29 @@ async function getHip3MarketData(): Promise<Map<string, Partial<FundingRate>>> {
   }
 }
 
-// 获取所有 HIP-3 资产的资金费率
+// 获取所有 HIP-3 资产的资金费率（使用预测资金费率）
 export async function getHip3FundingRates(): Promise<FundingRate[]> {
-  // 首先获取市场数据（价格、volume、OI 等）
+  // 直接从 metaAndAssetCtxs API (dex: "xyz") 获取预测资金费率
   const marketData = await getHip3MarketData();
   
-  // 然后获取资金费率（从 fundingHistory）
   const rates: FundingRate[] = [];
   
+  // 遍历已知 HIP-3 资产列表，构建返回数据
   for (const coin of KNOWN_HIP3_ASSETS) {
-    try {
-      // 获取资金费率历史
-      const history = await getFundingHistory(coin, Math.floor(Date.now() / 1000) - 48 * 60 * 60);
-      const marketInfo = marketData.get(coin);
-      
-      if (history.length > 0) {
-        const latest = history[history.length - 1];
-        rates.push({
-          coin: coin,
-          fundingRate: latest.fundingRate,
-          markPrice: marketInfo?.markPrice || latest.markPrice || "0",
-          indexPrice: marketInfo?.indexPrice || latest.indexPrice || "0",
-          premium: latest.premium || "0",
-          openInterest: marketInfo?.openInterest || "0",
-          dayVolume: marketInfo?.dayVolume || "0",
-          prevDayPx: marketInfo?.prevDayPx || "0",
-          isSpot: true,
-        });
-      } else if (marketInfo) {
-        // 没有资金费率数据，但有市场数据，仍然显示
-        rates.push({
-          coin: coin,
-          fundingRate: "0",
-          markPrice: marketInfo.markPrice || "0",
-          indexPrice: marketInfo.indexPrice || "0",
-          premium: "0",
-          openInterest: marketInfo.openInterest || "0",
-          dayVolume: marketInfo.dayVolume || "0",
-          prevDayPx: marketInfo.prevDayPx || "0",
-          isSpot: true,
-        });
-      }
-      
-      // 添加小延迟避免请求过快
-      await new Promise(resolve => setTimeout(resolve, 50));
-    } catch (error) {
-      console.error(`Failed to fetch ${coin}:`, error);
+    const marketInfo = marketData.get(coin);
+    
+    if (marketInfo) {
+      rates.push({
+        coin: coin,
+        fundingRate: marketInfo.fundingRate || "0",
+        markPrice: marketInfo.markPrice || "0",
+        indexPrice: marketInfo.indexPrice || "0",
+        premium: "0",
+        openInterest: marketInfo.openInterest || "0",
+        dayVolume: marketInfo.dayVolume || "0",
+        prevDayPx: marketInfo.prevDayPx || "0",
+        isSpot: true,
+      });
     }
   }
   

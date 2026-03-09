@@ -41,7 +41,7 @@ export default function FundingMonitor() {
   const [history, setHistory] = useState<FundingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume" | "price" | "change" | "oi">("volume");
+  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume" | "price" | "change" | "oi">("oi");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [filterType, setFilterType] = useState<"all" | "hip3" | "standard">("all");
@@ -431,7 +431,7 @@ export default function FundingMonitor() {
         <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-700">
             <h2 className="text-lg font-semibold text-white">
-              {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "资金费率年化"}
+              {filterType === "hip3" ? "预测年化" : filterType === "standard" ? "预测年化" : "资金费率年化"}
             </h2>
             <p className="text-sm text-gray-400">
               共 {filteredAndSortedRates.length} 个交易对
@@ -452,7 +452,7 @@ export default function FundingMonitor() {
                     24h涨跌
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
-                    {filterType === "hip3" ? "最新结算年化" : filterType === "standard" ? "预测年化" : "年化资金费率"}
+                    {filterType === "hip3" ? "预测年化" : filterType === "standard" ? "预测年化" : "年化资金费率"}
                   </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
                     24h交易量
@@ -714,7 +714,6 @@ export default function FundingMonitor() {
           <li>负资金费率：空头支付给多头，表示市场看跌情绪较强</li>
           <li>资金费率每小时结算一次</li>
           <li>7天和30天平均基于历史资金费率数据计算</li>
-          <li className="text-yellow-500">注：HIP-3 资产（如 xyz:gold、xyz:mstr 等）因 API 限制，暂无法获取资金费率数据</li>
         </ul>
       </div>
     </div>
