@@ -1,72 +1,64 @@
-[README.md](https://github.com/user-attachments/files/26113470/README.md)
-# 🚀 HyperTools - Hyperliquid Trading Toolkit
+# HyperTools - Hyperliquid Trading Toolkit
 
-A professional trading toolkit for Hyperliquid traders.  
-Provides real-time funding rate monitoring, advanced position analysis, and arbitrage opportunity detection.
+A professional trading toolkit for Hyperliquid traders, providing real-time funding rate monitoring, position analysis, and arbitrage opportunities.
 
-## ✨ Key Features
+## Features
 
-- 📈 Real-time Funding Rate Monitoring: Track funding rates for all Hyperliquid perpetual contracts and HIP-3 assets.
-- 📊 Historical Data Analysis: View 30-day funding rate history with comprehensive statistical metrics.
-- ⚡ Smart Sorting & Filtering: Instantly sort by rate, price, volume, open interest, and 24h change.
-- 🏷️ Asset Type Filtering: Seamlessly toggle between standard assets, XYZ-HIP3, and VNTL-HIP3 assets.
-- ⚖️ Weighted Average Calculations: Precise open interest weighted average funding rates.
-- 📱 Responsive Design: Optimized for both desktop and mobile devices.
+- **Real-time Funding Rate Monitoring**: Track funding rates for all Hyperliquid perpetual contracts and HIP-3 assets
+- **Historical Data Analysis**: View 30-day funding rate history with statistical metrics
+- **Smart Sorting & Filtering**: Sort by rate, price, volume, open interest, and 24h change
+- **Asset Type Filtering**: View standard assets, XYZ-HIP3 assets, or VNTL-HIP3 assets separately
+- **Weighted Average Calculations**: Open interest weighted average funding rates
+- **Responsive Design**: Works on desktop and mobile devices
 
-## 🛠 Technology Stack
+## Technology Stack
 
-| Category | Technology |
-| --- | --- |
-| Framework | Next.js 16 (React 19) |
-| Language | TypeScript |
-| Styling | Tailwind CSS 4 |
-| State Management | React Hooks (`useState`, `useEffect`) |
-| Data Fetching | Native Fetch API + Hyperliquid SDK |
-| Package Manager | Bun ⚡ |
+- **Framework**: Next.js 16 (React 19)
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS 4
+- **State Management**: React Hooks (useState, useEffect)
+- **Data Fetching**: Native Fetch API with Hyperliquid SDK
+- **Package Manager**: Bun
 
-## 📂 Project Structure
+## Project Structure
 
-```text
+```
 src/
-├── app/                    # Next.js App Router
+├── app/                    # Next.js app router
 │   ├── funding/            # Funding rate monitor page
 │   ├── layout.tsx          # Root layout
 │   └── page.tsx            # Homepage
-├── components/             # Reusable React components
-│   └── funding/
-│       └── FundingMonitor.tsx  # Main monitoring logic
-├── lib/                    # Utilities & Services
+├── components/             # React components
+│   └── funding/            # Funding monitor components
+│       └── FundingMonitor.tsx
+├── lib/                    # Utility functions and services
 │   └── hyperliquid.ts      # Hyperliquid API integration
 └── ...
 ```
 
-## 🔑 Key Components
+## Key Components
 
-### `FundingMonitor.tsx`
+### FundingMonitor.tsx
+The main component that displays:
+- Summary statistics (total pairs, HIP-3 assets, positive/negative rates)
+- Filter controls (asset type, search, sorting)
+- Data table with real-time funding rates
+- Historical chart for selected asset
+- Educational section explaining funding rates
 
-The core UI component responsible for displaying:
+### hyperliquid.ts
+Service layer for interacting with Hyperliquid APIs:
+- `getAllFundingRatesWithHistory()` - Gets funding rates for all assets
+- `getFundingHistory()` - Retrieves historical funding rate data
+- `getMeta()` - Gets market information
+- Utility functions for formatting rates, prices, volumes, etc.
 
-- 📉 Summary Statistics: Total pairs, HIP-3 count, positive/negative rate distribution.
-- 🎛️ Filter Controls: Asset type toggles, search bars, and sorting options.
-- 📋 Data Table: Real-time funding rates with live updates.
-- 📈 Historical Chart: Interactive chart for selected assets.
-- 🎓 Education: Explanatory section on how funding rates work.
-
-### `hyperliquid.ts`
-
-The service layer handling all API interactions:
-
-- `getAllFundingRatesWithHistory()`: Fetches rates for all assets.
-- `getFundingHistory()`: Retrieves historical data points.
-- `getMeta()`: Fetches market metadata.
-- Utilities: Formatters for rates, prices, and volumes.
-
-## 🏁 Getting Started
+## Getting Started
 
 ### Prerequisites
 
-- Bun (Package Manager)
-- Node.js 18+ (For development environments)
+- [Bun](https://bun.sh/) (package manager)
+- Node.js 18+ (for development)
 
 ### Installation
 
@@ -76,105 +68,92 @@ bun install
 
 ### Development
 
-Run the local development server:
-
 ```bash
 bun dev
 ```
 
-### Production Build
+### Building for Production
 
 ```bash
 bun build
 ```
 
-### Start Production Server
+### Starting Production Server
 
 ```bash
 bun start
 ```
 
-### Available Scripts
+## Available Scripts
 
-| Command | Description |
-| --- | --- |
-| `bun dev` | Start development server |
-| `bun build` | Build for production |
-| `bun start` | Start production server |
-| `bun lint` | Run ESLint checks |
-| `bun typecheck` | Run TypeScript type checking |
+- `bun dev` - Start development server
+- `bun build` - Build for production
+- `bun start` - Start production server
+- `bun lint` - Run ESLint
+- `bun typecheck` - Run TypeScript type checking
 
-## 🔍 Features in Detail
+## Features in Detail
 
 ### Funding Rate Monitoring
 
-The application tracks two distinct asset classes:
-
-- Standard Perpetual Contracts: Traditional crypto pairs (e.g., BTC, ETH, SOL).
-- HIP-3 Assets: Hyperliquid Improvement Proposal 3 assets including:
-  - 🪙 Commodities: `xyz:GOLD`, `xyz:SILVER`, `xyz:PLATINUM`
-  - 🏢 Stocks: `xyz:AAPL`, `xyz:TSLA`, `xyz:NVDA`
-  - 📊 ETFs: `xyz:SPY`, `xyz:QQQ`
-  - 🧩 Crypto Indexes: `vntl:SEMIS`, `vntl:ROBOT`
+The application monitors two types of assets:
+1. **Standard Perpetual Contracts**: Traditional crypto perpetuals like BTC, ETH, SOL
+2. **HIP-3 Assets**: Hyperliquid Improvement Proposal 3 assets including:
+   - Commodities: xyz:GOLD, xyz:SILVER, xyz:PLATINUM, etc.
+   - Stocks: xyz:AAPL, xyz:TSLA, xyz:NVDA, etc.
+   - ETFs: xyz:SPY, xyz:QQQ, etc.
+   - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
 
 ### Data Update Frequency
 
-- 🔄 Real-time: Funding rates refresh automatically every 30 seconds.
-- 🕰️ On-Demand: Historical data is calculated only when a specific asset is selected.
-- 🌐 Source: All data is pulled directly from Hyperliquid's public API.
+- Funding rates are fetched every 30 seconds via automatic refresh
+- Historical data is calculated on-demand when selecting an asset
+- All data is sourced directly from Hyperliquid's public API
 
 ### Sorting Options
 
-- Rate: Current annualized funding rate (High/Low).
-- Price: Current mark price.
-- Change: 24h price change percentage.
-- Volume: 24h trading volume.
-- OI: Open Interest value (Position Size times Price).
-- Name: Alphabetical order.
+- **Rate**: Current annualized funding rate (highest/lowest first)
+- **Price**: Current mark price
+- **Change**: 24h price change percentage
+- **Volume**: 24h trading volume
+- **OI**: Open interest value (position size × price)
+- **Name**: Alphabetical order
 
-## 🔌 API Integration
+## API Integration
 
-This project leverages Hyperliquid's public endpoints:
+The project uses Hyperliquid's public API endpoints:
+- `metaAndAssetCtxs` - For getting market data and funding rates
+- `fundingHistory` - For historical funding rate data
+- `meta` - For general market information
 
-- `metaAndAssetCtxs`: Market data and current funding rates.
-- `fundingHistory`: Historical rate data.
-- `meta`: General market information.
+All API calls are made directly to `https://api.hyperliquid.xyz/info` without requiring authentication.
 
-Note: All API calls are made directly to [https://api.hyperliquid.xyz/info](https://api.hyperliquid.xyz/info) without requiring authentication.
+## Deployment
 
-## 🚀 Deployment
+This Next.js application can be deployed to:
+- Vercel (recommended for Next.js apps)
+- Netlify
+- Docker containers
+- Any Node.js hosting platform
 
-Compatible with major hosting platforms:
+## Contributing
 
-- ✅ Vercel (Recommended for Next.js)
-- ✅ Netlify
-- ✅ Docker Containers
-- ✅ Any Node.js hosting platform
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 🤝 Contributing
+## License
 
-We welcome contributions!
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add some amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request.
+## Disclaimer
 
-## ⚖️ License
+This tool is for informational purposes only. Trading cryptocurrencies involves significant risk and may not be suitable for all investors. Past performance is not indicative of future results. Always do your own research and consider your financial situation before making any trading decisions.
 
-This project is licensed under the MIT License - see the `LICENSE` file for details.
+## Acknowledgments
 
-## ⚠️ Disclaimer
-
-IMPORTANT: This tool is for informational purposes only.  
-Trading cryptocurrencies involves significant risk and may not be suitable for all investors.  
-Past performance is not indicative of future results.  
-Always do your own research (DYOR) and consider your financial situation before making any trading decisions.  
-The authors and contributors are not responsible for any financial losses incurred through the use of this software.
-
-## 🙏 Acknowledgments
-
-- Hyperliquid for providing the robust public API.
-- The open-source Next.js and Tailwind CSS communities.
-- All contributors to this project.
+- Hyperliquid for providing the public API
+- The open-source Next.js and Tailwind CSS communities
+- All contributors to this project

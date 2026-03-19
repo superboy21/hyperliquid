@@ -32,6 +32,7 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Enhanced sorting**: Added sort by price, 24h change, and open interest
 - [x] **OI-weighted average**: Current average annualized rate uses open interest weighted calculation
 - [x] **Position value weighted average**: Changed OI-weighted to position value (OI × markPrice) weighted for more accurate representation
+- [x] **Added comprehensive README.md**: Project overview, features, technology stack, and getting started guide
 
 ## Current Structure
 
