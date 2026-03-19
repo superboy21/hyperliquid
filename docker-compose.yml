@@ -1,0 +1,13 @@
+services:
+  hl-funding-monitor:
+    image: hl-funding-monitor:v1.5
+    build:
+      context: .
+    container_name: hl-funding-monitor
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    restart: unless-stopped
