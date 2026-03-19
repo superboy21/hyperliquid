@@ -1,48 +1,113 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import FundingCandlesChart from "@/components/funding/FundingCandlesChart";
 import {
   formatAnnualizedRate,
+  formatFundingRate,
   formatPrice,
-  formatTime,
   formatVolume,
   getAllFundingRatesWithHistory,
-  getFundingHistory,
+  getAverageFundingRatesByInterval,
+  getCandleSnapshot,
+  getFundingHistoryForDays,
   toAnnualizedRate,
-  type FundingHistoryItem,
+  type CandleSnapshotItem,
+  type ChartInterval,
   type FundingRate,
+  type IntervalFundingRateItem,
 } from "@/lib/hyperliquid";
+
+type FilterType = "all" | "standard" | "xyzHip3" | "vntlHip3";
+type SortField = "rate" | "name" | "volume" | "price" | "change" | "oi";
+
+const isXyzHip3Coin = (coin: string) => coin.startsWith("xyz:");
+const isVntlHip3Coin = (coin: string) => coin.startsWith("vntl:");
+const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isVntlHip3Coin(coin);
+
+const intervalLabels: Record<ChartInterval, string> = {
+  "1d": "日线",
+  "4h": "4小时线",
+  "1h": "1小时线",
+};
+
+interface FundingStats {
+  highest: number;
+  lowest: number;
+  average: number;
+}
+
+function getFundingStats(items: IntervalFundingRateItem[]): FundingStats | null {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const rates = items.map((item) => item.averageFundingRate);
+  return {
+    highest: Math.max(...rates),
+    lowest: Math.min(...rates),
+    average: rates.reduce((sum, rate) => sum + rate, 0) / rates.length,
+  };
+}
+
+function FundingStatCard({
+  title,
+  rate,
+}: {
+  title: string;
+  rate: number | null;
+}) {
+  if (rate === null) {
+    return (
+      <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
+        <p className="text-xs text-gray-400">{title}</p>
+        <p className="mt-2 text-sm text-gray-500">暂无数据</p>
+      </div>
+    );
+  }
+
+  const colorClass = rate >= 0 ? "text-green-400" : "text-red-400";
+
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
+      <p className="text-xs text-gray-400">{title}</p>
+      <p className={`mt-2 font-mono text-base ${colorClass}`}>{formatFundingRate(rate)}</p>
+      <p className="mt-1 text-xs text-gray-500">年化：{formatAnnualizedRate(rate)}</p>
+    </div>
+  );
+}
 
 export default function FundingMonitor() {
   const [fundingRates, setFundingRates] = useState<FundingRate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
-  const [history, setHistory] = useState<FundingHistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState<"rate" | "name" | "volume" | "price" | "change" | "oi">("oi");
+  const [sortBy, setSortBy] = useState<SortField>("oi");
   const [sortDesc, setSortDesc] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const [filterType, setFilterType] = useState<"all" | "standard" | "xyzHip3" | "vntlHip3">("all");
+  const [filterType, setFilterType] = useState<FilterType>("all");
+  const [selectedInterval, setSelectedInterval] = useState<ChartInterval>("1d");
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [candles, setCandles] = useState<CandleSnapshotItem[]>([]);
+  const [intervalFundingRates, setIntervalFundingRates] = useState<IntervalFundingRateItem[]>([]);
+  const [hourlyFundingRates30d, setHourlyFundingRates30d] = useState<IntervalFundingRateItem[]>([]);
 
-  const isXyzHip3 = (coin: string) => coin.startsWith("xyz:");
-  const isVntlHip3 = (coin: string) => coin.startsWith("vntl:");
-  const isHip3Coin = (coin: string) => isXyzHip3(coin) || isVntlHip3(coin);
-
-  const fetchData = useCallback(async () => {
+  const fetchRates = useCallback(async () => {
     try {
       setError(null);
       const rates = await getAllFundingRatesWithHistory();
 
       if (rates.length === 0) {
         setError("未能获取到资金费率数据，请稍后重试。");
-      } else {
-        setFundingRates(rates);
-        setLastUpdate(new Date());
+        return;
       }
-    } catch (err) {
-      console.error("Error fetching data:", err);
+
+      setFundingRates(rates);
+      setLastUpdate(new Date());
+    } catch (fetchError) {
+      console.error("Error fetching data:", fetchError);
       setError("获取数据时发生错误。");
     } finally {
       setLoading(false);
@@ -50,135 +115,201 @@ export default function FundingMonitor() {
   }, []);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
+    fetchRates();
+    const interval = setInterval(fetchRates, 30000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchRates]);
 
-  const fetchHistory = useCallback(async (coin: string) => {
-    setHistoryLoading(true);
-    setHistory([]);
+  const fetchDetail = useCallback(async (coin: string, chartInterval: ChartInterval) => {
+    setDetailLoading(true);
+    setDetailError(null);
+    setCandles([]);
+    setIntervalFundingRates([]);
+    setHourlyFundingRates30d([]);
 
     try {
-      const endTime = Math.floor(Date.now() / 1000);
-      const startTime1 = endTime - 15 * 24 * 60 * 60;
-      const history1 = await getFundingHistory(coin, startTime1);
+      const [candleData, fundingHistory] = await Promise.all([
+        getCandleSnapshot(coin, chartInterval, 30),
+        getFundingHistoryForDays(coin, 30),
+      ]);
 
-      const startTime2 = startTime1 - 15 * 24 * 60 * 60;
-      const history2 = await getFundingHistory(coin, startTime2);
+      if (candleData.length === 0) {
+        setDetailError(`暂时拿不到该资产最近 30 天的${intervalLabels[chartInterval]}数据。`);
+        return;
+      }
 
-      const combinedHistory = [...history1, ...history2].sort((a, b) => b.time - a.time);
-      const thirtyDaysAgoMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const last30Days = combinedHistory.filter((item) => item.time >= thirtyDaysAgoMs);
+      const visibleCandles =
+        chartInterval === "1d" ? candleData : candleData.slice(Math.max(candleData.length - 30, 0));
 
-      setHistory(last30Days);
+      const aggregatedFundingRates = getAverageFundingRatesByInterval(fundingHistory, chartInterval);
+      const visibleFundingRates = aggregatedFundingRates.filter((item) =>
+        visibleCandles.some((candle) => candle.openTime === item.bucketStartTime),
+      );
+      const hourlyFundingRates = getAverageFundingRatesByInterval(fundingHistory, "1h");
+
+      setCandles(visibleCandles);
+      setIntervalFundingRates(visibleFundingRates);
+      setHourlyFundingRates30d(hourlyFundingRates);
     } catch (fetchError) {
-      console.error("Error fetching history:", fetchError);
-      setHistory([]);
+      console.error("Error fetching detail:", fetchError);
+      setDetailError("加载图表数据时发生错误。");
     } finally {
-      setHistoryLoading(false);
+      setDetailLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (selectedCoin) {
-      fetchHistory(selectedCoin);
+      fetchDetail(selectedCoin, selectedInterval);
     }
-  }, [selectedCoin, fetchHistory]);
+  }, [fetchDetail, selectedCoin, selectedInterval]);
 
-  const ratesByType = fundingRates.filter((rate) => {
-    if (filterType === "xyzHip3") return isXyzHip3(rate.coin);
-    if (filterType === "vntlHip3") return isVntlHip3(rate.coin);
-    if (filterType === "standard") return !isHip3Coin(rate.coin);
-    return true;
-  });
-
-  const filteredAndSortedRates = ratesByType
-    .filter((rate) => rate.coin.toLowerCase().includes(searchTerm.toLowerCase()))
-    .sort((a, b) => {
-      if (sortBy === "rate") {
-        const rateA = parseFloat(a.fundingRate);
-        const rateB = parseFloat(b.fundingRate);
-        return sortDesc ? rateB - rateA : rateA - rateB;
-      }
-
-      if (sortBy === "volume") {
-        const volA = parseFloat(a.dayVolume);
-        const volB = parseFloat(b.dayVolume);
-        return sortDesc ? volB - volA : volA - volB;
-      }
-
-      if (sortBy === "price") {
-        const priceA = parseFloat(a.markPrice);
-        const priceB = parseFloat(b.markPrice);
-        return sortDesc ? priceB - priceA : priceA - priceB;
-      }
-
-      if (sortBy === "change") {
-        const changeA = (parseFloat(a.markPrice) - parseFloat(a.prevDayPx)) / parseFloat(a.prevDayPx);
-        const changeB = (parseFloat(b.markPrice) - parseFloat(b.prevDayPx)) / parseFloat(b.prevDayPx);
-        return sortDesc ? changeB - changeA : changeA - changeB;
-      }
-
-      if (sortBy === "oi") {
-        const valueA = parseFloat(a.openInterest) * parseFloat(a.markPrice);
-        const valueB = parseFloat(b.openInterest) * parseFloat(b.markPrice);
-        return sortDesc ? valueB - valueA : valueA - valueB;
-      }
-
-      return sortDesc ? b.coin.localeCompare(a.coin) : a.coin.localeCompare(b.coin);
+  const ratesByType = useMemo(() => {
+    return fundingRates.filter((rate) => {
+      if (filterType === "xyzHip3") return isXyzHip3Coin(rate.coin);
+      if (filterType === "vntlHip3") return isVntlHip3Coin(rate.coin);
+      if (filterType === "standard") return !isHip3Asset(rate.coin);
+      return true;
     });
+  }, [filterType, fundingRates]);
+
+  const filteredAndSortedRates = useMemo(() => {
+    return ratesByType
+      .filter((rate) => rate.coin.toLowerCase().includes(searchTerm.toLowerCase()))
+      .sort((a, b) => {
+        if (sortBy === "rate") {
+          const rateA = parseFloat(a.fundingRate);
+          const rateB = parseFloat(b.fundingRate);
+          return sortDesc ? rateB - rateA : rateA - rateB;
+        }
+
+        if (sortBy === "volume") {
+          const volumeA = parseFloat(a.dayVolume);
+          const volumeB = parseFloat(b.dayVolume);
+          return sortDesc ? volumeB - volumeA : volumeA - volumeB;
+        }
+
+        if (sortBy === "price") {
+          const priceA = parseFloat(a.markPrice);
+          const priceB = parseFloat(b.markPrice);
+          return sortDesc ? priceB - priceA : priceA - priceB;
+        }
+
+        if (sortBy === "change") {
+          const changeA =
+            parseFloat(a.prevDayPx) > 0
+              ? (parseFloat(a.markPrice) - parseFloat(a.prevDayPx)) / parseFloat(a.prevDayPx)
+              : 0;
+          const changeB =
+            parseFloat(b.prevDayPx) > 0
+              ? (parseFloat(b.markPrice) - parseFloat(b.prevDayPx)) / parseFloat(b.prevDayPx)
+              : 0;
+          return sortDesc ? changeB - changeA : changeA - changeB;
+        }
+
+        if (sortBy === "oi") {
+          const openInterestA = parseFloat(a.openInterest) * parseFloat(a.markPrice);
+          const openInterestB = parseFloat(b.openInterest) * parseFloat(b.markPrice);
+          return sortDesc ? openInterestB - openInterestA : openInterestA - openInterestB;
+        }
+
+        return sortDesc ? b.coin.localeCompare(a.coin) : a.coin.localeCompare(b.coin);
+      });
+  }, [ratesByType, searchTerm, sortBy, sortDesc]);
+
+  useEffect(() => {
+    if (!selectedCoin && filteredAndSortedRates.length > 0) {
+      setSelectedCoin(filteredAndSortedRates[0].coin);
+      return;
+    }
+
+    if (selectedCoin && !filteredAndSortedRates.some((rate) => rate.coin === selectedCoin)) {
+      setSelectedCoin(filteredAndSortedRates[0]?.coin ?? null);
+    }
+  }, [filteredAndSortedRates, selectedCoin]);
 
   const positiveRates = fundingRates.filter((rate) => parseFloat(rate.fundingRate) > 0).length;
   const negativeRates = fundingRates.filter((rate) => parseFloat(rate.fundingRate) < 0).length;
-  const hip3Count = fundingRates.filter((rate) => isHip3Coin(rate.coin)).length;
+  const hip3Count = fundingRates.filter((rate) => isHip3Asset(rate.coin)).length;
 
-  const calculateWeightedAvg = (rates: FundingRate[]) => {
-    if (rates.length === 0) return 0;
+  const calculateWeightedAverage = (rates: FundingRate[]) => {
+    if (rates.length === 0) {
+      return 0;
+    }
 
-    const totalPositionValue = rates.reduce(
+    const totalNotional = rates.reduce(
       (sum, rate) => sum + parseFloat(rate.openInterest) * parseFloat(rate.markPrice),
       0,
     );
 
-    if (totalPositionValue === 0) return 0;
+    if (totalNotional === 0) {
+      return 0;
+    }
 
-    const weightedSum = rates.reduce(
-      (sum, rate) =>
-        sum +
-        parseFloat(rate.fundingRate) * parseFloat(rate.openInterest) * parseFloat(rate.markPrice),
-      0,
+    return (
+      rates.reduce(
+        (sum, rate) =>
+          sum +
+          parseFloat(rate.fundingRate) * parseFloat(rate.openInterest) * parseFloat(rate.markPrice),
+        0,
+      ) / totalNotional
     );
-
-    return weightedSum / totalPositionValue;
   };
 
-  const standardRates = fundingRates.filter((rate) => !isHip3Coin(rate.coin));
-  const xyzHip3Rates = fundingRates.filter((rate) => isXyzHip3(rate.coin));
-  const vntlHip3Rates = fundingRates.filter((rate) => isVntlHip3(rate.coin));
-  const hip3Rates = fundingRates.filter((rate) => isHip3Coin(rate.coin));
+  const standardRates = fundingRates.filter((rate) => !isHip3Asset(rate.coin));
+  const xyzHip3Rates = fundingRates.filter((rate) => isXyzHip3Coin(rate.coin));
+  const vntlHip3Rates = fundingRates.filter((rate) => isVntlHip3Coin(rate.coin));
 
-  const weightedAvgAll = calculateWeightedAvg(fundingRates);
-  const weightedAvgStandard = calculateWeightedAvg(standardRates);
-  const weightedAvgXyzHip3 = calculateWeightedAvg(xyzHip3Rates);
-  const weightedAvgVntlHip3 = calculateWeightedAvg(vntlHip3Rates);
-  const weightedAvgHip3 = calculateWeightedAvg(hip3Rates);
-
-  const avgRate =
+  const averageRate =
     filterType === "standard"
-      ? weightedAvgStandard
+      ? calculateWeightedAverage(standardRates)
       : filterType === "xyzHip3"
-        ? weightedAvgXyzHip3
+        ? calculateWeightedAverage(xyzHip3Rates)
         : filterType === "vntlHip3"
-          ? weightedAvgVntlHip3
-          : weightedAvgAll;
-  const avgAnnualized = toAnnualizedRate(avgRate);
+          ? calculateWeightedAverage(vntlHip3Rates)
+          : calculateWeightedAverage(fundingRates);
+
+  const averageAnnualized = toAnnualizedRate(averageRate);
+
+  const recent7HourlyFundingRates = useMemo(() => {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return hourlyFundingRates30d.filter((item) => item.bucketStartTime >= sevenDaysAgo);
+  }, [hourlyFundingRates30d]);
+
+  const fundingStats30d = useMemo(() => getFundingStats(hourlyFundingRates30d), [hourlyFundingRates30d]);
+  const fundingStats7d = useMemo(() => getFundingStats(recent7HourlyFundingRates), [recent7HourlyFundingRates]);
+
+  const selectedSummary = useMemo(() => {
+    if (candles.length === 0) {
+      return null;
+    }
+
+    const closes = candles.map((candle) => Number(candle.close));
+    const highs = candles.map((candle) => Number(candle.high));
+    const lows = candles.map((candle) => Number(candle.low));
+
+    return {
+      latestClose: closes[closes.length - 1],
+      highestHigh: Math.max(...highs),
+      lowestLow: Math.min(...lows),
+    };
+  }, [candles]);
+
+  const toggleSort = (field: SortField) => {
+    if (sortBy === field) {
+      setSortDesc((current) => !current);
+      return;
+    }
+
+    setSortBy(field);
+    setSortDesc(true);
+  };
 
   if (loading) {
     return (
-      <div className="flex min-h-[400px] items-center justify-center">
+      <div className="flex min-h-[420px] items-center justify-center">
         <div className="text-center">
-          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-b-2 border-blue-500"></div>
+          <div className="mx-auto h-12 w-12 animate-spin rounded-full border-b-2 border-blue-500" />
           <p className="mt-4 text-gray-400">正在加载资金费率数据...</p>
         </div>
       </div>
@@ -187,16 +318,21 @@ export default function FundingMonitor() {
 
   if (error) {
     return (
-      <div className="flex min-h-[400px] items-center justify-center">
+      <div className="flex min-h-[420px] items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-500/20">
             <svg className="h-6 w-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
             </svg>
           </div>
           <p className="mb-4 text-red-400">{error}</p>
           <button
-            onClick={fetchData}
+            onClick={fetchRates}
             className="rounded-lg bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700"
           >
             重新加载
@@ -227,8 +363,8 @@ export default function FundingMonitor() {
         </div>
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">当前平均年化（OI 加权）</p>
-          <p className={`text-lg font-bold ${avgAnnualized >= 0 ? "text-green-400" : "text-red-400"}`}>
-            {formatAnnualizedRate(avgRate)}
+          <p className={`text-lg font-bold ${averageAnnualized >= 0 ? "text-green-400" : "text-red-400"}`}>
+            {formatAnnualizedRate(averageRate)}
           </p>
         </div>
       </div>
@@ -254,7 +390,7 @@ export default function FundingMonitor() {
             }`}
           >
             <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-cyan-400"></span>
+              <span className="h-2 w-2 rounded-full bg-cyan-400" />
               标准资产
             </span>
           </button>
@@ -267,7 +403,7 @@ export default function FundingMonitor() {
             }`}
           >
             <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-purple-400"></span>
+              <span className="h-2 w-2 rounded-full bg-purple-400" />
               Xyz-Hip3
             </span>
           </button>
@@ -280,7 +416,7 @@ export default function FundingMonitor() {
             }`}
           >
             <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-amber-400"></span>
+              <span className="h-2 w-2 rounded-full bg-amber-400" />
               Vntl-Hip3
             </span>
           </button>
@@ -290,7 +426,7 @@ export default function FundingMonitor() {
           <div className="flex-1">
             <input
               type="text"
-              placeholder="搜索交易对，例如 BTC、ETH、xyz:GOLD..."
+              placeholder="搜索交易对，例如 BTC、ETH、xyz:GOLD、vntl:OPENAI"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -298,23 +434,17 @@ export default function FundingMonitor() {
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => {
-                setSortBy("rate");
-                setSortDesc(!sortDesc);
-              }}
+              onClick={() => toggleSort("rate")}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === "rate"
                   ? "border-blue-600 bg-blue-600 text-white"
                   : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
               }`}
             >
-              当前年化 {sortDesc ? "↓" : "↑"}
+              年化预测费率 {sortDesc ? "↓" : "↑"}
             </button>
             <button
-              onClick={() => {
-                setSortBy("price");
-                setSortDesc(!sortDesc);
-              }}
+              onClick={() => toggleSort("price")}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === "price"
                   ? "border-blue-600 bg-blue-600 text-white"
@@ -324,10 +454,7 @@ export default function FundingMonitor() {
               价格 {sortDesc ? "↓" : "↑"}
             </button>
             <button
-              onClick={() => {
-                setSortBy("change");
-                setSortDesc(!sortDesc);
-              }}
+              onClick={() => toggleSort("change")}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === "change"
                   ? "border-blue-600 bg-blue-600 text-white"
@@ -337,23 +464,17 @@ export default function FundingMonitor() {
               24h 涨跌 {sortDesc ? "↓" : "↑"}
             </button>
             <button
-              onClick={() => {
-                setSortBy("volume");
-                setSortDesc(!sortDesc);
-              }}
+              onClick={() => toggleSort("volume")}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === "volume"
                   ? "border-blue-600 bg-blue-600 text-white"
                   : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
               }`}
             >
-              交易量 {sortDesc ? "↓" : "↑"}
+              24h 成交额 {sortDesc ? "↓" : "↑"}
             </button>
             <button
-              onClick={() => {
-                setSortBy("oi");
-                setSortDesc(!sortDesc);
-              }}
+              onClick={() => toggleSort("oi")}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === "oi"
                   ? "border-blue-600 bg-blue-600 text-white"
@@ -363,10 +484,7 @@ export default function FundingMonitor() {
               持仓价值 {sortDesc ? "↓" : "↑"}
             </button>
             <button
-              onClick={() => {
-                setSortBy("name");
-                setSortDesc(!sortDesc);
-              }}
+              onClick={() => toggleSort("name")}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === "name"
                   ? "border-blue-600 bg-blue-600 text-white"
@@ -385,54 +503,53 @@ export default function FundingMonitor() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[3fr_2fr]">
-        <div className="overflow-hidden rounded-lg border border-gray-700 bg-gray-800">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[3fr_2fr] lg:items-stretch">
+        <div className="min-h-0 overflow-hidden rounded-lg border border-gray-700 bg-gray-800 lg:flex lg:h-full lg:flex-col">
           <div className="border-b border-gray-700 p-4">
             <h2 className="text-lg font-semibold text-white">
-              {filterType === "all" ? "资金费率年化" : "预测年化"}
+              {filterType === "all" ? "资金费率总览" : "筛选结果"}
             </h2>
             <p className="text-sm text-gray-400">
               共 {filteredAndSortedRates.length} 个交易对
               {searchTerm && `（从 ${fundingRates.length} 个中筛选）`}
             </p>
           </div>
-          <div className="max-h-[600px] overflow-x-auto overflow-y-auto">
+          <div className="max-h-[960px] overflow-x-auto overflow-y-auto lg:min-h-0 lg:flex-1">
             <table className="w-full">
               <thead className="sticky top-0 bg-gray-900">
                 <tr>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">交易对</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">价格</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 涨跌</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">
-                    {filterType === "all" ? "年化资金费率" : "预测年化"}
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 交易量</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">年化预测费率</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 成交额</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">持仓价值</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
                 {filteredAndSortedRates.map((rate) => {
-                  const markPx = parseFloat(rate.markPrice);
-                  const prevDayPx = parseFloat(rate.prevDayPx);
-                  const change24h = prevDayPx > 0 ? ((markPx - prevDayPx) / prevDayPx) * 100 : 0;
+                  const markPrice = parseFloat(rate.markPrice);
+                  const previousDayPrice = parseFloat(rate.prevDayPx);
+                  const change24h =
+                    previousDayPrice > 0 ? ((markPrice - previousDayPrice) / previousDayPrice) * 100 : 0;
 
                   return (
                     <tr
                       key={rate.coin}
                       onClick={() => setSelectedCoin(rate.coin)}
                       className={`cursor-pointer transition-colors hover:bg-gray-700 ${
-                        selectedCoin === rate.coin ? "bg-gray-700" : ""
+                        selectedCoin === rate.coin ? "bg-gray-700/90" : ""
                       }`}
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-white">{rate.coin}</span>
-                          {isXyzHip3(rate.coin) && (
+                          {isXyzHip3Coin(rate.coin) && (
                             <span className="rounded bg-purple-500/20 px-1.5 py-0.5 text-xs text-purple-400">
                               Xyz-Hip3
                             </span>
                           )}
-                          {isVntlHip3(rate.coin) && (
+                          {isVntlHip3Coin(rate.coin) && (
                             <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-400">
                               Vntl-Hip3
                             </span>
@@ -470,7 +587,7 @@ export default function FundingMonitor() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className="font-mono text-sm text-gray-400">
-                          {formatVolume(String(parseFloat(rate.openInterest) * parseFloat(rate.markPrice)))}
+                          {formatVolume(parseFloat(rate.openInterest) * parseFloat(rate.markPrice))}
                         </span>
                       </td>
                     </tr>
@@ -479,7 +596,7 @@ export default function FundingMonitor() {
               </tbody>
             </table>
             {filteredAndSortedRates.length === 0 && (
-              <div className="p-8 text-center text-gray-500">没有找到匹配的交易对</div>
+              <div className="p-8 text-center text-gray-500">没有找到匹配的交易对。</div>
             )}
           </div>
         </div>
@@ -488,135 +605,114 @@ export default function FundingMonitor() {
           <div className="border-b border-gray-700 p-4">
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-white">
-                {selectedCoin ? `${selectedCoin} 历史资金费率` : "选择交易对查看历史"}
+                {selectedCoin ? `${selectedCoin} 近 30 天价格与资金费率` : "选择左侧资产查看图表"}
               </h2>
-              {selectedCoin && isXyzHip3(selectedCoin) && (
+              {selectedCoin && isXyzHip3Coin(selectedCoin) && (
                 <span className="rounded bg-purple-500/20 px-2 py-0.5 text-xs text-purple-400">Xyz-Hip3</span>
               )}
-              {selectedCoin && isVntlHip3(selectedCoin) && (
+              {selectedCoin && isVntlHip3Coin(selectedCoin) && (
                 <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-400">Vntl-Hip3</span>
               )}
             </div>
-            {selectedCoin && <p className="text-sm text-gray-400">过去 30 天数据</p>}
-          </div>
-          <div className="p-4">
-            {selectedCoin ? (
-              historyLoading ? (
-                <div className="flex h-[400px] items-center justify-center">
-                  <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-500"></div>
-                </div>
-              ) : history.length > 0 ? (
-                <div className="space-y-4">
-                  <div className="h-[300px] overflow-y-auto">
-                    <table className="w-full">
-                      <thead className="sticky top-0 bg-gray-900">
-                        <tr>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-400">时间</th>
-                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-400">小时资金费率</th>
-                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-400">年化资金费率</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-700">
-                        {history.map((item, index) => (
-                          <tr key={index} className="hover:bg-gray-700/50">
-                            <td className="px-3 py-2 text-sm text-gray-300">{formatTime(item.time)}</td>
-                            <td className="px-3 py-2 text-right">
-                              <span
-                                className={`font-mono text-sm ${
-                                  parseFloat(item.fundingRate) > 0
-                                    ? "text-green-400"
-                                    : parseFloat(item.fundingRate) < 0
-                                      ? "text-red-400"
-                                      : "text-gray-400"
-                                }`}
-                              >
-                                {(parseFloat(item.fundingRate) * 100).toFixed(4)}%
-                              </span>
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <span
-                                className={`font-mono text-sm ${
-                                  parseFloat(item.fundingRate) > 0
-                                    ? "text-green-400"
-                                    : parseFloat(item.fundingRate) < 0
-                                      ? "text-red-400"
-                                      : "text-gray-400"
-                                }`}
-                              >
-                                {formatAnnualizedRate(item.fundingRate)}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
 
-                  <div className="grid grid-cols-2 gap-4 border-t border-gray-700 pt-4">
-                    <div>
-                      <p className="text-sm text-gray-400">最高年化费率</p>
-                      <p className="text-lg font-mono text-green-400">
-                        {formatAnnualizedRate(
-                          Math.max(...history.map((item) => parseFloat(item.fundingRate))).toString(),
-                        )}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-400">最低年化费率</p>
-                      <p className="text-lg font-mono text-red-400">
-                        {formatAnnualizedRate(
-                          Math.min(...history.map((item) => parseFloat(item.fundingRate))).toString(),
-                        )}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-400">7 天平均年化</p>
-                      <p className="text-lg font-mono text-blue-400">
-                        {(() => {
-                          const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
-                          const last7Days = history.filter((item) => item.time >= sevenDaysAgoMs);
-                          if (last7Days.length === 0) return "-";
-                          const avg =
-                            last7Days.reduce((sum, item) => sum + parseFloat(item.fundingRate), 0) /
-                            last7Days.length;
-                          return formatAnnualizedRate(avg);
-                        })()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-400">30 天平均年化</p>
-                      <p className="text-lg font-mono text-purple-400">
-                        {(() => {
-                          if (history.length === 0) return "-";
-                          const avg =
-                            history.reduce((sum, item) => sum + parseFloat(item.fundingRate), 0) /
-                            history.length;
-                          return formatAnnualizedRate(avg);
-                        })()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex h-[400px] items-center justify-center text-gray-400">
-                  <div className="text-center">
-                    <p>暂无历史数据</p>
-                    <p className="mt-2 text-sm text-gray-500">{selectedCoin} 的历史数据暂时不可用</p>
-                  </div>
-                </div>
-              )
-            ) : (
-              <div className="flex h-[400px] items-center justify-center text-gray-400">
+            {selectedCoin && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {(["1d", "4h", "1h"] as ChartInterval[]).map((interval) => (
+                  <button
+                    key={interval}
+                    onClick={() => setSelectedInterval(interval)}
+                    className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                      selectedInterval === interval
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-700"
+                    }`}
+                  >
+                    {intervalLabels[interval]}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {selectedCoin && (
+              <p className="mt-3 text-sm text-gray-400">
+                当前查看 {intervalLabels[selectedInterval]}，副图显示对应周期预测费率的年化值。
+              </p>
+            )}
+          </div>
+
+          <div className="p-4">
+            {!selectedCoin ? (
+              <div className="flex h-[560px] items-center justify-center text-gray-400">
                 <div className="text-center">
                   <svg className="mx-auto mb-4 h-16 w-16 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={1.5}
-                      d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                      d="M3 3v18h18M7 14l3-3 3 2 5-7"
                     />
                   </svg>
-                  <p>点击左侧交易对查看历史数据</p>
+                  <p>点击左侧交易对后，这里会显示价格图表和费率表现。</p>
+                </div>
+              </div>
+            ) : detailLoading ? (
+              <div className="flex h-[560px] items-center justify-center">
+                <div className="text-center">
+                  <div className="mx-auto h-10 w-10 animate-spin rounded-full border-b-2 border-blue-500" />
+                  <p className="mt-4 text-sm text-gray-400">
+                    正在加载 {selectedCoin} 的 {intervalLabels[selectedInterval]} 数据...
+                  </p>
+                </div>
+              </div>
+            ) : detailError ? (
+              <div className="flex h-[560px] items-center justify-center text-gray-400">
+                <div className="text-center">
+                  <p className="text-red-400">{detailError}</p>
+                  <button
+                    onClick={() => fetchDetail(selectedCoin, selectedInterval)}
+                    className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700"
+                  >
+                    重新加载图表
+                  </button>
+                </div>
+              </div>
+            ) : candles.length > 0 ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-gray-700 bg-gray-900/60 p-2">
+                  <FundingCandlesChart
+                    coin={selectedCoin}
+                    interval={selectedInterval}
+                    candles={candles}
+                    intervalFundingRates={intervalFundingRates}
+                  />
+                </div>
+
+                {selectedSummary && (
+                  <div className="rounded-lg border border-gray-700 bg-gray-900/40 p-4 text-sm text-gray-400">
+                    <p>
+                      当前价格区间：最低 {formatPrice(selectedSummary.lowestLow)}，最高 {formatPrice(selectedSummary.highestHigh)}，
+                      最新收盘 {formatPrice(selectedSummary.latestClose)}。
+                    </p>
+                    <p className="mt-2">
+                      4 小时线和 1 小时线只显示最近 30 根；日线仍显示最近 30 天。下方六个统计框固定显示
+                      7 天和 30 天的小时资金费率统计，不跟随图表周期变化。
+                    </p>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+                  <FundingStatCard title="最高资金费率(7天)" rate={fundingStats7d?.highest ?? null} />
+                  <FundingStatCard title="最低资金费率(7天)" rate={fundingStats7d?.lowest ?? null} />
+                  <FundingStatCard title="平均资金费率(7天)" rate={fundingStats7d?.average ?? null} />
+                  <FundingStatCard title="最高资金费率(30天)" rate={fundingStats30d?.highest ?? null} />
+                  <FundingStatCard title="最低资金费率(30天)" rate={fundingStats30d?.lowest ?? null} />
+                  <FundingStatCard title="平均资金费率(30天)" rate={fundingStats30d?.average ?? null} />
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-[560px] items-center justify-center text-gray-400">
+                <div className="text-center">
+                  <p>暂无可展示的图表数据。</p>
                 </div>
               </div>
             )}
@@ -627,11 +723,14 @@ export default function FundingMonitor() {
       <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
         <h3 className="mb-2 text-sm font-medium text-gray-300">资金费率说明</h3>
         <ul className="list-inside list-disc space-y-1 text-sm text-gray-400">
-          <li><strong className="text-gray-300">HIP-3 资产</strong>：Hyperliquid Improvement Proposal 3 支持的扩展资产，例如商品和股票指数等。</li>
+          <li>
+            <strong className="text-gray-300">HIP-3 资产</strong>
+            ：Hyperliquid Improvement Proposal 3 支持的扩展资产，例如商品和股票指数等。
+          </li>
           <li>正资金费率表示多头支付空头，通常代表市场偏多。</li>
           <li>负资金费率表示空头支付多头，通常代表市场偏空。</li>
-          <li>资金费率按小时结算，年化数据主要用于观察趋势。</li>
-          <li>7 天与 30 天平均值基于历史资金费率数据计算。</li>
+          <li>页面展示的是按当前周期聚合后，再换算成年化的预测费率，便于横向比较。</li>
+          <li>右侧 7 天与 30 天统计会跟随当前图表周期切换，保持和副图一致的统计口径。</li>
         </ul>
       </div>
     </div>
