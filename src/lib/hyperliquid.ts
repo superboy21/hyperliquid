@@ -84,7 +84,7 @@ interface SpotMetaAndAssetCtxs {
 const FUNDING_PERIODS_PER_YEAR = 365 * 3; // 365天 * 每天3次
 
 // 已知的 HIP-3 资产列表（基于实际可用的资产）
-const KNOWN_HIP3_ASSETS = [
+const KNOWN_XYZ_HIP3_ASSETS = [
   "xyz:SILVER",
   "xyz:GOLD",
   "xyz:MSTR",
@@ -132,6 +132,20 @@ const KNOWN_HIP3_ASSETS = [
   "xyz:EWY",
   "xyz:EWJ",
   "xyz:BABA",
+];
+
+const KNOWN_VNTL_HIP3_ASSETS = [
+  "vntl:SPACEX",
+  "vntl:OPENAI",
+  "vntl:ANTHROPIC",
+  "vntl:MAG7",
+  "vntl:SEMIS",
+  "vntl:ROBOT",
+  "vntl:INFOTECH",
+  "vntl:NUCLEAR",
+  "vntl:DEFENSE",
+  "vntl:ENERGY",
+  "vntl:BIOTECH",
 ];
 
 // 获取所有永续合约市场的资金费率（使用结算费率 funding）
@@ -234,12 +248,12 @@ async function getHip3FundingRate(coin: string): Promise<FundingRate | null> {
 }
 
 // 获取 HIP-3 资产的市场数据（使用 metaAndAssetCtxs + dex 参数）
-async function getHip3MarketData(): Promise<Map<string, Partial<FundingRate>>> {
+async function getHip3MarketData(dex: "xyz" | "vntl"): Promise<Map<string, Partial<FundingRate>>> {
   try {
     const response = await fetch("https://api.hyperliquid.xyz/info", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "metaAndAssetCtxs", dex: "xyz" }),
+      body: JSON.stringify({ type: "metaAndAssetCtxs", dex }),
     });
 
     if (!response.ok) throw new Error("Failed to fetch HIP-3 market data");
@@ -274,22 +288,23 @@ async function getHip3MarketData(): Promise<Map<string, Partial<FundingRate>>> {
     
     return marketData;
   } catch (error) {
-    console.error("Error fetching HIP-3 market data:", error);
+    console.error(`Error fetching HIP-3 market data for ${dex}:`, error);
     return new Map();
   }
 }
 
 // 获取所有 HIP-3 资产的资金费率（使用预测资金费率）
-export async function getHip3FundingRates(): Promise<FundingRate[]> {
-  // 直接从 metaAndAssetCtxs API (dex: "xyz") 获取预测资金费率
-  const marketData = await getHip3MarketData();
-  
+async function getDexFundingRates(
+  dex: "xyz" | "vntl",
+  knownAssets: string[],
+): Promise<FundingRate[]> {
+  const marketData = await getHip3MarketData(dex);
+
   const rates: FundingRate[] = [];
-  
-  // 遍历已知 HIP-3 资产列表，构建返回数据
-  for (const coin of KNOWN_HIP3_ASSETS) {
+
+  for (const coin of knownAssets) {
     const marketInfo = marketData.get(coin);
-    
+
     if (marketInfo) {
       rates.push({
         coin: coin,
@@ -304,8 +319,16 @@ export async function getHip3FundingRates(): Promise<FundingRate[]> {
       });
     }
   }
-  
   return rates;
+}
+
+export async function getHip3FundingRates(): Promise<FundingRate[]> {
+  const [xyzRates, vntlRates] = await Promise.all([
+    getDexFundingRates("xyz", KNOWN_XYZ_HIP3_ASSETS),
+    getDexFundingRates("vntl", KNOWN_VNTL_HIP3_ASSETS),
+  ]);
+
+  return [...xyzRates, ...vntlRates];
 }
 
 // 获取所有资金费率（永续合约 + HIP-3 资产）
