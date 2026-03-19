@@ -1,12 +1,14 @@
-import type { Metadata } from "next";
-import FundingMonitor from "@/components/funding/FundingMonitor";
+"use client";
 
-export const metadata: Metadata = {
-  title: "Hyperliquid 资金费率监控",
-  description: "实时查看 Hyperliquid 各资产资金费率、价格走势与最近 30 天图表。",
-};
+import { useState } from "react";
+import FundingMonitor from "@/components/funding/FundingMonitor";
+import GateFundingMonitor from "@/components/funding/GateFundingMonitor";
+
+type Exchange = "hyperliquid" | "gate";
 
 export default function FundingPage() {
+  const [selectedExchange, setSelectedExchange] = useState<Exchange>("hyperliquid");
+
   return (
     <main className="min-h-screen bg-neutral-900">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -22,14 +24,55 @@ export default function FundingPage() {
                 />
               </svg>
             </div>
-            <h1 className="text-3xl font-bold text-white">Hyperliquid 资金费率监控</h1>
+            <h1 className="text-3xl font-bold text-white">交易所资金费率监控</h1>
           </div>
           <p className="text-gray-400">
             实时监控各交易对资金费率，并在右侧查看最近 30 天日线蜡烛图和日均资金费率副图。
           </p>
+          
+          {/* 交易所切换按钮 */}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button
+              onClick={() => setSelectedExchange("hyperliquid")}
+              className={`flex items-center gap-2 rounded-lg border px-5 py-2.5 font-medium transition-all ${
+                selectedExchange === "hyperliquid"
+                  ? "border-blue-600 bg-blue-600 text-white shadow-lg shadow-blue-600/25"
+                  : "border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600 hover:bg-gray-700"
+              }`}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Hyperliquid
+              {selectedExchange === "hyperliquid" && (
+                <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">当前</span>
+              )}
+            </button>
+            <button
+              onClick={() => setSelectedExchange("gate")}
+              className={`flex items-center gap-2 rounded-lg border px-5 py-2.5 font-medium transition-all ${
+                selectedExchange === "gate"
+                  ? "border-cyan-600 bg-cyan-600 text-white shadow-lg shadow-cyan-600/25"
+                  : "border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600 hover:bg-gray-700"
+              }`}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064" />
+              </svg>
+              Gate.io
+              {selectedExchange === "gate" && (
+                <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">当前</span>
+              )}
+            </button>
+          </div>
         </div>
 
-        <FundingMonitor />
+        {/* 根据选择显示对应的监控组件 */}
+        {selectedExchange === "hyperliquid" ? (
+          <FundingMonitor />
+        ) : (
+          <GateFundingMonitor />
+        )}
       </div>
     </main>
   );

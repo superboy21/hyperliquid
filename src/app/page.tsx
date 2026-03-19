@@ -51,9 +51,9 @@ export default function Home() {
                   已上线
                 </span>
               </div>
-              <h3 className="mb-2 text-xl font-bold text-white">资金费率监控</h3>
+              <h3 className="mb-2 text-xl font-bold text-white">交易所资金费率监控</h3>
               <p className="text-sm leading-relaxed text-gray-400">
-                实时监控 Hyperliquid 全市场资金费率，支持永续合约与 HIP-3 资产，并提供历史数据与智能排序。
+                实时监控 Hyperliquid 和 Gate.io 全市场资金费率，支持多交易所切换、K 线图表和年化费率统计。
               </p>
               <div className="mt-4 flex items-center gap-2 text-sm font-medium text-blue-400 transition-colors group-hover:text-blue-300">
                 开始使用
