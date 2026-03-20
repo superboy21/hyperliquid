@@ -23,6 +23,20 @@ export {
   convertInterval,
 } from "./gateio";
 
+// 工具函数
+export {
+  calculateAverageFundingRate,
+  calculateAveragesFromHistory,
+  calculateWeightedAverageRate,
+  getRatesByCategory,
+  filterFundingRates,
+  sortFundingRates,
+  filterAndSortFundingRates,
+  getLastNDaysHistory,
+  annualizeReturn,
+  calculateHistoricalVolatility,
+} from "../utils/funding";
+
 // ==================== 交易所工厂 ====================
 
 import type { ExchangeId } from "../types";
@@ -87,91 +101,12 @@ export function getNormalizer(exchange: ExchangeId): ExchangeNormalizer {
   }
 }
 
-// ==================== 数据筛选和排序 ====================
+// ==================== 统计计算 ====================
 
 import type { 
   NormalizedFundingRate, 
-  SortField, 
-  SortConfig, 
-  FilterConfig,
   FundingStats 
 } from "../types";
-
-/**
- * 筛选资金费率数据
- */
-export function filterFundingRates(
-  rates: NormalizedFundingRate[],
-  filter: FilterConfig
-): NormalizedFundingRate[] {
-  return rates.filter((rate) => {
-    // 搜索词筛选
-    if (filter.searchTerm) {
-      const searchLower = filter.searchTerm.toLowerCase();
-      if (!rate.symbol.toLowerCase().includes(searchLower)) {
-        return false;
-      }
-    }
-    
-    // 资产类别筛选
-    if (filter.category !== "all" && rate.assetCategory !== filter.category) {
-      return false;
-    }
-    
-    return true;
-  });
-}
-
-/**
- * 排序资金费率数据
- */
-export function sortFundingRates(
-  rates: NormalizedFundingRate[],
-  sort: SortConfig
-): NormalizedFundingRate[] {
-  const sorted = [...rates].sort((a, b) => {
-    let comparison = 0;
-    
-    switch (sort.field) {
-      case "rate":
-        comparison = Math.abs(b.fundingRate) - Math.abs(a.fundingRate);
-        break;
-      case "name":
-        comparison = a.symbol.localeCompare(b.symbol);
-        break;
-      case "volume":
-        comparison = b.volume24h - a.volume24h;
-        break;
-      case "price":
-        comparison = b.markPrice - a.markPrice;
-        break;
-      case "change":
-        comparison = (b.change24h || 0) - (a.change24h || 0);
-        break;
-      case "oi":
-        comparison = b.notionalValue - a.notionalValue;
-        break;
-    }
-    
-    return sort.descending ? comparison : -comparison;
-  });
-  
-  return sorted;
-}
-
-/**
- * 筛选并排序资金费率数据
- */
-export function filterAndSortFundingRates(
-  rates: NormalizedFundingRate[],
-  filter: FilterConfig,
-  sort: SortConfig
-): NormalizedFundingRate[] {
-  const filtered = filterFundingRates(rates, filter);
-  return sortFundingRates(filtered, sort);
-}
-
-// ==================== 统计计算 ====================
 
 /**
  * 计算资金费率统计

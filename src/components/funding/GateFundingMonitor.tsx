@@ -255,7 +255,8 @@ export default function GateFundingMonitor() {
   };
 
   const averageRate = calculateWeightedAverage(filteredAndSortedRates);
-  const averageAnnualized = toAnnualizedRate(averageRate);
+  // 使用平均结算周期（Gate.io 主要是 8 小时）
+  const averageAnnualized = toAnnualizedRate(averageRate, 28800);
 
   // 获取当前选中合约的结算周期
   const selectedFundingInterval = useMemo(() => {
