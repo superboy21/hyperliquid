@@ -44,7 +44,7 @@ const intervalNameMap: Record<ChartInterval, string> = {
 };
 
 const fundingNameMap: Record<ChartInterval, string> = {
-  "1d": "当日平均小时资金费率",
+  "1d": "当日平均资金费率",
   "4h": "4小时平均资金费率",
   "1h": "1小时资金费率",
 };
@@ -129,7 +129,10 @@ export default function GateFundingCandlesChart({
 
           const fundingData = fundingItem?.data as FundingDatum | undefined;
           if (fundingData) {
+            // 将结算周期费率转换为小时费率
+            const hourlyRate = fundingData.rawFundingRate / (fundingIntervalSeconds / 3600);
             lines.push(`${fundingNameMap[interval]}: ${formatFundingRate(fundingData.rawFundingRate)}`);
+            lines.push(`平均小时费率: ${formatFundingRate(hourlyRate)}`);
             lines.push(`折算年化预测费率: ${formatAnnualizedRate(fundingData.rawFundingRate, fundingIntervalSeconds)}`);
           }
 

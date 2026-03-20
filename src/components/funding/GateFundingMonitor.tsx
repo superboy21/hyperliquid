@@ -73,13 +73,14 @@ function FundingStatCard({
     );
   }
 
-  const colorClass = rate >= 0 ? "text-green-400" : "text-red-400";
+  const annualized = toAnnualizedRate(rate, fundingIntervalSeconds);
+  const colorClass = annualized >= 0 ? "text-green-400" : "text-red-400";
 
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
       <p className="text-xs text-gray-400">{title}</p>
-      <p className={`mt-2 font-mono text-base ${colorClass}`}>{formatFundingRate(rate)}</p>
-      <p className="mt-1 text-xs text-gray-500">年化：{formatAnnualizedRate(rate, fundingIntervalSeconds)}</p>
+      <p className={`mt-2 font-mono text-lg font-bold ${colorClass}`}>{formatAnnualizedRate(rate, fundingIntervalSeconds)}</p>
+      <p className="mt-1 text-xs text-gray-500">当前：{formatFundingRate(rate)}</p>
     </div>
   );
 }
@@ -280,12 +281,53 @@ export default function GateFundingMonitor() {
     const highs = candles.map((candle) => Number(candle.high));
     const lows = candles.map((candle) => Number(candle.low));
 
+    // 计算历史波动率（年化）
+    const returns: number[] = [];
+    for (let i = 1; i < closes.length; i++) {
+      if (closes[i - 1] > 0) {
+        returns.push(Math.log(closes[i] / closes[i - 1]));
+      }
+    }
+    
+    let historicalVolatility = 0;
+    if (returns.length > 1) {
+      const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
+      const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
+      const periodVolatility = Math.sqrt(variance);
+      
+      // 根据图表周期计算年化系数
+      const periodsPerYear = selectedInterval === "1d" ? 365 : selectedInterval === "4h" ? 365 * 6 : 365 * 24;
+      historicalVolatility = periodVolatility * Math.sqrt(periodsPerYear) * 100; // 年化，百分比
+    }
+
+    // 计算资金收益率
+    let fundingYield = 0;
+    const latestPrice = closes[closes.length - 1];
+    if (latestPrice > 0 && intervalFundingRates.length > 0) {
+      const fundingByBucket = new Map(
+        intervalFundingRates.map((item) => [item.bucketStartTime, item.averageFundingRate])
+      );
+      
+      let totalFundingReturn = 0;
+      for (const candle of candles) {
+        const rate = fundingByBucket.get(candle.openTime) ?? 0;
+        const medianPrice = (Number(candle.high) + Number(candle.low)) / 2;
+        totalFundingReturn += medianPrice * rate;
+      }
+      
+      // 年化系数：1d * 12, 4h * 72, 1h * 288
+      const annualizationFactor = selectedInterval === "1d" ? 12 : selectedInterval === "4h" ? 72 : 288;
+      fundingYield = (totalFundingReturn / latestPrice) * annualizationFactor * 100; // 百分比
+    }
+
     return {
-      latestClose: closes[closes.length - 1],
+      latestClose: latestPrice,
       highestHigh: Math.max(...highs),
       lowestLow: Math.min(...lows),
+      historicalVolatility,
+      fundingYield,
     };
-  }, [candles]);
+  }, [candles, intervalFundingRates, selectedInterval]);
 
   const toggleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -629,15 +671,28 @@ export default function GateFundingMonitor() {
                 </div>
 
                 {selectedSummary && (
-                  <div className="rounded-lg border border-gray-700 bg-gray-900/40 p-4 text-sm text-gray-400">
-                    <p>
-                      当前价格区间：最低 {formatPrice(selectedSummary.lowestLow)}，最高 {formatPrice(selectedSummary.highestHigh)}，
-                      最新收盘 {formatPrice(selectedSummary.latestClose)}。
-                    </p>
-                    <p className="mt-2">
-                      4 小时线和 1 小时线只显示最近 30 根；日线仍显示最近 30 天。下方六个统计框固定显示
-                      7 天和 30 天的资金费率统计，不跟随图表周期变化。
-                    </p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
+                      <p className="text-xs text-gray-400">结算周期</p>
+                      <p className="mt-2 font-mono text-lg font-bold text-cyan-400">
+                        {selectedFundingInterval / 3600} 小时
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">Gate.io 合约</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
+                      <p className="text-xs text-gray-400">历史波动率(30周期)</p>
+                      <p className="mt-2 font-mono text-lg font-bold text-purple-400">
+                        {selectedSummary.historicalVolatility.toFixed(2)}%
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">年化</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
+                      <p className="text-xs text-gray-400">资金收益率(30周期)</p>
+                      <p className={`mt-2 font-mono text-lg font-bold ${selectedSummary.fundingYield >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {selectedSummary.fundingYield >= 0 ? "+" : ""}{selectedSummary.fundingYield.toFixed(2)}%
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">年化</p>
+                    </div>
                   </div>
                 )}
 
