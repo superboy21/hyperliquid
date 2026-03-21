@@ -60,6 +60,9 @@ export interface FundingRate {
   notionalValue: string;               // 持仓价值（USD）
   fundingInterval: number;             // 结算周期（秒）
   assetCategory: string;               // 资产类别
+  bestBid?: string;                    // 最佳买价
+  bestAsk?: string;                    // 最佳卖价
+  midPrice?: string;                   // 中间价
 }
 
 export interface FundingHistoryItem {
@@ -131,6 +134,13 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
     // 持仓价值 = 持仓张数 * 合约乘数 * 标记价格
     const notionalValue = totalSize * multiplier * markPrice;
 
+    // 计算中间价
+    const bestBid = ticker.highest_bid || "0";
+    const bestAsk = ticker.lowest_ask || "0";
+    const midPrice = bestBid && bestAsk 
+      ? String((parseFloat(bestBid) + parseFloat(bestAsk)) / 2) 
+      : "0";
+
     return {
       coin: formatContractName(ticker.contract),
       fundingRate: ticker.funding_rate || "0",
@@ -144,6 +154,9 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
       notionalValue: String(notionalValue),
       fundingInterval: ticker.funding_interval || 28800,
       assetCategory: ticker.asset_category || "其他",
+      bestBid,
+      bestAsk,
+      midPrice,
     };
   });
 }

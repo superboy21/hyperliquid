@@ -10,6 +10,9 @@ export interface FundingRate {
   isSpot?: boolean;
   avg7d?: number;
   avg30d?: number;
+  bestBid?: string;  // 最佳买价
+  bestAsk?: string;  // 最佳卖价
+  midPrice?: string; // 中间价
 }
 
 export interface FundingHistoryItem {
@@ -170,6 +173,9 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
         dayVolume: ctx?.dayNtlVlm || "0",
         prevDayPx: ctx?.prevDayPx || "0",
         isSpot: false,
+        bestBid: ctx?.impactPxs?.[0] || undefined,
+        bestAsk: ctx?.impactPxs?.[1] || undefined,
+        midPrice: ctx?.midPx || undefined,
       };
     });
   } catch (error) {
@@ -213,6 +219,9 @@ async function getHip3MarketData(dex: "xyz" | "vntl"): Promise<Map<string, Parti
         dayVolume: ctx?.dayNtlVlm || "0",
         prevDayPx: ctx?.prevDayPx || "0",
         isSpot: true,
+        bestBid: ctx?.impactPxs?.[0] || undefined,
+        bestAsk: ctx?.impactPxs?.[1] || undefined,
+        midPrice: ctx?.midPx || undefined,
       });
     });
 
@@ -243,6 +252,9 @@ async function getDexFundingRates(dex: "xyz" | "vntl", knownAssets: string[]): P
       dayVolume: marketInfo.dayVolume || "0",
       prevDayPx: marketInfo.prevDayPx || "0",
       isSpot: true,
+      bestBid: marketInfo.bestBid,
+      bestAsk: marketInfo.bestAsk,
+      midPrice: marketInfo.midPrice,
     });
   }
 

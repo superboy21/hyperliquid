@@ -309,39 +309,30 @@ export default function FundingMonitor() {
       historicalVolatility = periodVolatility * Math.sqrt(periodsPerYear) * 100; // 年化，百分比
     }
 
-    // 计算资金收益率
-    // 用每个周期的中位数价格（最高+最低）/2，乘以该周期的平均资金费率
-    // 30个周期加总后除以最新价格，然后年化
-    let fundingYield = 0;
-    const latestPrice = closes[closes.length - 1];
-    if (latestPrice > 0 && intervalFundingRates.length > 0) {
-      const fundingByBucket = new Map(
-        intervalFundingRates.map((item) => [item.bucketStartTime, item.averageFundingRate])
-      );
-      
-      let totalFundingReturn = 0;
-      for (const candle of candles) {
-        const rate = fundingByBucket.get(candle.openTime) ?? 0;
-        const medianPrice = (Number(candle.high) + Number(candle.low)) / 2;
-        totalFundingReturn += medianPrice * rate;
+    // 获取当前选中交易对的买卖价差
+    let bidAskSpread = null;
+    if (selectedCoin) {
+      const selectedRate = fundingRates.find(r => r.coin === selectedCoin);
+      if (selectedRate?.bestBid && selectedRate?.bestAsk && selectedRate?.midPrice) {
+        const bestBid = parseFloat(selectedRate.bestBid);
+        const bestAsk = parseFloat(selectedRate.bestAsk);
+        const midPrice = parseFloat(selectedRate.midPrice);
+        if (midPrice > 0) {
+          bidAskSpread = ((bestAsk - bestBid) / midPrice) * 100;
+        }
       }
-      
-      // 年化系数：1d * 12, 4h * 72, 1h * 288
-      // 30天 * 24小时 = 720小时，720/30=24（1d情况）
-      // 30根4h = 120小时，需要 * (8760/120) = * 73
-      // 30根1h = 30小时，需要 * (8760/30) = * 292
-      const annualizationFactor = selectedInterval === "1d" ? 12 : selectedInterval === "4h" ? 72 : 288;
-      fundingYield = (totalFundingReturn / latestPrice) * annualizationFactor * 100; // 百分比
     }
+
+    const latestPrice = closes[closes.length - 1];
 
     return {
       latestClose: latestPrice,
       highestHigh: Math.max(...highs),
       lowestLow: Math.min(...lows),
       historicalVolatility,
-      fundingYield,
+      bidAskSpread,
     };
-  }, [candles, intervalFundingRates, selectedInterval]);
+  }, [candles, selectedInterval, selectedCoin, fundingRates]);
 
   const toggleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -489,7 +480,7 @@ export default function FundingMonitor() {
                   : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
               }`}
             >
-              年化预测费率 {sortDesc ? "↓" : "↑"}
+              预测费率 {sortDesc ? "↓" : "↑"}
             </button>
             <button
               onClick={() => toggleSort("price")}
@@ -569,7 +560,7 @@ export default function FundingMonitor() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">交易对</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">价格</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 涨跌</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">年化预测费率</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">预测费率</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 成交额</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">持仓价值</th>
                 </tr>
@@ -590,19 +581,7 @@ export default function FundingMonitor() {
                       }`}
                     >
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-white">{rate.coin}</span>
-                          {isXyzHip3Coin(rate.coin) && (
-                            <span className="rounded bg-purple-500/20 px-1.5 py-0.5 text-xs text-purple-400">
-                              Xyz-Hip3
-                            </span>
-                          )}
-                          {isVntlHip3Coin(rate.coin) && (
-                            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-400">
-                              Vntl-Hip3
-                            </span>
-                          )}
-                        </div>
+                        <span className="font-medium text-white">{rate.coin}</span>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className="font-mono text-sm text-gray-300">{formatPrice(rate.markPrice)}</span>
@@ -618,17 +597,22 @@ export default function FundingMonitor() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <span
-                          className={`font-mono font-medium ${
-                            parseFloat(rate.fundingRate) > 0
-                              ? "text-green-400"
-                              : parseFloat(rate.fundingRate) < 0
-                                ? "text-red-400"
-                                : "text-gray-400"
-                          }`}
-                        >
-                          {formatAnnualizedRate(rate.fundingRate)}
-                        </span>
+                        <div>
+                          <span
+                            className={`font-mono font-medium ${
+                              parseFloat(rate.fundingRate) > 0
+                                ? "text-green-400"
+                                : parseFloat(rate.fundingRate) < 0
+                                  ? "text-red-400"
+                                  : "text-gray-400"
+                            }`}
+                          >
+                            {formatAnnualizedRate(rate.fundingRate)}
+                          </span>
+                          <span className="ml-2 text-xs text-gray-500">
+                            ({formatFundingRate(rate.fundingRate)})
+                          </span>
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className="font-mono text-sm text-gray-400">{formatVolume(rate.dayVolume)}</span>
@@ -750,11 +734,13 @@ export default function FundingMonitor() {
                       <p className="mt-1 text-xs text-gray-500">年化</p>
                     </div>
                     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-                      <p className="text-xs text-gray-400">资金收益率(30周期)</p>
-                      <p className={`mt-2 font-mono text-lg font-bold ${selectedSummary.fundingYield >= 0 ? "text-green-400" : "text-red-400"}`}>
-                        {selectedSummary.fundingYield >= 0 ? "+" : ""}{selectedSummary.fundingYield.toFixed(2)}%
+                      <p className="text-xs text-gray-400">当前买卖价差</p>
+                      <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
+                        {selectedSummary.bidAskSpread !== null 
+                          ? `${selectedSummary.bidAskSpread.toFixed(4)}%` 
+                          : "--"}
                       </p>
-                      <p className="mt-1 text-xs text-gray-500">年化</p>
+                      <p className="mt-1 text-xs text-gray-500">(Ask-Bid)/Mid</p>
                     </div>
                   </div>
                 )}
