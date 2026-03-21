@@ -1,6 +1,6 @@
 // ==================== 交易所标识 ====================
 
-export type ExchangeId = "hyperliquid" | "gateio";
+export type ExchangeId = "hyperliquid" | "gateio" | "binance";
 
 export interface ExchangeInfo {
   id: ExchangeId;
@@ -21,6 +21,12 @@ export const EXCHANGES: Record<ExchangeId, ExchangeInfo> = {
     name: "Gate.io",
     color: "cyan",
     accentColor: "bg-cyan-600",
+  },
+  binance: {
+    id: "binance",
+    name: "Binance",
+    color: "yellow",
+    accentColor: "bg-yellow-600",
   },
 };
 

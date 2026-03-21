@@ -23,6 +23,28 @@ export {
   convertInterval,
 } from "./gateio";
 
+// Binance 标准化函数
+export {
+  getAllFundingRates as getBinanceFundingRates,
+  getFundingHistory as getBinanceFundingHistory,
+  getFundingHistoryForDays as getBinanceFundingHistoryForDays,
+  getCandleSnapshot as getBinanceCandleSnapshot,
+  getAverageFundingRatesByInterval as getBinanceAverageFundingRatesByInterval,
+  formatContractName as formatBinanceContractName,
+  toContractName as toBinanceContractName,
+  convertInterval as convertBinanceInterval,
+  toAnnualizedRate as toBinanceAnnualizedRate,
+  formatFundingRate as formatBinanceFundingRate,
+  formatAnnualizedRate as formatBinanceAnnualizedRate,
+  formatPrice as formatBinancePrice,
+  formatVolume as formatBinanceVolume,
+  type FundingRate as BinanceFundingRate,
+  type FundingHistoryItem as BinanceFundingHistoryItem,
+  type CandleSnapshotItem as BinanceCandleSnapshotItem,
+  type ChartInterval as BinanceChartInterval,
+  type IntervalFundingRateItem as BinanceIntervalFundingRateItem,
+} from "./binance";
+
 // 工具函数
 export {
   calculateAverageFundingRate,

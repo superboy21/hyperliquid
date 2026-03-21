@@ -7,7 +7,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-4-38bdf8)
 
-**实时监控 Hyperliquid 和 Gate.io 资金费率的专业交易工具**
+**实时监控 Hyperliquid、Gate.io 和 Binance 资金费率的专业交易工具**
 
 [在线演示](https://your-demo-link.com) · [报告问题](https://github.com/your-repo/issues) · [功能建议](https://github.com/your-repo/discussions)
 
@@ -20,11 +20,12 @@
 ### 📊 多交易所支持
 - **Hyperliquid**: 支持永续合约和 HIP-3 资产（股票、商品、ETF）
 - **Gate.io**: 支持 655+ 永续合约，自动识别资产类别
+- **Binance**: 支持 200+ USDT 永续合约，智能资产分类筛选
 
 ### 📈 实时数据监控
 - **自动刷新**: 每 30 秒自动更新数据
 - **多维度排序**: 资金费率、价格、涨跌幅、成交量、持仓价值
-- **智能筛选**: 按资产类别（Crypto、股票/指数、商品等）快速筛选
+- **智能筛选**: 按资产类别（Crypto、Layer1/Layer2、DeFi、Meme、AI、GameFi、Storage 等）快速筛选
 
 ### 🎯 专业图表分析
 - **K 线图表**: 支持日线、4小时线、1小时线切换
@@ -133,23 +134,28 @@ docker compose up -d --build
 src/
 ├── app/
 │   ├── funding/
-│   │   └── page.tsx              # 资金费率监控主页面
+│   │   └── page.tsx                    # 资金费率监控主页面
 │   ├── api/
-│   │   └── gate/                 # Gate.io API 代理
-│   └── page.tsx                  # 首页
+│   │   ├── gate/                       # Gate.io API 代理
+│   │   └── binance/                    # Binance API 代理
+│   └── page.tsx                        # 首页
 ├── components/
 │   └── funding/
-│       ├── FundingMonitor.tsx    # Hyperliquid 监控组件
-│       ├── GateFundingMonitor.tsx# Gate.io 监控组件
-│       └── *Chart.tsx            # 图表组件
+│       ├── FundingMonitor.tsx          # Hyperliquid 监控组件
+│       ├── GateFundingMonitor.tsx      # Gate.io 监控组件
+│       ├── BinanceFundingMonitor.tsx   # Binance 监控组件
+│       └── *Chart.tsx                  # 图表组件
 ├── lib/
-│   ├── types.ts                  # 统一数据接口定义
-│   ├── normalizers/              # 数据标准化层
-│   │   ├── index.ts             # 统一导出和工具函数
-│   │   ├── hyperliquid.ts       # Hyperliquid 标准化
-│   │   └── gateio.ts            # Gate.io 标准化
-│   ├── hyperliquid.ts            # Hyperliquid API 封装
-│   └── gateio.ts                 # Gate.io API 封装
+│   ├── types.ts                        # 统一数据接口定义
+│   ├── normalizers/                    # 数据标准化层
+│   │   ├── index.ts                    # 统一导出和工具函数
+│   │   ├── hyperliquid.ts              # Hyperliquid 标准化
+│   │   ├── gateio.ts                   # Gate.io 标准化
+│   │   └── binance.ts                  # Binance 标准化
+│   ├── hyperliquid.ts                  # Hyperliquid API 封装
+│   ├── gateio.ts                       # Gate.io API 封装
+│   └── utils/                          # 工具函数
+│       └── funding.ts                  # 资金费率计算工具
 └── ...
 ```
 
@@ -176,15 +182,34 @@ src/
 | 历史数据 | ✅ |
 | K 线图表 | ✅ |
 
+### Binance
+| 功能 | 支持状态 |
+|------|----------|
+| 永续合约 (USDT) | ✅ |
+| 200+ 交易对 | ✅ |
+| 资产类别筛选 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
+| 买卖价差显示 | ✅ |
+
 ---
 
 ## 📊 资产类别分类
 
-Gate.io 支持以下资产类别筛选：
-
+### Gate.io
 - **Crypto**: 主流币、Meme、Layer 1/2、DeFi、AI、游戏、RWA
 - **股票/指数**: BABA、TSLA、NVDA、SPY、QQQ、SPX500 等
 - **商品**: XAU、XAG、XBR、PAXG、SLVON 等
+- **其他**: 其他类型的永续合约
+
+### Binance
+- **Layer1/Layer2**: BTC, ETH, SOL, AVAX, ADA, DOT 等
+- **DeFi**: UNI, AAVE, MKR, COMP, CRV, LDO 等
+- **Meme**: DOGE, SHIB, PEPE, FLOKI, BONK 等
+- **AI**: AGIX, FET, OCEAN, RNDR, GRT 等
+- **GameFi**: AXS, SAND, MANA, ENJ, GALA 等
+- **Storage**: FIL, AR, STORJ 等
 - **其他**: 其他类型的永续合约
 
 ---
@@ -277,6 +302,18 @@ const interval = setInterval(fetchData, 30000); // 30 秒
 ---
 
 ## 📝 更新日志
+
+### v2.3.0 (2026-03-22)
+- ✨ 新增 Binance 交易所支持（200+ USDT 永续合约）
+- ✨ Binance 资产类别筛选（Layer1/Layer2、DeFi、Meme、AI、GameFi、Storage 等）
+- ✨ Binance 持仓价值显示（openInterest × markPrice）
+- ✨ Binance 买卖价差显示（使用 bookTicker API）
+- ✨ Binance 精确 30 天/7 天资金费率统计
+- ✨ Binance 多结算周期支持（8h/4h/1h）
+- ✨ 自动过滤已下架资产（无法获取 openInterest）
+- 🐛 修复 Binance 图表 tooltip 不显示 K 线信息
+- 🐛 修复 Binance 年化计算未乘以 100
+- 🐛 修复 Binance 排序逻辑（与 Gate.io 一致）
 
 ### v2.2.0 (2026-03-20)
 - ✨ 新增当前买卖价差显示 `(Best Ask - Best Bid) / Mid Price × 100`
