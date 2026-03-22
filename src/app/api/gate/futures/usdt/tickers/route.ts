@@ -93,76 +93,71 @@ function getAssetCategory(contractName: string): string {
 }
 
 export async function GET(request: NextRequest) {
-  let lastError: Error | null = null;
+  const baseUrl = "https://api.gateio.ws/api/v4";
 
-  // 尝试每个域名
-  for (const baseUrl of GATE_API_URLS) {
-    try {
-      console.log(`[Gate API] Trying: ${baseUrl}/futures/usdt/tickers`);
-      
-      // 并行获取 tickers 和 contracts 数据
-      const [tickersRes, contractsRes] = await Promise.all([
-        fetch(`${baseUrl}/futures/usdt/tickers`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          },
-          signal: AbortSignal.timeout(10000),
-        }),
-        fetch(`${baseUrl}/futures/usdt/contracts`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          },
-          signal: AbortSignal.timeout(10000),
-        }),
-      ]);
+  try {
+    console.log(`[Gate API] Fetching from: ${baseUrl}`);
+    
+    // 先获取 tickers，再获取 contracts（避免并行请求导致限流）
+    const tickersRes = await fetch(`${baseUrl}/futures/usdt/tickers`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(30000),
+    });
 
-      console.log(`[Gate API] Tickers status: ${tickersRes.status}, Contracts status: ${contractsRes.status}`);
-
-      if (!tickersRes.ok || !contractsRes.ok) {
-        throw new Error(`HTTP error: tickers=${tickersRes.status}, contracts=${contractsRes.status}`);
-      }
-
-      const tickers = await tickersRes.json();
-      const contracts = await contractsRes.json();
-      
-      if (!Array.isArray(tickers) || !Array.isArray(contracts)) {
-        throw new Error("Invalid response format");
-      }
-
-      // 创建 funding_interval 映射
-      const fundingIntervalMap = new Map<string, number>();
-      for (const contract of contracts) {
-        if (contract.name && contract.funding_interval) {
-          fundingIntervalMap.set(contract.name, contract.funding_interval);
-        }
-      }
-
-      // 合并数据，添加资产类别
-      const mergedTickers = tickers.map((ticker: any) => ({
-        ...ticker,
-        funding_interval: fundingIntervalMap.get(ticker.contract) || 28800,
-        asset_category: getAssetCategory(ticker.contract),
-      }));
-
-      console.log(`[Gate API] Success, got ${mergedTickers.length} tickers with funding intervals and categories`);
-      return NextResponse.json(mergedTickers);
-    } catch (error) {
-      lastError = error as Error;
-      console.error(`[Gate API] Failed with ${baseUrl}:`, error);
-      continue; // 尝试下一个域名
+    if (!tickersRes.ok) {
+      throw new Error(`Tickers API failed: ${tickersRes.status}`);
     }
-  }
 
-  // 所有域名都失败
-  console.error("[Gate API] All URLs failed:", lastError);
-  return NextResponse.json(
-    { error: lastError?.message || "Failed to fetch tickers" },
-    { status: 500 }
-  );
+    const tickers = await tickersRes.json();
+    
+    // 获取 contracts 数据（可选）
+    let contracts: any[] = [];
+    try {
+      const contractsRes = await fetch(`${baseUrl}/futures/usdt/contracts`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(30000),
+      });
+      if (contractsRes.ok) {
+        contracts = await contractsRes.json();
+      }
+    } catch (e) {
+      console.log("[Gate API] Contracts fetch failed, using default funding interval");
+    }
+    
+    if (!Array.isArray(tickers)) {
+      throw new Error("Invalid ticker response format");
+    }
+
+    // 创建 funding_interval 映射
+    const fundingIntervalMap = new Map<string, number>();
+    for (const contract of contracts) {
+      if (contract.name && contract.funding_interval) {
+        fundingIntervalMap.set(contract.name, contract.funding_interval);
+      }
+    }
+
+    // 合并数据，添加资产类别
+    const mergedTickers = tickers.map((ticker: any) => ({
+      ...ticker,
+      funding_interval: fundingIntervalMap.get(ticker.contract) || 28800,
+      asset_category: getAssetCategory(ticker.contract),
+    }));
+
+    console.log(`[Gate API] Success, got ${mergedTickers.length} tickers`);
+    return NextResponse.json(mergedTickers);
+  } catch (error) {
+    console.error("[Gate API] Error:", error);
+    return NextResponse.json(
+      { error: (error as Error).message || "Failed to fetch tickers" },
+      { status: 500 }
+    );
+  }
 }

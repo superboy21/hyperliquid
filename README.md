@@ -204,13 +204,10 @@ src/
 - **其他**: 其他类型的永续合约
 
 ### Binance
-- **Layer1/Layer2**: BTC, ETH, SOL, AVAX, ADA, DOT 等
-- **DeFi**: UNI, AAVE, MKR, COMP, CRV, LDO 等
-- **Meme**: DOGE, SHIB, PEPE, FLOKI, BONK 等
-- **AI**: AGIX, FET, OCEAN, RNDR, GRT 等
-- **GameFi**: AXS, SAND, MANA, ENJ, GALA 等
-- **Storage**: FIL, AR, STORJ 等
-- **其他**: 其他类型的永续合约
+- **Majors**: BTC, ETH, BNB, SOL, HYPE, LINK, XRP, TRX, ADA, WLFI, AAVE, SKY, DOGE, BCH
+- **Metals**: XAU, XAG, XPT, XPD, COPPER, PAXG, XAUT
+- **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT 等
+- **Other Crypto**: 其他所有加密货币永续合约
 
 ---
 
@@ -302,6 +299,14 @@ const interval = setInterval(fetchData, 30000); // 30 秒
 ---
 
 ## 📝 更新日志
+
+### v2.4.0 (2026-03-22)
+- ✨ Binance 资产分类重构（Majors、Metals、Stocks、Other Crypto）
+- ✨ 优化 Binance 页面加载速度（异步加载 openInterest）
+- ✨ 自动刷新频率统一为 60 秒
+- ✨ 字号优化（表头、交易对名称、图表标题）
+- 🐛 修复 Gate.io API 代理超时问题
+- 🐛 修复已下架资产过滤逻辑
 
 ### v2.3.0 (2026-03-22)
 - ✨ 新增 Binance 交易所支持（200+ USDT 永续合约）

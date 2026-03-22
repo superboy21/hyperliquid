@@ -117,7 +117,7 @@ export default function FundingMonitor() {
 
   useEffect(() => {
     fetchRates();
-    const interval = setInterval(fetchRates, 30000);
+    const interval = setInterval(fetchRates, 60000);
     return () => clearInterval(interval);
   }, [fetchRates]);
 
@@ -538,7 +538,7 @@ export default function FundingMonitor() {
 
       {lastUpdate && (
         <div className="text-sm text-gray-500">
-          最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 30 秒自动刷新）
+          最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 60 秒自动刷新）
         </div>
       )}
 

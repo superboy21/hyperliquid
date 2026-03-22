@@ -88,6 +88,23 @@ interface FundingStats {
 
 // ==================== 常量 ====================
 
+// 已下架/无法获取 openInterest 的资产黑名单
+const DELISTED_SYMBOLS = new Set([
+  "1000WHYUSDT", "1000XUSDT", "42USDT", "AGIXUSDT", "AI16ZUSDT", "ALPACAUSDT", "ALPHAUSDT",
+  "AMBUSDT", "BADGERUSDT", "BAKEUSDT", "BALUSDT", "BDXNUSDT", "BIDUSDT", "BLZUSDT", "BNXUSDT",
+  "BONDUSDT", "BSWUSDT", "BTCSTUSDT", "CHESSUSDT", "COMBOUSDT", "COMMONUSDT", "CUDISUSDT",
+  "DARUSDT", "DEFIUSDT", "DFUSDT", "DGBUSDT", "DMCUSDT", "EOSUSDT", "EPTUSDT", "FISUSDT",
+  "FLMUSDT", "FRONTUSDT", "FTMUSDT", "FTTUSDT", "FXSUSDT", "GAIBUSDT", "GHSTUSDT", "GLMRUSDT",
+  "HIFIUSDT", "IDEXUSDT", "KDAUSDT", "KEYUSDT", "KLAYUSDT", "LEVERUSDT", "LINAUSDT", "LOKAUSDT",
+  "LOOMUSDT", "MATICUSDT", "MDTUSDT", "MEMEFIUSDT", "MILKUSDT", "MKRUSDT", "MYROUSDT",
+  "NEIROETHUSDT", "NKNUSDT", "NULSUSDT", "OBOLUSDT", "OCEANUSDT", "OMGUSDT", "OMNIUSDT",
+  "OMUSDT", "ORBSUSDT", "PERPUSDT", "PONKEUSDT", "PORT3USDT", "QUICKUSDT", "RADUSDT",
+  "RAYUSDT", "REEFUSDT", "REIUSDT", "RENUSDT", "RVVUSDT", "SCUSDT", "SKATEUSDT", "SLERFUSDT",
+  "SNTUSDT", "STMXUSDT", "STPTUSDT", "STRAXUSDT", "SWELLUSDT", "SXPUSDT", "TANSSIUSDT",
+  "TOKENUSDT", "TROYUSDT", "UNFIUSDT", "UXLINKUSDT", "VFYUSDT", "VIDTUSDT", "VOXELUSDT",
+  "WAVESUSDT", "XCNUSDT", "XEMUSDT", "YALAUSDT", "ZRCUSDT",
+]);
+
 const intervalLabels: Record<ChartInterval, string> = {
   "1d": "日线",
   "4h": "4小时线",
@@ -96,46 +113,43 @@ const intervalLabels: Record<ChartInterval, string> = {
 
 const CATEGORY_CONFIG: Record<string, { label: string; borderColor: string; bgColor: string; dotColor: string }> = {
   all: { label: "全部资产", borderColor: "border-yellow-600", bgColor: "bg-yellow-600", dotColor: "bg-yellow-400" },
-  "Layer1/Layer2": { label: "Layer1/Layer2", borderColor: "border-purple-600", bgColor: "bg-purple-600", dotColor: "bg-purple-400" },
-  DeFi: { label: "DeFi", borderColor: "border-blue-600", bgColor: "bg-blue-600", dotColor: "bg-blue-400" },
-  Meme: { label: "Meme", borderColor: "border-amber-600", bgColor: "bg-amber-600", dotColor: "bg-amber-400" },
-  AI: { label: "AI", borderColor: "border-cyan-600", bgColor: "bg-cyan-600", dotColor: "bg-cyan-400" },
-  GameFi: { label: "GameFi", borderColor: "border-green-600", bgColor: "bg-green-600", dotColor: "bg-green-400" },
-  Storage: { label: "Storage", borderColor: "border-orange-600", bgColor: "bg-orange-600", dotColor: "bg-orange-400" },
-  其他: { label: "其他", borderColor: "border-gray-600", bgColor: "bg-gray-600", dotColor: "bg-gray-400" },
+  Majors: { label: "Majors", borderColor: "border-blue-600", bgColor: "bg-blue-600", dotColor: "bg-blue-400" },
+  Metals: { label: "Metals", borderColor: "border-yellow-500", bgColor: "bg-yellow-500", dotColor: "bg-yellow-300" },
+  Stocks: { label: "Stocks", borderColor: "border-green-600", bgColor: "bg-green-600", dotColor: "bg-green-400" },
+  "Other Crypto": { label: "Other Crypto", borderColor: "border-gray-600", bgColor: "bg-gray-600", dotColor: "bg-gray-400" },
 };
 
-// Layer1/Layer2 主流币
-const LAYER1_LAYER2 = ["BTC", "ETH", "BNB", "SOL", "ADA", "AVAX", "DOT", "MATIC", "NEAR", "ATOM", "FTM", "ALGO", "XTZ", "EOS", "TRX", "ICP", "APT", "SUI", "ARB", "OP", "BASE"];
+// Majors 代币
+const MAJORS = ["BTC", "ETH", "BNB", "SOL", "HYPE", "LINK", "XRP", "TRX", "ADA", "WLFI", "AAVE", "SKY", "DOGE", "BCH"];
 
-// Meme 币
-const MEME_COINS = ["DOGE", "SHIB", "PEPE", "FLOKI", "BONK", "WIF", "MYRO", "BOME", "MEME", "MOG", "TURBO"];
+// Metals 商品
+const METALS = ["XAU", "XAG", "XPT", "XPD", "COPPER", "PAXG", "XAUT"];
 
-// DeFi 代币
-const DEFI_TOKENS = ["UNI", "AAVE", "MKR", "COMP", "SNX", "CRV", "SUSHI", "1INCH", "YFI", "BAL", "LDO", "RPL", "PENDLE", "GMX", "DYDX", "RDNT", "MAGIC", "JOE", "CAKE", "PANCAKE"];
-
-// AI 代币
-const AI_TOKENS = ["AGIX", "FET", "OCEAN", "RNDR", "GRT", "NMR", "CTXC", "NFP", "AI", "WLD"];
-
-// GameFi 代币
-const GAMEFI_TOKENS = ["AXS", "SAND", "MANA", "ENJ", "GALA", "ILV", "YGG", "GMT", "STEPN", "ALICE", "TLM", "STAR", "PIXEL", "PORTAL"];
-
-// Storage 代币
-const STORAGE_TOKENS = ["FIL", "AR", "STORJ", "SC", "BTT", "HOT"];
+// Stocks 股票/ETF
+const STOCKS = [
+  "TSLA", "MSTR", "AMZN", "AAPL", "NVDA", "EWY", "EWJ", "QQQ", "SPY", "META", "GOOGL", "MSFT", "NFLX", "AMD", "INTC", "COIN",
+  "BABA", "TSM", "JPM", "V", "MA", "DIS", "PYPL", "UBER", "ABNB", "SOFI", "PLTR", "HOOD", "RIVN", "LCID", "NIO",
+  "XOM", "CRCL", "PFE", "JNJ", "UNH", "HD", "WMT", "COST", "TGT", "NKE", "SBUX", "MCD", "KO", "PEP",
+  "QQQX", "TQQQ", "SPXL", "SOXL", "TNA", "UVXY", "VIX", "TLT", "IEF", "LQD", "HYG", "EMB",
+  "MSTRX", "COINX", "NVDAX", "AAPLX", "GOOGLX", "ORCLX", "TQQQX", "PLTRX", "METAX", "AMZNX", "HOODX",
+];
 
 // ==================== 工具函数 ====================
 
 function getAssetCategory(symbol: string): string {
   const base = symbol.replace("USDT", "").toUpperCase();
   
-  if (LAYER1_LAYER2.includes(base)) return "Layer1/Layer2";
-  if (MEME_COINS.includes(base)) return "Meme";
-  if (DEFI_TOKENS.includes(base)) return "DeFi";
-  if (AI_TOKENS.includes(base)) return "AI";
-  if (GAMEFI_TOKENS.includes(base)) return "GameFi";
-  if (STORAGE_TOKENS.includes(base)) return "Storage";
+  // 检查是否是 Majors
+  if (MAJORS.includes(base)) return "Majors";
   
-  return "其他";
+  // 检查是否是 Metals
+  if (METALS.includes(base)) return "Metals";
+  
+  // 检查是否是 Stocks
+  if (STOCKS.includes(base)) return "Stocks";
+  
+  // 其他加密货币
+  return "Other Crypto";
 }
 
 function formatFundingRate(rate: string | number): string {
@@ -293,74 +307,22 @@ export default function BinanceFundingMonitor() {
       const fundingInfoMap = new Map(fundingInfos.map((f) => [f.symbol, f]));
       const bookTickerMap = new Map(bookTickers.map((b) => [b.symbol, b]));
 
-      // 获取所有 USDT 永续合约的 openInterest (并发获取)
-      const usdtSymbols = Array.from(premiumMap.keys()).filter(s => s.endsWith("USDT"));
-      const openInterestMap = new Map<string, number>();
-      const failedSymbols: string[] = [];
-      
-      // 分批并发获取 openInterest，每批20个
-      const batchSize = 20;
-      for (let i = 0; i < usdtSymbols.length; i += batchSize) {
-        const batch = usdtSymbols.slice(i, i + batchSize);
-        const promises = batch.map(async (symbol) => {
-          try {
-            const oiRes = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`);
-            if (oiRes.ok) {
-              const oiData = await oiRes.json();
-              const oi = parseFloat(oiData.openInterest || "0");
-              const premium = premiumMap.get(symbol);
-              const markPrice = parseFloat(premium?.markPrice || "0");
-              // 持仓价值 = 持仓量 * 标记价格 (USD)
-              return { symbol, value: oi * markPrice, success: oi > 0 };
-            }
-          } catch (e) {
-            // 忽略单个请求失败
-          }
-          return { symbol, value: 0, success: false };
-        });
-        
-        const results = await Promise.all(promises);
-        for (const { symbol, value, success } of results) {
-          openInterestMap.set(symbol, value);
-          if (!success) {
-            failedSymbols.push(symbol);
-          }
-        }
-        
-        // 批次间短暂延迟避免限流
-        if (i + batchSize < usdtSymbols.length) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-      }
-      
-      // 设置失败的合约列表
-      setFailedOISymbols(failedSymbols);
-
-      // 只保留 USDT 永续合约
+      // 快速构建基本数据（使用 quoteVolume 作为初始 notionalValue）
       const rates: FundingRate[] = [];
       for (const [symbol, premium] of premiumMap) {
         if (!symbol.endsWith("USDT")) continue;
-        
-        // 跳过拿不到 openInterest 的资产（可能已下架）
-        if (failedSymbols.includes(symbol)) continue;
+        if (DELISTED_SYMBOLS.has(symbol)) continue;
         
         const ticker = tickerMap.get(symbol);
         const fundingInfo = fundingInfoMap.get(symbol);
         
-        // 默认 8 小时，如果有特殊配置则使用配置值
         const fundingInterval = fundingInfo?.fundingIntervalHours 
           ? fundingInfo.fundingIntervalHours * 3600 
           : 8 * 60 * 60;
 
         const markPrice = parseFloat(premium.markPrice || "0");
-        
-        // 从 bookTicker 获取 bidPrice 和 askPrice
         const bookTicker = bookTickerMap.get(symbol);
-        const bidPrice = parseFloat(bookTicker?.bidPrice || "0");
-        const askPrice = parseFloat(bookTicker?.askPrice || "0");
-        
-        // 获取持仓价值
-        const notionalValue = openInterestMap.get(symbol) || parseFloat(ticker?.quoteVolume || "0");
+        const quoteVolume = parseFloat(ticker?.quoteVolume || "0");
 
         rates.push({
           symbol,
@@ -374,8 +336,8 @@ export default function BinanceFundingMonitor() {
           askPrice: bookTicker?.askPrice || "0",
           priceChangePercent: ticker?.priceChangePercent || "0",
           quoteVolume: ticker?.quoteVolume || "0",
-          openInterest: String(notionalValue / markPrice), // 反推持仓量
-          notionalValue: String(notionalValue),
+          openInterest: "0",
+          notionalValue: String(quoteVolume), // 暂时使用 quoteVolume
           fundingInterval,
           assetCategory: getAssetCategory(symbol),
         });
@@ -388,6 +350,9 @@ export default function BinanceFundingMonitor() {
 
       setFundingRates(rates);
       setLastUpdate(new Date());
+
+      // 异步获取 openInterest 并更新
+      fetchOpenInterestAsync(premiumMap, tickerMap, bookTickerMap, fundingInfoMap);
     } catch (fetchError) {
       console.error("Error fetching data:", fetchError);
       setError("获取数据时发生错误。");
@@ -396,9 +361,62 @@ export default function BinanceFundingMonitor() {
     }
   }, []);
 
+  // 异步获取 openInterest
+  const fetchOpenInterestAsync = async (
+    premiumMap: Map<string, PremiumIndex>,
+    tickerMap: Map<string, Ticker24hr>,
+    bookTickerMap: Map<string, {symbol: string; bidPrice: string; askPrice: string}>,
+    fundingInfoMap: Map<string, FundingInfo>
+  ) => {
+    const usdtSymbols = Array.from(premiumMap.keys())
+      .filter(s => s.endsWith("USDT") && !DELISTED_SYMBOLS.has(s));
+    
+    // 分批并发获取 openInterest，每批50个
+    const batchSize = 50;
+    const openInterestMap = new Map<string, number>();
+    
+    for (let i = 0; i < usdtSymbols.length; i += batchSize) {
+      const batch = usdtSymbols.slice(i, i + batchSize);
+      const promises = batch.map(async (symbol) => {
+        try {
+          const oiRes = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`);
+          if (oiRes.ok) {
+            const oiData = await oiRes.json();
+            const oi = parseFloat(oiData.openInterest || "0");
+            const premium = premiumMap.get(symbol);
+            const markPrice = parseFloat(premium?.markPrice || "0");
+            return { symbol, value: oi * markPrice };
+          }
+        } catch (e) {
+          // 忽略单个请求失败
+        }
+        return { symbol, value: 0 };
+      });
+      
+      const results = await Promise.all(promises);
+      for (const { symbol, value } of results) {
+        openInterestMap.set(symbol, value);
+      }
+      
+      // 批次间短暂延迟
+      if (i + batchSize < usdtSymbols.length) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+
+    // 更新 fundingRates 中的 notionalValue
+    setFundingRates(prevRates => prevRates.map(rate => {
+      const oiValue = openInterestMap.get(rate.symbol);
+      if (oiValue && oiValue > 0) {
+        return { ...rate, notionalValue: String(oiValue) };
+      }
+      return rate;
+    }));
+  };
+
   useEffect(() => {
     fetchRates();
-    const interval = setInterval(fetchRates, 30000);
+    const interval = setInterval(fetchRates, 60000);
     return () => clearInterval(interval);
   }, [fetchRates]);
 
@@ -653,14 +671,14 @@ export default function BinanceFundingMonitor() {
     );
   }
 
-  const positiveCount = fundingRates.filter((r) => parseFloat(r.fundingRate) > 0).length;
-  const negativeCount = fundingRates.filter((r) => parseFloat(r.fundingRate) < 0).length;
+  const positiveCount = filteredAndSortedRates.filter((r) => parseFloat(r.fundingRate) > 0).length;
+  const negativeCount = filteredAndSortedRates.filter((r) => parseFloat(r.fundingRate) < 0).length;
 
-  const weightedAvgRate = fundingRates.length > 0
-    ? fundingRates.reduce((sum, r) => {
+  const weightedAvgRate = filteredAndSortedRates.length > 0
+    ? filteredAndSortedRates.reduce((sum, r) => {
         const notional = parseFloat(r.notionalValue) || 0;
         return sum + parseFloat(r.fundingRate) * notional;
-      }, 0) / fundingRates.reduce((sum, r) => sum + (parseFloat(r.notionalValue) || 0), 0)
+      }, 0) / filteredAndSortedRates.reduce((sum, r) => sum + (parseFloat(r.notionalValue) || 0), 0)
     : 0;
 
   return (
@@ -791,7 +809,7 @@ export default function BinanceFundingMonitor() {
 
         {lastUpdate && (
           <div className="mb-4 text-sm text-gray-500">
-            最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 30 秒自动刷新）
+            最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 60 秒自动刷新）
           </div>
         )}
 
@@ -812,12 +830,12 @@ export default function BinanceFundingMonitor() {
               <table className="w-full">
                 <thead className="sticky top-0 bg-gray-900">
                   <tr>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">交易对</th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">价格</th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 涨跌</th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">预测费率</th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 成交额</th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">持仓价值</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400">交易对</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400">价格</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400">24h 涨跌</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400">预测费率</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400">24h 成交额</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400">持仓价值</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
@@ -836,7 +854,7 @@ export default function BinanceFundingMonitor() {
                         }`}
                       >
                         <td className="px-4 py-3">
-                          <span className="font-medium text-white">{rate.symbol}</span>
+                          <span className="text-[10px] font-medium text-white">{rate.symbol}</span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span className="font-mono text-sm text-gray-300">{formatPrice(rate.lastPrice)}</span>
@@ -890,7 +908,7 @@ export default function BinanceFundingMonitor() {
           <div className="overflow-hidden rounded-lg border border-gray-700 bg-gray-800">
             <div className="border-b border-gray-700 p-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-white">
+                <h2 className="text-xs font-semibold text-white">
                   {selectedCoin ? `${selectedCoin} 近 30 天价格与资金费率` : "选择左侧资产查看图表"}
                 </h2>
                 {selectedCoin && (
@@ -899,7 +917,7 @@ export default function BinanceFundingMonitor() {
                       <button
                         key={interval}
                         onClick={() => setSelectedInterval(interval)}
-                        className={`rounded-lg px-3 py-1 text-sm transition-colors ${
+                        className={`rounded-lg px-3 py-1 text-xs transition-colors ${
                           selectedInterval === interval
                             ? "bg-yellow-600 text-white"
                             : "bg-gray-700 text-gray-300 hover:bg-gray-600"
