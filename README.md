@@ -7,7 +7,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-4-38bdf8)
 
-**实时监控 Hyperliquid、Gate.io 和 Binance 资金费率的专业交易工具**
+**实时监控 Hyperliquid、Gate.io、Binance 和 Lighter 资金费率的专业交易工具**
 
 [在线演示](https://your-demo-link.com) · [报告问题](https://github.com/your-repo/issues) · [功能建议](https://github.com/your-repo/discussions)
 
@@ -21,11 +21,12 @@
 - **Hyperliquid**: 支持永续合约和 HIP-3 资产（股票、商品、ETF）
 - **Gate.io**: 支持 655+ 永续合约，自动识别资产类别
 - **Binance**: 支持 200+ USDT 永续合约，智能资产分类筛选
+- **Lighter**: 支持 160+ 永续合约，包括股票、ETF、外汇、商品、加密货币
 
 ### 📈 实时数据监控
-- **自动刷新**: 每 30 秒自动更新数据
+- **自动刷新**: 每 60 秒自动更新数据
 - **多维度排序**: 资金费率、价格、涨跌幅、成交量、持仓价值
-- **智能筛选**: 按资产类别（Crypto、Layer1/Layer2、DeFi、Meme、AI、GameFi、Storage 等）快速筛选
+- **智能筛选**: 按资产类别（Crypto、股票、ETF、外汇、商品等）快速筛选
 
 ### 🎯 专业图表分析
 - **K 线图表**: 支持日线、4小时线、1小时线切换
@@ -137,13 +138,15 @@ src/
 │   │   └── page.tsx                    # 资金费率监控主页面
 │   ├── api/
 │   │   ├── gate/                       # Gate.io API 代理
-│   │   └── binance/                    # Binance API 代理
+│   │   ├── binance/                    # Binance API 代理
+│   │   └── lighter/                    # Lighter API 代理
 │   └── page.tsx                        # 首页
 ├── components/
 │   └── funding/
 │       ├── FundingMonitor.tsx          # Hyperliquid 监控组件
 │       ├── GateFundingMonitor.tsx      # Gate.io 监控组件
 │       ├── BinanceFundingMonitor.tsx   # Binance 监控组件
+│       ├── LighterFundingMonitor.tsx   # Lighter 监控组件
 │       └── *Chart.tsx                  # 图表组件
 ├── lib/
 │   ├── types.ts                        # 统一数据接口定义
@@ -208,6 +211,13 @@ src/
 - **Metals**: XAU, XAG, XPT, XPD, COPPER, PAXG, XAUT
 - **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT 等
 - **Other Crypto**: 其他所有加密货币永续合约
+
+### Lighter
+- **Equities**: HOOD, AAPL, META, INTC, AMZN, BMNR, PLTR, COIN, SAMSUNG, STRC, AMD, SNDK, HANMI, HYUNDAI, ASML
+- **ETF/Index**: QQQ, SPY, KRCOMP, URA, IWM, MAGS, BOTZ, DIA
+- **FX**: EURUSD, USDKRW, USDJPY, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD
+- **Commodities**: XAU, XAG, WTI, BRENTOIL, XPT, XCU
+- **Crypto**: 其他所有加密货币永续合约
 
 ---
 
@@ -299,6 +309,16 @@ const interval = setInterval(fetchData, 30000); // 30 秒
 ---
 
 ## 📝 更新日志
+
+### v2.5.0 (2026-03-28)
+- ✨ 新增 Lighter 交易所支持（160+ 永续合约）
+- ✨ Lighter 资产分类（Equities、ETF/Index、FX、Commodities、Crypto）
+- ✨ 使用 Lighter 官方 API 获取真实历史数据
+- ✨ OI 加权平均年化资金费率计算
+- ✨ 历史波动率计算
+- ✨ 买卖价差显示
+- 🐛 修复资金费率正负号问题（根据 direction 字段）
+- 🐛 修复 API 限流问题
 
 ### v2.4.0 (2026-03-22)
 - ✨ Binance 资产分类重构（Majors、Metals、Stocks、Other Crypto）

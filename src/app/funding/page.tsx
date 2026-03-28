@@ -4,8 +4,9 @@ import { useState } from "react";
 import FundingMonitor from "@/components/funding/FundingMonitor";
 import GateFundingMonitor from "@/components/funding/GateFundingMonitor";
 import BinanceFundingMonitor from "@/components/funding/BinanceFundingMonitor";
+import LighterFundingMonitor from "@/components/funding/LighterFundingMonitor";
 
-type Exchange = "hyperliquid" | "gate" | "binance";
+type Exchange = "hyperliquid" | "gate" | "binance" | "lighter";
 
 export default function FundingPage() {
   const [selectedExchange, setSelectedExchange] = useState<Exchange>("hyperliquid");
@@ -81,6 +82,22 @@ export default function FundingPage() {
                 <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">当前</span>
               )}
             </button>
+            <button
+              onClick={() => setSelectedExchange("lighter")}
+              className={`flex items-center gap-2 rounded-lg border px-5 py-2.5 font-medium transition-all ${
+                selectedExchange === "lighter"
+                  ? "border-purple-600 bg-purple-600 text-white shadow-lg shadow-purple-600/25"
+                  : "border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600 hover:bg-gray-700"
+              }`}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Lighter
+              {selectedExchange === "lighter" && (
+                <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">当前</span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -89,8 +106,10 @@ export default function FundingPage() {
           <FundingMonitor />
         ) : selectedExchange === "gate" ? (
           <GateFundingMonitor />
-        ) : (
+        ) : selectedExchange === "binance" ? (
           <BinanceFundingMonitor />
+        ) : (
+          <LighterFundingMonitor />
         )}
       </div>
     </main>
