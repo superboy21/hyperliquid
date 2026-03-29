@@ -202,14 +202,14 @@ src/
 
 ### Gate.io
 - **Crypto**: 主流币、Meme、Layer 1/2、DeFi、AI、游戏、RWA
-- **股票/指数**: BABA、TSLA、NVDA、SPY、QQQ、SPX500 等
+- **股票/指数**: BABA、TSLA、NVDA、SPY、QQQ、SPX500、PAYP、GVZ、EWY 等
 - **商品**: XAU、XAG、XBR、PAXG、SLVON 等
 - **其他**: 其他类型的永续合约
 
 ### Binance
 - **Majors**: BTC, ETH, BNB, SOL, HYPE, LINK, XRP, TRX, ADA, WLFI, AAVE, SKY, DOGE, BCH
 - **Metals**: XAU, XAG, XPT, XPD, COPPER, PAXG, XAUT
-- **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT 等
+- **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT, PAYP 等
 - **Other Crypto**: 其他所有加密货币永续合约
 
 ### Lighter
@@ -309,6 +309,10 @@ const interval = setInterval(fetchData, 30000); // 30 秒
 ---
 
 ## 📝 更新日志
+
+### v2026.03.30 (2026-03-30)
+- ✨ Binance Stocks 新增：PAYP（PayPal）
+- ✨ Gate.io 股票/指数 新增：PAYP、GVZ（Gold Volatility Index）、EWY（iShares MSCI South Korea ETF）
 
 ### v2.6.0 (2026-03-29)
 - ✨ Lighter Equities 新增：CRCL、TSLA、NVDA、GOOGL、MSTR、MSFT

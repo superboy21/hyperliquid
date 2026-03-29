@@ -130,7 +130,7 @@ const STOCKS = [
   "TSLA", "MSTR", "AMZN", "AAPL", "NVDA", "EWY", "EWJ", "QQQ", "SPY", "META", "GOOGL", "MSFT", "NFLX", "AMD", "INTC", "COIN",
   "BABA", "TSM", "JPM", "V", "MA", "DIS", "PYPL", "UBER", "ABNB", "SOFI", "PLTR", "HOOD", "RIVN", "LCID", "NIO",
   "XOM", "CRCL", "PFE", "JNJ", "UNH", "HD", "WMT", "COST", "TGT", "NKE", "SBUX", "MCD", "KO", "PEP",
-  "QQQX", "TQQQ", "SPXL", "SOXL", "TNA", "UVXY", "VIX", "TLT", "IEF", "LQD", "HYG", "EMB",
+  "QQQX", "TQQQ", "SPXL", "SOXL", "TNA", "UVXY", "VIX", "TLT", "IEF", "LQD", "HYG", "EMB", "PAYP",
   "MSTRX", "COINX", "NVDAX", "AAPLX", "GOOGLX", "ORCLX", "TQQQX", "PLTRX", "METAX", "AMZNX", "HOODX",
 ];
 
