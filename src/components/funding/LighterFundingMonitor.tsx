@@ -75,7 +75,7 @@ const CATEGORY_CONFIG: Record<string, { label: string; borderColor: string; bgCo
 };
 
 // Equities
-const EQUITIES = ["HOOD", "AAPL", "META", "INTC", "AMZN", "BMNR", "PLTR", "COIN", "SAMSUNG", "STRC", "AMD", "SNDK", "HANMI", "HYUNDAI", "ASML"];
+const EQUITIES = ["HOOD", "AAPL", "META", "INTC", "AMZN", "BMNR", "PLTR", "COIN", "SAMSUNG", "STRC", "AMD", "SNDK", "HANMI", "HYUNDAI", "ASML", "CRCL", "TSLA", "NVDA", "GOOGL", "MSTR", "MSFT"];
 
 // ETF/Index
 const ETF_INDEX = ["QQQ", "SPY", "KRCOMP", "URA", "IWM", "MAGS", "BOTZ", "DIA"];
@@ -84,7 +84,7 @@ const ETF_INDEX = ["QQQ", "SPY", "KRCOMP", "URA", "IWM", "MAGS", "BOTZ", "DIA"];
 const FX = ["EURUSD", "USDKRW", "USDJPY", "GBPUSD", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"];
 
 // Commodities (商品)
-const COMMODITIES = ["XAU", "XAG", "WTI", "BRENTOIL", "XPT", "XCU"];
+const COMMODITIES = ["XAU", "XAG", "WTI", "BRENTOIL", "XPT", "XCU", "XPD"];
 
 // ==================== 工具函数 ====================
 

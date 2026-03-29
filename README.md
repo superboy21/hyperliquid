@@ -213,10 +213,10 @@ src/
 - **Other Crypto**: 其他所有加密货币永续合约
 
 ### Lighter
-- **Equities**: HOOD, AAPL, META, INTC, AMZN, BMNR, PLTR, COIN, SAMSUNG, STRC, AMD, SNDK, HANMI, HYUNDAI, ASML
+- **Equities**: HOOD, AAPL, META, INTC, AMZN, BMNR, PLTR, COIN, SAMSUNG, STRC, AMD, SNDK, HANMI, HYUNDAI, ASML, CRCL, TSLA, NVDA, GOOGL, MSTR, MSFT
 - **ETF/Index**: QQQ, SPY, KRCOMP, URA, IWM, MAGS, BOTZ, DIA
 - **FX**: EURUSD, USDKRW, USDJPY, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD
-- **Commodities**: XAU, XAG, WTI, BRENTOIL, XPT, XCU
+- **Commodities**: XAU, XAG, WTI, BRENTOIL, XPT, XCU, XPD
 - **Crypto**: 其他所有加密货币永续合约
 
 ---
@@ -309,6 +309,10 @@ const interval = setInterval(fetchData, 30000); // 30 秒
 ---
 
 ## 📝 更新日志
+
+### v2.6.0 (2026-03-29)
+- ✨ Lighter Equities 新增：CRCL、TSLA、NVDA、GOOGL、MSTR、MSFT
+- ✨ Lighter Commodities 新增：XPD
 
 ### v2.5.0 (2026-03-28)
 - ✨ 新增 Lighter 交易所支持（160+ 永续合约）
