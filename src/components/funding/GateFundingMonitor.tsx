@@ -93,10 +93,12 @@ export default function GateFundingMonitor() {
         const rates = await getAllFundingRates();
         return rates.map(mapToExchangeFundingRate);
       },
-      fetchDetailData: async (symbol: string, interval: ChartInterval): Promise<DetailData> => {
+      fetchDetailData: async (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]): Promise<DetailData> => {
+        const selectedRate = rates.find((r) => r.symbol === symbol);
+        const fundingIntervalSeconds = selectedRate?.fundingInterval || 28800;
         const [candleData, fundingHistory] = await Promise.all([
           getCandleSnapshot(symbol, interval, 30),
-          getFundingHistoryForDays(symbol, 30),
+          getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds),
         ]);
 
         // Map Gate candles to shared type

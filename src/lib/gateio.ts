@@ -203,15 +203,16 @@ export async function getFundingHistory(
  * 获取指定合约的历史资金费率（指定天数）
  * @param coin 合约名称（简化格式，如 "BTC"）
  * @param days 天数
+ * @param fundingIntervalSeconds 结算周期（秒），默认 28800（8 小时）
  */
 export async function getFundingHistoryForDays(
   coin: string,
-  days: number = 30
+  days: number = 30,
+  fundingIntervalSeconds: number = 28800
 ): Promise<FundingHistoryItem[]> {
   const contract = toContractName(coin);
-  // Gate.io API 最多返回 1000 条记录
-  // 假设每 8 小时结算一次，30 天约 90 条记录
-  const limit = Math.min(days * 3, 1000);
+  const settlementsPerDay = 86400 / fundingIntervalSeconds;
+  const limit = Math.min(Math.ceil(days * settlementsPerDay), 1000);
   return getFundingHistory(contract, limit);
 }
 
