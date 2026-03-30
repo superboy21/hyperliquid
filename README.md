@@ -48,21 +48,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  交易所资金费率监控                                               │
-│  [Hyperliquid] [Gate.io]                                        │
+│  [Hyperliquid] [Gate.io] [Binance] [Lighter]                    │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │
-│  │交易对数量│ │正资金费率│ │负资金费率│ │平均年化  │ │ USDT    │   │
-│  │   655   │ │   423   │ │   232   │ │ +12.5%  │ │ Gate.io │   │
+│  │交易对数量│ │正资金费率│ │负资金费率│ │平均年化  │ │ 结算周期 │   │
+│  │   200   │ │   142   │ │    58   │ │ +8.3%   │ │   8h    │   │
 │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘   │
 ├─────────────────────────────────────────────────────────────────┤
-│  [全部] [Crypto] [股票/指数] [商品] [其他]                         │
+│  [全部] [Majors] [Metals] [Stocks] [Other Crypto]               │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────┐ ┌─────────────────────────┐ │
 │  │ 交易对列表                       │ │ K 线 + 资金费率图表      │ │
 │  │ ─────────────────────────────── │ │                         │ │
-│  │ BTC    69,832   -2.40%  +15.2% │ │    📈 [日线] [4h] [1h]   │ │
-│  │ ETH    3,845    -3.15%  +8.7%  │ │                         │ │
-│  │ SOL    178.5    -5.82%  +22.1% │ │                         │ │
+│  │ BTC   69,832   -2.40%  +15.2%  │ │ BTC 近 30天 [日线][4h][1h]│ │
+│  │ ETH    3,845   -3.15%  +8.7%   │ │    📈 K线 + 副图费率      │ │
+│  │ SOL    178.5   -5.82%  +22.1%  │ │                         │ │
 │  │ ...                            │ │                         │ │
 │  └─────────────────────────────────┘ └─────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
@@ -83,11 +83,13 @@
 
 ### 架构特点
 
-- **统一数据标准化层**: 所有交易所数据转换为统一格式 `NormalizedFundingRate`
+- **共享 ExchangeFundingMonitor 组件**: 4 个交易所共用同一 UI 组件（减少 ~47% 代码量）
+- **统一数据标准化层**: 所有交易所数据转换为统一格式 `ExchangeFundingRate`
 - **交易所 Normalizer**: 每个交易所独立的标准化函数，便于扩展
 - **多周期年化计算**: 根据图表周期（1d/4h/1h）自动调整年化系数
 - **历史波动率**: 基于对数收益率计算的年化波动率
 - **资金收益率**: 基于中位数价格和平均费率计算的年化收益率
+- **useMemo 优化**: 所有派生数据使用 `useMemo` 缓存，避免不必要的重算
 
 ---
 
@@ -138,16 +140,17 @@ src/
 │   │   └── page.tsx                    # 资金费率监控主页面
 │   ├── api/
 │   │   ├── gate/                       # Gate.io API 代理
-│   │   ├── binance/                    # Binance API 代理
+│   │   ├── binance/                    # Binance API 代理（含 klines）
 │   │   └── lighter/                    # Lighter API 代理
 │   └── page.tsx                        # 首页
 ├── components/
 │   └── funding/
-│       ├── FundingMonitor.tsx          # Hyperliquid 监控组件
-│       ├── GateFundingMonitor.tsx      # Gate.io 监控组件
-│       ├── BinanceFundingMonitor.tsx   # Binance 监控组件
-│       ├── LighterFundingMonitor.tsx   # Lighter 监控组件
-│       └── *Chart.tsx                  # 图表组件
+│       ├── ExchangeFundingMonitor.tsx  # 共享 UI 组件（表格、统计、筛选、排序）
+│       ├── FundingMonitor.tsx          # Hyperliquid 数据获取 + 配置
+│       ├── GateFundingMonitor.tsx      # Gate.io 数据获取 + 配置
+│       ├── BinanceFundingMonitor.tsx   # Binance 数据获取 + 配置
+│       ├── LighterFundingMonitor.tsx   # Lighter 数据获取 + 配置
+│       └── *Chart.tsx                  # 各交易所图表组件
 ├── lib/
 │   ├── types.ts                        # 统一数据接口定义
 │   ├── normalizers/                    # 数据标准化层
@@ -157,6 +160,7 @@ src/
 │   │   └── binance.ts                  # Binance 标准化
 │   ├── hyperliquid.ts                  # Hyperliquid API 封装
 │   ├── gateio.ts                       # Gate.io API 封装
+│   ├── lighter.ts                      # Lighter 格式化函数
 │   └── utils/                          # 工具函数
 │       └── funding.ts                  # 资金费率计算工具
 └── ...
@@ -190,6 +194,18 @@ src/
 |------|----------|
 | 永续合约 (USDT) | ✅ |
 | 200+ 交易对 | ✅ |
+| 资产类别筛选 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
+| 买卖价差显示 | ✅ |
+| 持仓价值（异步加载） | ✅ |
+
+### Lighter
+| 功能 | 支持状态 |
+|------|----------|
+| 永续合约 | ✅ |
+| 160+ 交易对 | ✅ |
 | 资产类别筛选 | ✅ |
 | 实时资金费率 | ✅ |
 | 历史数据 | ✅ |
@@ -233,10 +249,10 @@ NEXT_PUBLIC_GATE_API=https://api.gate.io/api/v4
 
 ### 数据刷新间隔
 
-默认每 30 秒自动刷新数据。可在 `FundingMonitor.tsx` 中修改：
+默认每 60 秒自动刷新数据。可在 `ExchangeFundingMonitor.tsx` 中修改：
 
 ```typescript
-const interval = setInterval(fetchData, 30000); // 30 秒
+const interval = setInterval(handleFetchRates, 60000); // 60 秒
 ```
 
 ---
@@ -310,9 +326,28 @@ const interval = setInterval(fetchData, 30000); // 30 秒
 
 ## 📝 更新日志
 
+### v2026.03.31 (2026-03-31)
+- 🐛 Stat Card "当前：" 改为 "周期："，显示正确的结算周期费率
+- 🐛 周期费率计算修复：从年化值反推，公式 `annualizedPct × 结算周期小时 ÷ 8760`
+- 🐛 Lighter 资金费率统计修复：stat card 与表格年化公式统一，消除 100x / 8x 偏差
+
 ### v2026.03.30 (2026-03-30)
 - ✨ Binance Stocks 新增：PAYP（PayPal）
 - ✨ Gate.io 股票/指数 新增：PAYP、GVZ（Gold Volatility Index）、EWY（iShares MSCI South Korea ETF）
+- ♻️ **架构重构**: 提取共享 `ExchangeFundingMonitor` 组件，4 个交易所共用同一 UI（减少 ~47% 代码量，净减 1683 行）
+- ♻️ Binance / Lighter 集成 normalizer 层，删除本地重复函数
+- ⚡ 所有 Monitor 派生数据加 `useMemo`（`positiveCount`、`negativeCount`、`weightedAvgRate` 等）
+- 🐛 Lighter 页面加载优化：3 个 API 请求全部并行（原为 2 并行 + 1 串行）
+- 🐛 Lighter API 代理增加 15 秒超时（防止上游挂起阻塞）
+- 🐛 Binance 持仓价值修复：OI 数据并入 fetchRates 主流程，确保共享组件拿到真实 OI
+- 🐛 Lighter 资金费率年化计算修复：stat card 与表格使用不同公式，避免 100x / 8x 偏差
+- 🐛 Lighter 买卖价差修复：fetchDetailData 新增 orderBook 请求获取 bid/ask
+- 🎨 字号优化：表格标题、交易对名、图表标题、周期按钮统一缩小
+- 🎨 图表标题与周期按钮改为同一行显示
+- 🗑️ 删除 `/gate-funding` 孤立页面
+- 🗑️ 删除 `GATE_API_URLS` 死代码
+- 🗑️ 去重 Gate.io `ASSET_CATEGORIES`（减少 ~70% 内存占用）
+- 🗑️ 移除未使用的 `Geist_Mono` 字体（节省 ~50KB）
 
 ### v2.6.0 (2026-03-29)
 - ✨ Lighter Equities 新增：CRCL、TSLA、NVDA、GOOGL、MSTR、MSFT

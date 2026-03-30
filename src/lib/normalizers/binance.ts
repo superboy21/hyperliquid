@@ -336,6 +336,28 @@ export function getAverageFundingRatesByInterval(
     }));
 }
 
+export interface FundingStats {
+  highest: number;
+  lowest: number;
+  average: number;
+}
+
+/**
+ * 计算资金费率统计（最高、最低、平均）
+ */
+export function getFundingStats(items: IntervalFundingRateItem[]): FundingStats | null {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const rates = items.map((item) => item.averageFundingRate);
+  const highest = Math.max(...rates);
+  const lowest = Math.min(...rates);
+  const average = rates.reduce((sum, r) => sum + r, 0) / rates.length;
+
+  return { highest, lowest, average };
+}
+
 // ==================== 格式化函数 ====================
 
 /**
@@ -356,9 +378,12 @@ export function formatFundingRate(rate: string | number): string {
 
 /**
  * 格式化年化资金费率
+ * @param fundingIntervalSeconds 结算周期（秒），默认 28800（8小时）
  */
-export function formatAnnualizedRate(rate: string | number): string {
-  const annualized = toAnnualizedRate(rate);
+export function formatAnnualizedRate(rate: string | number, fundingIntervalSeconds: number = 28800): string {
+  const rateNumber = typeof rate === "string" ? parseFloat(rate) : rate;
+  const settlementsPerDay = (24 * 3600) / fundingIntervalSeconds;
+  const annualized = rateNumber * settlementsPerDay * 365 * 100;
   const absRate = Math.abs(annualized);
 
   if (absRate >= 100) {

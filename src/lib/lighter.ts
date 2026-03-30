@@ -88,6 +88,12 @@ export interface IntervalFundingRateItem {
   sampleCount: number;
 }
 
+export interface FundingStats {
+  highest: number;
+  lowest: number;
+  average: number;
+}
+
 export type ChartInterval = "1d" | "4h" | "1h";
 
 // ==================== 常量 ====================
@@ -383,6 +389,22 @@ export function getAverageFundingRatesByInterval(
     }));
 }
 
+/**
+ * 计算资金费率统计（最高、最低、平均）
+ */
+export function getFundingStats(items: IntervalFundingRateItem[]): FundingStats | null {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const rates = items.map((item) => item.averageFundingRate);
+  const highest = Math.max(...rates);
+  const lowest = Math.min(...rates);
+  const average = rates.reduce((sum, r) => sum + r, 0) / rates.length;
+
+  return { highest, lowest, average };
+}
+
 // ==================== 格式化函数 ====================
 
 /**
@@ -395,17 +417,24 @@ export function toAnnualizedRate(rate: string | number): number {
 
 /**
  * 格式化资金费率为百分比字符串
+ * 注意：API 返回的是 8 小时费率，需要除以 8 转换为每小时费率
  */
 export function formatFundingRate(rate: string | number): string {
   const rateNumber = typeof rate === "string" ? parseFloat(rate) : rate;
-  return `${(rateNumber * 100).toFixed(4)}%`;
+  // 将 8 小时费率转换为每小时费率（除以 8）
+  const hourlyRate = rateNumber / 8;
+  return `${(hourlyRate * 100).toFixed(4)}%`;
 }
 
 /**
  * 格式化年化资金费率
+ * 注意：API 返回的是 8 小时费率，需要除以 8 转换为每小时费率后再年化
  */
 export function formatAnnualizedRate(rate: string | number): string {
-  const annualized = toAnnualizedRate(rate);
+  const rateNumber = typeof rate === "string" ? parseFloat(rate) : rate;
+  // 将 8 小时费率转换为每小时费率（除以 8）
+  const hourlyRate = rateNumber / 8;
+  const annualized = hourlyRate * 24 * 365 * 100; // 每小时结算，每天24次
   const absRate = Math.abs(annualized);
 
   if (absRate >= 100) {
