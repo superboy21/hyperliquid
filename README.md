@@ -225,6 +225,7 @@ src/
 ### Binance
 - **Majors**: BTC, ETH, BNB, SOL, HYPE, LINK, XRP, TRX, ADA, WLFI, AAVE, SKY, DOGE, BCH
 - **Metals**: XAU, XAG, XPT, XPD, COPPER, PAXG, XAUT
+- **Energy**: CL (WTI 原油), BZ (布伦特原油), NATGAS (天然气)
 - **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT, PAYP 等
 - **Other Crypto**: 其他所有加密货币永续合约
 
@@ -326,8 +327,11 @@ const interval = setInterval(handleFetchRates, 60000); // 60 秒
 
 ## 📝 更新日志
 
-### v2026.03.31 (2026-03-31)
-- 🐛 **Gate.io 历史资金费率修复**：4h/2h/1h 结算周期的合约无法获取完整 30 天数据（原硬编码 `天数 × 3`，假设所有合约 8 小时结算）。修复后根据实际结算周期动态计算 `limit`，4h 合约可获取 180 条、1h 合约可获取 720 条，均在 API 1000 条限制内
+### v2026.04.01 (2026-04-01)
+- ✨ Hyperliquid HIP-3 新增：SP500（S&P 500 指数）、CRWV（CoreWeave）、DKNG（DraftKings）、HIMS（Hims & Hers）、COST（Costco）、LLY（Eli Lilly）
+- 🗑️ Hyperliquid HIP-3 移除：SPY、QQQ、IWM、GLD、SLV、TLT、UVXY（与规格表对齐）
+- ✨ Binance 新增 Energy 分类：CL（WTI 原油）、BZ（布伦特原油）、NATGAS（天然气）
+- 🐛 Gate.io 历史资金费率修复：4h/2h/1h 结算周期的合约无法获取完整 30 天数据（原硬编码 `天数 × 3`，假设所有合约 8 小时结算）。修复后根据实际结算周期动态计算 `limit`
 - 🐛 Stat Card "当前：" 改为 "周期："，显示正确的结算周期费率
 - 🐛 周期费率计算修复：从年化值反推，公式 `annualizedPct × 结算周期小时 ÷ 8760`
 - 🐛 Lighter 资金费率统计修复：stat card 与表格年化公式统一，消除 100x / 8x 偏差

@@ -85,13 +85,6 @@ const KNOWN_XYZ_HIP3_ASSETS = [
   "xyz:MSFT",
   "xyz:META",
   "xyz:NFLX",
-  "xyz:SPY",
-  "xyz:QQQ",
-  "xyz:IWM",
-  "xyz:GLD",
-  "xyz:SLV",
-  "xyz:TLT",
-  "xyz:UVXY",
   "xyz:XYZ100",
   "xyz:PLATINUM",
   "xyz:COPPER",
@@ -118,6 +111,12 @@ const KNOWN_XYZ_HIP3_ASSETS = [
   "xyz:EWY",
   "xyz:EWJ",
   "xyz:BABA",
+  "xyz:SP500",
+  "xyz:CRWV",
+  "xyz:DKNG",
+  "xyz:HIMS",
+  "xyz:COST",
+  "xyz:LLY",
 ];
 
 const KNOWN_VNTL_HIP3_ASSETS = [

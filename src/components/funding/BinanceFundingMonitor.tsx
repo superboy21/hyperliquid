@@ -93,6 +93,7 @@ const DELISTED_SYMBOLS = new Set([
 
 const MAJORS = ["BTC", "ETH", "BNB", "SOL", "HYPE", "LINK", "XRP", "TRX", "ADA", "WLFI", "AAVE", "SKY", "DOGE", "BCH"];
 const METALS = ["XAU", "XAG", "XPT", "XPD", "COPPER", "PAXG", "XAUT"];
+const ENERGY = ["CL", "BZ", "NATGAS"];
 const STOCKS = [
   "TSLA", "MSTR", "AMZN", "AAPL", "NVDA", "EWY", "EWJ", "QQQ", "SPY", "META", "GOOGL", "MSFT", "NFLX", "AMD", "INTC", "COIN",
   "BABA", "TSM", "JPM", "V", "MA", "DIS", "PYPL", "UBER", "ABNB", "SOFI", "PLTR", "HOOD", "RIVN", "LCID", "NIO",
@@ -107,6 +108,7 @@ function getAssetCategory(symbol: string): string {
   const base = symbol.replace("USDT", "").toUpperCase();
   if (MAJORS.includes(base)) return "Majors";
   if (METALS.includes(base)) return "Metals";
+  if (ENERGY.includes(base)) return "Energy";
   if (STOCKS.includes(base)) return "Stocks";
   return "Other Crypto";
 }
@@ -194,6 +196,7 @@ const categoryConfig: Record<string, CategoryConfig> = {
   all: { label: "全部资产", borderColor: "border-yellow-600", bgColor: "bg-yellow-600", dotColor: "bg-yellow-400" },
   Majors: { label: "Majors", borderColor: "border-blue-600", bgColor: "bg-blue-600", dotColor: "bg-blue-400" },
   Metals: { label: "Metals", borderColor: "border-yellow-500", bgColor: "bg-yellow-500", dotColor: "bg-yellow-300" },
+  Energy: { label: "Energy", borderColor: "border-orange-500", bgColor: "bg-orange-500", dotColor: "bg-orange-400" },
   Stocks: { label: "Stocks", borderColor: "border-green-600", bgColor: "bg-green-600", dotColor: "bg-green-400" },
   "Other Crypto": { label: "Other Crypto", borderColor: "border-gray-600", bgColor: "bg-gray-600", dotColor: "bg-gray-400" },
 };
