@@ -138,21 +138,26 @@ src/
 ├── app/
 │   ├── funding/
 │   │   └── page.tsx                    # 资金费率监控主页面
+│   ├── search/
+│   │   └── page.tsx                    # 跨交易所搜索页面
 │   ├── api/
 │   │   ├── gate/                       # Gate.io API 代理
 │   │   ├── binance/                    # Binance API 代理（含 klines）
 │   │   └── lighter/                    # Lighter API 代理
 │   └── page.tsx                        # 首页
 ├── components/
-│   └── funding/
-│       ├── ExchangeFundingMonitor.tsx  # 共享 UI 组件（表格、统计、筛选、排序）
-│       ├── FundingMonitor.tsx          # Hyperliquid 数据获取 + 配置
-│       ├── GateFundingMonitor.tsx      # Gate.io 数据获取 + 配置
-│       ├── BinanceFundingMonitor.tsx   # Binance 数据获取 + 配置
-│       ├── LighterFundingMonitor.tsx   # Lighter 数据获取 + 配置
-│       └── *Chart.tsx                  # 各交易所图表组件
+│   ├── funding/
+│   │   ├── ExchangeFundingMonitor.tsx  # 共享 UI 组件（表格、统计、筛选、排序）
+│   │   ├── FundingMonitor.tsx          # Hyperliquid 数据获取 + 配置
+│   │   ├── GateFundingMonitor.tsx      # Gate.io 数据获取 + 配置
+│   │   ├── BinanceFundingMonitor.tsx   # Binance 数据获取 + 配置
+│   │   ├── LighterFundingMonitor.tsx   # Lighter 数据获取 + 配置
+│   │   └── *Chart.tsx                  # 各交易所图表组件
+│   └── search/
+│       └── CrossExchangeSearch.tsx     # 跨交易所搜索核心组件
 ├── lib/
 │   ├── types.ts                        # 统一数据接口定义
+│   ├── search.ts                       # 跨交易所搜索工具函数
 │   ├── normalizers/                    # 数据标准化层
 │   │   ├── index.ts                    # 统一导出和工具函数
 │   │   ├── hyperliquid.ts              # Hyperliquid 标准化
@@ -326,6 +331,24 @@ const interval = setInterval(handleFetchRates, 60000); // 60 秒
 ---
 
 ## 📝 更新日志
+
+### v2026.04.06 (2026-04-06)
+- ✨ **跨交易所搜索页**: 输入关键字搜索 Hyperliquid、Gate.io、Binance、Lighter 四个交易所的交易对
+- ✨ 9 个核心指标对比：价格、24h涨跌、预测费率、24h成交额、持仓价值、历史波动率(30周期日线)、当前买卖价差、平均资金费率(7天)、平均资金费率(30天)
+- ✨ 渐进式加载：字段 1-5 立即可见，字段 6-9 后台渐进式加载（并发 4 个）
+- ✨ 搜索结果默认按持仓价值降序排序
+- ✨ 搜索词变化时自动取消进行中的请求
+- ✨ 表格列点击排序
+- ✨ 搜索页与 funding 页互相入口按钮
+- 🐛 搜索页修复：各交易所同名交易对缓存互相覆盖问题
+- 🐛 搜索页修复：Lighter 预测费率年化公式（/8 处理）
+- 🐛 搜索页修复：Lighter 平均费率年化公式（与交易所页一致）
+- 🐛 搜索页修复：Lighter 买卖价差通过 orderBookOrders 获取
+- 🐛 搜索页修复：Binance 持仓价值通过 openInterest API 获取
+- 🐛 搜索页修复：平均费率计算先过滤 30 天数据
+- ♻️ 重构 Exchange 切换按钮为配置数组（DRY）
+- ♻️ 新增 `src/lib/search.ts` 跨交易所搜索工具函数
+- ♻️ 新增 `src/components/search/CrossExchangeSearch.tsx` 核心搜索组件
 
 ### v2026.04.01 (2026-04-01)
 - ✨ Hyperliquid HIP-3 新增：SP500（S&P 500 指数）、CRWV（CoreWeave）、DKNG（DraftKings）、HIMS（Hims & Hers）、COST（Costco）、LLY（Eli Lilly）
