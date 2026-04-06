@@ -9,8 +9,10 @@ import ExchangeFundingMonitor, {
   type DetailData,
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
+  type HydrationPolicy,
   type IntervalFundingRateItem,
 } from "@/components/funding/ExchangeFundingMonitor";
+import { getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
 
 // ==================== Lighter-specific Types ====================
 
@@ -143,7 +145,7 @@ function mapToExchangeFundingRate(rate: LighterFundingRate): ExchangeFundingRate
   return {
     symbol: rate.symbol,
     fundingRate: parseFloat(rate.fundingRate),
-    lastSettlementRate: parseFloat(rate.fundingRate),
+    lastSettlementRate: Number.NaN,
     markPrice: parseFloat(rate.markPrice),
     lastPrice: parseFloat(rate.lastPrice || rate.markPrice),
     change24h: parseFloat(rate.priceChangePercent || "0"),
@@ -255,6 +257,72 @@ export default function LighterFundingMonitor() {
     setFundingRates(rates);
     return rates.map(mapToExchangeFundingRate);
   }, []);
+
+  // Hydrate rates with latest settled funding from history (conservative batching)
+  const hydrateRates = useCallback(
+    async (
+      rates: ExchangeFundingRate[],
+      updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
+      targetSymbols: string[],
+    ): Promise<void> => {
+      const batchSize = 3;
+      const rateMap = new Map(rates.map((rate) => [rate.symbol, rate]));
+
+      // Build marketId map for quick lookup - need to get marketId from fundingRates state
+      const symbolToMarketIdMap = new Map<string, number>();
+      for (const rate of fundingRates) {
+        symbolToMarketIdMap.set(rate.symbol, rate.marketId);
+      }
+
+      const targetRates = targetSymbols
+        .map((symbol) => {
+          const rate = rateMap.get(symbol);
+          if (!rate) return null;
+          const marketId = symbolToMarketIdMap.get(symbol);
+          if (marketId === undefined) return null;
+          return { rate, marketId };
+        })
+        .filter(
+          (item): item is { rate: ExchangeFundingRate; marketId: number } =>
+            item !== null && !Number.isFinite(item.rate.lastSettlementRate),
+        );
+
+      for (let i = 0; i < targetRates.length; i += batchSize) {
+        const batch = targetRates.slice(i, Math.min(i + batchSize, targetRates.length));
+        const updates = await Promise.all(
+          batch.map(async ({ rate, marketId }) => {
+            const lastSettlementRate = await getLatestSettledFundingRate(marketId);
+            if (!Number.isFinite(lastSettlementRate)) {
+              return null;
+            }
+
+            return {
+              symbol: rate.symbol,
+              lastSettlementRate,
+            };
+          }),
+        );
+
+        const validUpdates = updates.filter(
+          (item): item is { symbol: string; lastSettlementRate: number } => item !== null,
+        );
+
+        if (validUpdates.length > 0) {
+          updateRates((prev) =>
+            prev.map((item) => {
+              const update = validUpdates.find((entry) => entry.symbol === item.symbol);
+              return update ? { ...item, lastSettlementRate: update.lastSettlementRate } : item;
+            }),
+          );
+        }
+
+        if (i + batchSize < targetRates.length) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+    },
+    [fundingRates],
+  );
 
   // Fetch detail data
   const fetchDetailData = useCallback(
@@ -389,6 +457,19 @@ export default function LighterFundingMonitor() {
       ChartComponent: LighterChartWrapper,
       searchPlaceholder: "搜索交易对，例如 BTC、ETH",
       fetchRates,
+      hydrateRates,
+      hydrationPolicy: {
+        initialCount: 10,
+        enableScrollHydration: false,
+        resetOnFilterChange: true,
+        onRowClickHydrate: (clickedSymbol: string, filteredRates: ExchangeFundingRate[]) => {
+          const idx = filteredRates.findIndex((r) => r.symbol === clickedSymbol);
+          if (idx === -1) return [];
+          const start = Math.max(0, idx - 5);
+          const end = Math.min(filteredRates.length, idx + 6);
+          return filteredRates.slice(start, end).map((r) => r.symbol);
+        },
+      } satisfies HydrationPolicy,
       fetchDetailData,
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
@@ -409,7 +490,7 @@ export default function LighterFundingMonitor() {
         </div>
       ),
     }),
-    [fetchRates, fetchDetailData],
+    [fetchRates, fetchDetailData, hydrateRates],
   );
 
   return <ExchangeFundingMonitor config={config} />;

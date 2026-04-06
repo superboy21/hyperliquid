@@ -262,17 +262,89 @@ export async function getFundingHistory(
     }
 
     const data = await response.json();
-    if (!Array.isArray(data)) {
+    const fundingArray = data?.fundings ?? data;
+    if (!Array.isArray(fundingArray)) {
       return [];
     }
 
-    return data.map((item: LighterFundingItem) => ({
-      time: item.timestamp * 1000,  // 转换为毫秒
-      fundingRate: item.rate || item.value || "0",
-    }));
+    return fundingArray.map((item: LighterFundingItem) => {
+      const rate = parseFloat(item.rate || item.value || "0");
+      const direction = item.direction || "long";
+      const signedRate = direction === "short" ? -rate : rate;
+
+      return {
+        time: item.timestamp * 1000,  // 转换为毫秒
+        fundingRate: signedRate.toString(),
+      };
+    });
   } catch (error) {
     console.error(`Error fetching funding history for market ${marketId}:`, error);
     return [];
+  }
+}
+
+/**
+ * 获取指定市场最近一次已结算资金费率
+ * @param marketId 市场 ID
+ * @param lookbackHours 回看小时数，默认 24 小时
+ * @returns 最近一次已结算费率（已处理正负方向），如果无法获取则返回 NaN
+ */
+export async function getLatestSettledFundingRate(
+  marketId: number,
+  lookbackHours: number = 24
+): Promise<number> {
+  // 限制最大回看时间，避免请求过多数据
+  const boundedHours = Math.min(Math.max(lookbackHours, 1), 168); // 1-168 小时
+  const countBack = boundedHours;
+
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const startTime = now - (boundedHours * LIGHTER_FUNDING_INTERVAL_SECONDS);
+
+    const response = await fetch(
+      `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${countBack}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      return Number.NaN;
+    }
+
+    const data = await response.json();
+    const fundingArray = data?.fundings ?? data;
+    if (!Array.isArray(fundingArray) || fundingArray.length === 0) {
+      return Number.NaN;
+    }
+
+    // 按时间戳降序排序，取最新的一条
+    const sortedData = [...fundingArray].sort((a, b) => b.timestamp - a.timestamp);
+    const latestItem = sortedData[0];
+
+    // 解析费率并处理方向（与 LighterFundingMonitor 逻辑一致）
+    const rate = parseFloat(latestItem.rate || latestItem.value || "0");
+    const direction = latestItem.direction || "long";
+    const signedRate = direction === "short" ? -rate : rate;
+
+    // Lighter funding history returns the settled 1h rate in percentage points,
+    // while the shared table formatting path expects the same normalized scale
+    // as the current funding-rate feed used elsewhere in this app.
+    // Convert to that internal scale so the latest settlement column renders
+    // with the same formula as the predicted-funding column.
+    const normalizedRate = signedRate / 12.5;
+
+    // 检查是否为有效数值
+    if (Number.isNaN(rate) || !Number.isFinite(normalizedRate)) {
+      return Number.NaN;
+    }
+
+    return normalizedRate;
+  } catch (error) {
+    console.error(`Error fetching latest settled funding rate for market ${marketId}:`, error);
+    return Number.NaN;
   }
 }
 

@@ -212,7 +212,7 @@ export default function BinanceFundingCandlesChart({
             const hourlyRate = fundingData.rawFundingRate / (fundingIntervalSeconds / 3600);
             lines.push(`${fundingNameMap[interval]}: ${formatFundingRate(fundingData.rawFundingRate)}`);
             lines.push(`平均小时费率: ${formatFundingRate(hourlyRate)}`);
-            lines.push(`折算年化预测费率: ${formatAnnualizedRate(fundingData.rawFundingRate, fundingIntervalSeconds)}`);
+            lines.push(`折算年化费率: ${formatAnnualizedRate(fundingData.rawFundingRate, fundingIntervalSeconds)}`);
           }
 
           return lines.join("<br/>");

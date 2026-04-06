@@ -96,6 +96,7 @@ const DELISTED_SYMBOLS = new Set([
   "SNTUSDT", "STMXUSDT", "STPTUSDT", "STRAXUSDT", "SWELLUSDT", "SXPUSDT", "TANSSIUSDT",
   "TOKENUSDT", "TROYUSDT", "UNFIUSDT", "UXLINKUSDT", "VFYUSDT", "VIDTUSDT", "VOXELUSDT",
   "WAVESUSDT", "XCNUSDT", "XEMUSDT", "YALAUSDT", "ZRCUSDT",
+  "A2ZUSDT", "FORTHUSDT", "HOOKUSDT", "LRCUSDT", "NTRNUSDT", "RDNTUSDT",
 ]);
 
 const MAJORS = ["BTC", "ETH", "BNB", "SOL", "HYPE", "LINK", "XRP", "TRX", "ADA", "WLFI", "AAVE", "SKY", "DOGE", "BCH"];
@@ -296,6 +297,47 @@ export default function BinanceFundingMonitor() {
     );
   }, []);
 
+  const hydrateRates = useCallback(async (
+    rates: ExchangeFundingRate[],
+    updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
+    targetSymbols: string[],
+  ): Promise<void> => {
+    const rateMap = new Map(rates.map((rate) => [rate.symbol, rate]));
+    const missingRates = targetSymbols
+      .map((symbol) => rateMap.get(symbol))
+      .filter((rate): rate is ExchangeFundingRate => Boolean(rate))
+      .filter((rate) => !Number.isFinite(rate.lastSettlementRate));
+
+    for (const rate of missingRates) {
+      try {
+        const response = await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${rate.symbol}&limit=1`);
+        if (!response.ok) {
+          continue;
+        }
+
+        const data: BinanceFundingHistoryResponseItem[] = await response.json();
+        if (!Array.isArray(data) || data.length === 0) {
+          continue;
+        }
+
+        const latestSettledRate = Number.parseFloat(data[0]?.fundingRate ?? "");
+        if (!Number.isFinite(latestSettledRate)) {
+          continue;
+        }
+
+        updateRates((prev) =>
+          prev.map((item) =>
+            item.symbol === rate.symbol ? { ...item, lastSettlementRate: latestSettledRate } : item,
+          ),
+        );
+      } catch {
+        // Ignore individual fallback failures.
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }, []);
+
   // Fetch rates with Binance-specific logic
   const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
     const tickersRes = await fetch("https://fapi.binance.com/fapi/v1/ticker/24hr");
@@ -444,6 +486,12 @@ export default function BinanceFundingMonitor() {
       ChartComponent: BinanceChartWrapper,
       searchPlaceholder: "搜索交易对，例如 BTC、ETH",
       fetchRates,
+      hydrateRates,
+      hydrationPolicy: {
+        initialCount: 50,
+        enableScrollHydration: true,
+        resetOnFilterChange: true,
+      },
       fetchDetailData,
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
@@ -465,7 +513,7 @@ export default function BinanceFundingMonitor() {
         </div>
       ),
     }),
-    [fetchRates, fetchDetailData],
+    [fetchRates, fetchDetailData, hydrateRates],
   );
 
   return <ExchangeFundingMonitor config={config} />;

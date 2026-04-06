@@ -27,6 +27,8 @@ type SortField =
   | "notionalValue"
   | "volatility"
   | "spread"
+  | "latestSettlement"
+  | "avg1d"
   | "avg7d"
   | "avg30d";
 
@@ -38,6 +40,8 @@ interface SortConfig {
 interface DetailCache {
   historicalVolatility: number | null;
   bidAskSpread: number | null;
+  latestSettlementRate: number | null;
+  avgFundingRate1d: number | null;
   avgFundingRate7d: number | null;
   avgFundingRate30d: number | null;
 }
@@ -80,6 +84,28 @@ function formatSearchAverageAnnualizedRate(rate: number, fundingInterval: number
   return formatAnnualizedRate(rate, fundingInterval);
 }
 
+function formatSearchSettlementRate(rate: number, fundingInterval: number, exchange: string): string {
+  if (exchange === "Lighter") {
+    // Lighter settlement rate: /8 adjustment like predicted rate
+    const annualizedPct = (rate / 8) * 24 * 365 * 100;
+    const absRate = Math.abs(annualizedPct);
+    if (absRate >= 100) return `${annualizedPct > 0 ? "+" : ""}${annualizedPct.toFixed(1)}%`;
+    if (absRate >= 10) return `${annualizedPct > 0 ? "+" : ""}${annualizedPct.toFixed(2)}%`;
+    return `${annualizedPct > 0 ? "+" : ""}${annualizedPct.toFixed(3)}%`;
+  }
+
+  return formatAnnualizedRate(rate, fundingInterval);
+}
+
+function formatSearchSettlementPeriodRate(rate: number, exchange: string): string {
+  if (exchange === "Lighter") {
+    const hourlyRate = rate / 8;
+    return `${(hourlyRate * 100).toFixed(4)}%`;
+  }
+
+  return formatFundingRate(rate);
+}
+
 // ==================== Utility ====================
 
 function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field: SortField): number | string {
@@ -102,6 +128,10 @@ function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field
       return rate.detail?.historicalVolatility ?? -1;
     case "spread":
       return rate.detail?.bidAskSpread ?? -1;
+    case "latestSettlement":
+      return rate.detail?.latestSettlementRate ?? -999;
+    case "avg1d":
+      return rate.detail?.avgFundingRate1d ?? -999;
     case "avg7d":
       return rate.detail?.avgFundingRate7d ?? -999;
     case "avg30d":
@@ -207,6 +237,8 @@ export default function CrossExchangeSearch() {
             next.set(key, {
               historicalVolatility: detail.historicalVolatility,
               bidAskSpread: detail.bidAskSpread,
+              latestSettlementRate: detail.lastSettlementRate,
+              avgFundingRate1d: detail.avgFundingRate1d,
               avgFundingRate7d: detail.avgFundingRate7d,
               avgFundingRate30d: detail.avgFundingRate30d,
             });
@@ -349,104 +381,122 @@ export default function CrossExchangeSearch() {
 
       {/* Results Table */}
       <div className="overflow-x-auto rounded-lg border border-gray-700 bg-gray-800">
-        <table className="w-full min-w-[1200px]">
+        <table className="w-full min-w-[1360px] xl:min-w-0">
           <thead>
             <tr className="border-b border-gray-700">
               <th
-                className="cursor-pointer px-3 py-3 text-left text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-left text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("exchange")}
               >
-                <span className="flex items-center">
+                <span className="flex items-center whitespace-nowrap">
                   交易所
                   <SortIcon field="exchange" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-left text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-left text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("symbol")}
               >
-                <span className="flex items-center">
+                <span className="flex items-center whitespace-nowrap">
                   交易对
                   <SortIcon field="symbol" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("price")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   价格
                   <SortIcon field="price" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("change24h")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   24h涨跌
                   <SortIcon field="change24h" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("fundingRate")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   预测费率
                   <SortIcon field="fundingRate" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("volume")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   24h成交额
                   <SortIcon field="volume" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("notionalValue")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   持仓价值
                   <SortIcon field="notionalValue" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("volatility")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   历史波动率
                   <SortIcon field="volatility" />
                 </span>
               </th>
-              <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                <th
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("spread")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   买卖价差
                   <SortIcon field="spread" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
+                onClick={() => handleSort("latestSettlement")}
+              >
+                <span className="flex items-center justify-end whitespace-nowrap">
+                  最新结算费率
+                  <SortIcon field="latestSettlement" />
+                </span>
+              </th>
+              <th
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
+                onClick={() => handleSort("avg1d")}
+              >
+                <span className="flex items-center justify-end whitespace-nowrap">
+                  平均费率（1天）
+                  <SortIcon field="avg1d" />
+                </span>
+              </th>
+              <th
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("avg7d")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   平均费率(7天)
                   <SortIcon field="avg7d" />
                 </span>
               </th>
               <th
-                className="cursor-pointer px-3 py-3 text-right text-xs font-medium text-gray-400 hover:text-gray-200"
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("avg30d")}
               >
-                <span className="flex items-center justify-end">
+                <span className="flex items-center justify-end whitespace-nowrap">
                   平均费率(30天)
                   <SortIcon field="avg30d" />
                 </span>
@@ -463,38 +513,38 @@ export default function CrossExchangeSearch() {
               return (
                 <tr key={`${rate.exchange}-${rate.symbol}`} className="transition-colors hover:bg-gray-700/50">
                   {/* Exchange */}
-                  <td className="px-3 py-2.5">
-                    <span className="flex items-center gap-1.5">
+                  <td className="px-2 py-2 xl:px-2.5">
+                    <span className="flex items-center gap-1.5 whitespace-nowrap">
                       <span className={`h-2.5 w-2.5 rounded-full ${dotColor}`} />
                       <span className="text-xs font-medium text-gray-300">{rate.exchange}</span>
                     </span>
                   </td>
                   {/* Symbol */}
-                  <td className="px-3 py-2.5">
-                    <span className="text-xs font-medium text-white">{rate.symbol}</span>
+                  <td className="px-2 py-2 xl:px-2.5">
+                      <span className="whitespace-nowrap text-xs font-medium text-white">{rate.symbol}</span>
                   </td>
                   {/* Price */}
-                  <td className="px-3 py-2.5 text-right">
-                    <span className="font-mono text-xs text-gray-300">{formatPrice(rate.lastPrice)}</span>
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                      <span className="whitespace-nowrap font-mono text-xs text-gray-300">{formatPrice(rate.lastPrice)}</span>
                   </td>
                   {/* 24h Change */}
-                  <td className="px-3 py-2.5 text-right">
-                    <span
-                      className={`font-mono text-xs ${
-                        rate.change24h > 0
-                          ? "text-green-400"
-                          : rate.change24h < 0
-                            ? "text-red-400"
-                            : "text-gray-400"
-                      }`}
-                    >
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                      <span
+                        className={`whitespace-nowrap font-mono text-xs ${
+                          rate.change24h > 0
+                            ? "text-green-400"
+                            : rate.change24h < 0
+                              ? "text-red-400"
+                              : "text-gray-400"
+                        }`}
+                      >
                       {rate.change24h >= 0 ? "+" : ""}
                       {rate.change24h.toFixed(2)}%
                     </span>
                   </td>
                   {/* Funding Rate */}
-                  <td className="px-3 py-2.5 text-right">
-                    <div>
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                      <div className="whitespace-nowrap">
                       <span
                         className={`font-mono text-xs font-medium ${
                           rate.fundingRate > 0
@@ -512,19 +562,19 @@ export default function CrossExchangeSearch() {
                     </div>
                   </td>
                   {/* Volume */}
-                  <td className="px-3 py-2.5 text-right">
-                    <span className="font-mono text-xs text-gray-400">{formatVolume(rate.quoteVolume)}</span>
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                      <span className="whitespace-nowrap font-mono text-xs text-gray-400">{formatVolume(rate.quoteVolume)}</span>
                   </td>
                   {/* Notional Value */}
-                  <td className="px-3 py-2.5 text-right">
-                    <span className="font-mono text-xs text-gray-400">{formatVolume(rate.notionalValue)}</span>
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                      <span className="whitespace-nowrap font-mono text-xs text-gray-400">{formatVolume(rate.notionalValue)}</span>
                   </td>
                   {/* Volatility */}
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="px-2 py-2 text-right xl:px-2.5">
                     {isLoading ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                    ) : detail?.historicalVolatility != null ? (
-                      <span className="font-mono text-xs text-orange-400">
+                      ) : detail?.historicalVolatility != null ? (
+                      <span className="whitespace-nowrap font-mono text-xs text-orange-400">
                         {detail.historicalVolatility.toFixed(2)}%
                       </span>
                     ) : (
@@ -532,24 +582,69 @@ export default function CrossExchangeSearch() {
                     )}
                   </td>
                   {/* Bid-Ask Spread */}
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="px-2 py-2 text-right xl:px-2.5">
                     {isLoading ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                    ) : detail?.bidAskSpread != null ? (
-                      <span className="font-mono text-xs text-gray-300">
+                      ) : detail?.bidAskSpread != null ? (
+                      <span className="whitespace-nowrap font-mono text-xs text-gray-300">
                         {detail.bidAskSpread.toFixed(4)}%
                       </span>
                     ) : (
                       <span className="text-xs text-gray-600">--</span>
                     )}
                   </td>
-                  {/* Avg 7d */}
-                  <td className="px-3 py-2.5 text-right">
+                  {/* Latest Settlement Rate */}
+                  <td className="px-2 py-2 text-right xl:px-2.5">
                     {isLoading ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                    ) : detail?.avgFundingRate7d != null ? (
+                      ) : detail?.latestSettlementRate != null ? (
+                      <div className="whitespace-nowrap text-right">
+                        <span
+                          className={`font-mono text-xs font-medium ${
+                            detail.latestSettlementRate > 0
+                              ? "text-green-400"
+                              : detail.latestSettlementRate < 0
+                                ? "text-red-400"
+                                : "text-gray-400"
+                          }`}
+                        >
+                          {formatSearchSettlementRate(detail.latestSettlementRate, rate.fundingInterval, rate.exchange)}
+                        </span>
+                        <span className="ml-1 text-xs text-gray-500">
+                          ({formatSearchSettlementPeriodRate(detail.latestSettlementRate, rate.exchange)})
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-600">--</span>
+                    )}
+                  </td>
+                  {/* Avg 1d */}
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                    {isLoading ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
+                      ) : detail?.avgFundingRate1d != null ? (
                       <span
-                        className={`font-mono text-xs ${
+                        className={`whitespace-nowrap font-mono text-xs ${
+                          detail.avgFundingRate1d > 0
+                            ? "text-green-400"
+                            : detail.avgFundingRate1d < 0
+                              ? "text-red-400"
+                              : "text-gray-400"
+                        }`}
+                      >
+                        {formatSearchAverageAnnualizedRate(detail.avgFundingRate1d, rate.fundingInterval, rate.exchange)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-600">--</span>
+                    )}
+                  </td>
+                  {/* Avg 7d */}
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                    {isLoading ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
+                      ) : detail?.avgFundingRate7d != null ? (
+                      <span
+                        className={`whitespace-nowrap font-mono text-xs ${
                           detail.avgFundingRate7d > 0
                             ? "text-green-400"
                             : detail.avgFundingRate7d < 0
@@ -564,12 +659,12 @@ export default function CrossExchangeSearch() {
                     )}
                   </td>
                   {/* Avg 30d */}
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="px-2 py-2 text-right xl:px-2.5">
                     {isLoading ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                    ) : detail?.avgFundingRate30d != null ? (
+                      ) : detail?.avgFundingRate30d != null ? (
                       <span
-                        className={`font-mono text-xs ${
+                        className={`whitespace-nowrap font-mono text-xs ${
                           detail.avgFundingRate30d > 0
                             ? "text-green-400"
                             : detail.avgFundingRate30d < 0

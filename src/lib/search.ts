@@ -7,6 +7,7 @@ import {
   getCandleSnapshot as hlGetCandleSnapshot,
   getFundingHistoryForDays as hlGetFundingHistoryForDays,
   getAverageFundingRatesByInterval as hlGetAverageFundingRatesByInterval,
+  getLatestSettledFundingRate as hlGetLatestSettledFundingRate,
   type FundingHistoryItem as HlFundingHistoryItem,
   type CandleSnapshotItem as HlCandleSnapshotItem,
 } from "./hyperliquid";
@@ -15,10 +16,16 @@ import {
   getCandleSnapshot as gateGetCandleSnapshot,
   getFundingHistoryForDays as gateGetFundingHistoryForDays,
   getAverageFundingRatesByInterval as gateGetAverageFundingRatesByInterval,
+  getFundingHistory as gateGetFundingHistory,
   type FundingHistoryItem as GateFundingHistoryItem,
   type CandleSnapshotItem as GateCandleSnapshotItem,
 } from "./gateio";
 import { calculateHistoricalVolatility } from "./utils/funding";
+import {
+  getLatestSettledFundingRate as lighterGetLatestSettledFundingRate,
+  getFundingHistoryForDays as lighterGetFundingHistoryForDays,
+  getCandleSnapshot as lighterGetCandleSnapshot,
+} from "./lighter";
 
 // ==================== Interfaces ====================
 
@@ -40,6 +47,8 @@ export interface SearchExchangeRate {
   bestBid?: number;
   bestAsk?: number;
   // Detail fields (loaded progressively)
+  lastSettlementRate?: number | null;
+  avgFundingRate1d?: number | null;
   historicalVolatility?: number | null;
   bidAskSpread?: number | null;
   avgFundingRate7d?: number | null;
@@ -49,6 +58,8 @@ export interface SearchExchangeRate {
 }
 
 interface DetailResult {
+  lastSettlementRate: number | null;
+  avgFundingRate1d: number | null;
   historicalVolatility: number | null;
   bidAskSpread: number | null;
   avgFundingRate7d: number | null;
@@ -179,6 +190,7 @@ const BINANCE_DELISTED = new Set([
   "SNTUSDT", "STMXUSDT", "STPTUSDT", "STRAXUSDT", "SWELLUSDT", "SXPUSDT", "TANSSIUSDT",
   "TOKENUSDT", "TROYUSDT", "UNFIUSDT", "UXLINKUSDT", "VFYUSDT", "VIDTUSDT", "VOXELUSDT",
   "WAVESUSDT", "XCNUSDT", "XEMUSDT", "YALAUSDT", "ZRCUSDT",
+  "A2ZUSDT", "FORTHUSDT", "HOOKUSDT", "LRCUSDT", "NTRNUSDT", "RDNTUSDT",
 ]);
 
 const BINANCE_MAJORS = ["BTC", "ETH", "BNB", "SOL", "HYPE", "LINK", "XRP", "TRX", "ADA", "WLFI", "AAVE", "SKY", "DOGE", "BCH"];
@@ -294,6 +306,23 @@ function computeAvgFundingRates(
     : null;
 
   return { avg7d, avg30d };
+}
+
+// ==================== Avg 1D Funding Rate Calculation ====================
+
+function computeAvgFundingRate1d(
+  fundingHistory: { time: number; fundingRate: string }[],
+): number | null {
+  if (fundingHistory.length === 0) return null;
+
+  // Get daily bucket averages
+  const dailyRates = getAverageFundingRatesByInterval(fundingHistory, "1d");
+
+  // Return the last 1d bucket average (matching chart tooltip semantics)
+  if (dailyRates.length === 0) return null;
+
+  const lastDailyBucket = dailyRates[dailyRates.length - 1];
+  return lastDailyBucket.averageFundingRate;
 }
 
 // ==================== Fetch All Rates ====================
@@ -592,19 +621,23 @@ async function fetchHyperliquidDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<DetailResult> {
-  const [candles, fundingHistory] = await Promise.all([
+  const [candles, fundingHistory, latestSettledRate] = await Promise.all([
     hlGetCandleSnapshot(symbol, "1d", 30),
     hlGetFundingHistoryForDays(symbol, 30),
+    hlGetLatestSettledFundingRate(symbol),
   ]);
 
   if (signal?.aborted) {
-    return { historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
+    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
   }
 
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+  const avg1d = computeAvgFundingRate1d(fundingHistory);
 
   return {
+    lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
+    avgFundingRate1d: avg1d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -626,14 +659,20 @@ async function fetchGateioDetail(
     gateGetFundingHistoryForDays(symbol, 30, fundingIntervalSeconds),
   ]);
 
+  // Get latest settled rate from the first entry in funding history (same as GateFundingMonitor hydration)
+  const latestSettledRate = fundingHistory.length > 0 ? parseFloat(fundingHistory[0].fundingRate) : NaN;
+
   if (signal?.aborted) {
-    return { historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
+    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
   }
 
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+  const avg1d = computeAvgFundingRate1d(fundingHistory);
 
   return {
+    lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
+    avgFundingRate1d: avg1d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -655,7 +694,7 @@ async function fetchBinanceDetail(
   ]);
 
   if (signal?.aborted) {
-    return { historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
+    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
   }
 
   // Parse candles
@@ -671,6 +710,7 @@ async function fetchBinanceDetail(
 
   // Parse funding history
   let fundingHistory: { time: number; fundingRate: string }[] = [];
+  let latestSettledRate: number = NaN;
   if (fundingRes.status === "fulfilled" && fundingRes.value.ok) {
     const fundingData = await fundingRes.value.json();
     if (Array.isArray(fundingData)) {
@@ -678,6 +718,10 @@ async function fetchBinanceDetail(
         time: item.fundingTime,
         fundingRate: item.fundingRate,
       }));
+      // First entry is the most recent settled rate (same as BinanceFundingMonitor hydration)
+      if (fundingData.length > 0) {
+        latestSettledRate = parseFloat(fundingData[0]?.fundingRate ?? "");
+      }
     }
   }
 
@@ -686,8 +730,11 @@ async function fetchBinanceDetail(
 
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory30d);
+  const avg1d = computeAvgFundingRate1d(fundingHistory30d);
 
   return {
+    lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
+    avgFundingRate1d: avg1d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -719,6 +766,8 @@ async function fetchLighterDetail(
 
   if (marketId === null) {
     return {
+      lastSettlementRate: null,
+      avgFundingRate1d: null,
       historicalVolatility: null,
       bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
       avgFundingRate7d: null,
@@ -729,7 +778,7 @@ async function fetchLighterDetail(
   const nowMs = Date.now();
   const thirtyDaysAgoMs = nowMs - 30 * 24 * 60 * 60 * 1000;
 
-  const [candlesRes, fundingRes, orderBookRes] = await Promise.allSettled([
+  const [candlesRes, fundingRes, orderBookRes, latestSettledRate] = await Promise.allSettled([
     fetch(
       `/api/lighter?endpoint=candles&market_id=${marketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`,
     ),
@@ -737,10 +786,11 @@ async function fetchLighterDetail(
       `/api/lighter?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`,
     ),
     fetch(`/api/lighter?endpoint=orderBookOrders&market_id=${marketId}&limit=1`),
+    lighterGetLatestSettledFundingRate(marketId),
   ]);
 
   if (signal?.aborted) {
-    return { historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
+    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
   }
 
   // Parse candles
@@ -790,8 +840,17 @@ async function fetchLighterDetail(
 
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+  const avg1d = computeAvgFundingRate1d(fundingHistory);
+
+  // Extract latest settled rate from Promise.allSettled result
+  let lastSettlementRateValue: number | null = null;
+  if (latestSettledRate.status === "fulfilled" && Number.isFinite(latestSettledRate.value)) {
+    lastSettlementRateValue = latestSettledRate.value;
+  }
 
   return {
+    lastSettlementRate: lastSettlementRateValue,
+    avgFundingRate1d: avg1d,
     historicalVolatility,
     bidAskSpread,
     avgFundingRate7d: avg7d,
@@ -814,6 +873,8 @@ export async function batchFetchDetails(
     try {
       // Mark as loading
       onUpdate(rate, {
+        lastSettlementRate: null,
+        avgFundingRate1d: null,
         historicalVolatility: null,
         bidAskSpread: null,
         avgFundingRate7d: null,
@@ -829,6 +890,8 @@ export async function batchFetchDetails(
       console.error(`[Search] Detail fetch failed for ${rate.symbol}:`, error);
       if (!signal?.aborted) {
         onUpdate(rate, {
+          lastSettlementRate: null,
+          avgFundingRate1d: null,
           historicalVolatility: null,
           bidAskSpread: null,
           avgFundingRate7d: null,

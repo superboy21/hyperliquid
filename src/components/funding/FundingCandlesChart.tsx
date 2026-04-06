@@ -128,7 +128,7 @@ export default function FundingCandlesChart({
           const fundingData = fundingItem?.data as FundingDatum | undefined;
           if (fundingData) {
             lines.push(`${fundingNameMap[interval]}: ${formatFundingRate(fundingData.rawFundingRate)}`);
-            lines.push(`折算年化预测费率: ${formatAnnualizedRate(fundingData.rawFundingRate)}`);
+            lines.push(`折算年化费率: ${formatAnnualizedRate(fundingData.rawFundingRate)}`);
           }
 
           return lines.join("<br/>");

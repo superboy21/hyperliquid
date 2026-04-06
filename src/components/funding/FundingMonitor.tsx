@@ -166,12 +166,12 @@ export default function FundingMonitor() {
       hydrationPolicy: {
         initialCount: 10,
         enableScrollHydration: false,
-        resetOnFilterChange: false,
+        resetOnFilterChange: true,
         onRowClickHydrate: (clickedSymbol: string, filteredRates: ExchangeFundingRate[]) => {
           const idx = filteredRates.findIndex((r) => r.symbol === clickedSymbol);
           if (idx === -1) return [];
-          const start = Math.max(0, idx - 3);
-          const end = Math.min(filteredRates.length, idx + 4);
+          const start = Math.max(0, idx - 5);
+          const end = Math.min(filteredRates.length, idx + 6);
           return filteredRates.slice(start, end).map((r) => r.symbol);
         },
       } satisfies HydrationPolicy,
