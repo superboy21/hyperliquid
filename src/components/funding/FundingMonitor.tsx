@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import FundingCandlesChart from "@/components/funding/FundingCandlesChart";
 import ExchangeFundingMonitor, {
   type CategoryConfig,
@@ -9,6 +9,7 @@ import ExchangeFundingMonitor, {
   type DetailData,
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
+  type HydrationPolicy,
 } from "@/components/funding/ExchangeFundingMonitor";
 import {
   formatAnnualizedRate,
@@ -19,6 +20,7 @@ import {
   getAverageFundingRatesByInterval,
   getCandleSnapshot,
   getFundingHistoryForDays,
+  getLatestSettledFundingRate,
   type CandleSnapshotItem as HyperliquidCandle,
   type ChartInterval as HyperliquidChartInterval,
   type FundingRate,
@@ -47,6 +49,7 @@ function mapToExchangeFundingRate(rate: FundingRate): ExchangeFundingRate {
   return {
     symbol: rate.coin,
     fundingRate: parseFloat(rate.fundingRate),
+    lastSettlementRate: Number.NaN,
     markPrice,
     lastPrice: markPrice,
     change24h,
@@ -96,6 +99,56 @@ function HyperliquidChartWrapper({ selectedCoin, interval, candles, intervalFund
 // ==================== Main Component ====================
 
 export default function FundingMonitor() {
+  const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
+    const rates = await getAllFundingRatesWithHistory();
+    return rates.map(mapToExchangeFundingRate);
+  }, []);
+
+  const hydrateRates = useCallback(async (
+    rates: ExchangeFundingRate[],
+    updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
+    targetSymbols: string[],
+  ): Promise<void> => {
+    const batchSize = 3;
+    const rateMap = new Map(rates.map((rate) => [rate.symbol, rate]));
+    const targetRates = targetSymbols
+      .map((symbol) => rateMap.get(symbol))
+      .filter((rate): rate is ExchangeFundingRate => Boolean(rate))
+      .filter((rate) => !Number.isFinite(rate.lastSettlementRate));
+
+    for (let i = 0; i < targetRates.length; i += batchSize) {
+      const batch = targetRates.slice(i, Math.min(i + batchSize, targetRates.length));
+      const updates = await Promise.all(
+        batch.map(async (rate) => {
+          const lastSettlementRate = await getLatestSettledFundingRate(rate.symbol);
+          if (!Number.isFinite(lastSettlementRate)) {
+            return null;
+          }
+
+          return {
+            symbol: rate.symbol,
+            lastSettlementRate,
+          };
+        }),
+      );
+
+      const validUpdates = updates.filter((item): item is { symbol: string; lastSettlementRate: number } => item !== null);
+
+      if (validUpdates.length > 0) {
+        updateRates((prev) =>
+          prev.map((item) => {
+            const update = validUpdates.find((entry) => entry.symbol === item.symbol);
+            return update ? { ...item, lastSettlementRate: update.lastSettlementRate } : item;
+          }),
+        );
+      }
+
+      if (i + batchSize < targetRates.length) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+  }, []);
+
   const config: ExchangeFundingMonitorConfig = useMemo(
     () => ({
       exchangeName: "Hyperliquid",
@@ -108,15 +161,25 @@ export default function FundingMonitor() {
       formatVolume: (volume: number) => formatVolume(volume),
       ChartComponent: HyperliquidChartWrapper,
       searchPlaceholder: "搜索交易对，例如 BTC、ETH、xyz:GOLD、vntl:OPENAI",
+      fetchRates,
+      hydrateRates,
+      hydrationPolicy: {
+        initialCount: 10,
+        enableScrollHydration: false,
+        resetOnFilterChange: false,
+        onRowClickHydrate: (clickedSymbol: string, filteredRates: ExchangeFundingRate[]) => {
+          const idx = filteredRates.findIndex((r) => r.symbol === clickedSymbol);
+          if (idx === -1) return [];
+          const start = Math.max(0, idx - 3);
+          const end = Math.min(filteredRates.length, idx + 4);
+          return filteredRates.slice(start, end).map((r) => r.symbol);
+        },
+      } satisfies HydrationPolicy,
       filterFn: (rate: ExchangeFundingRate, filterType: string) => {
         if (filterType === "xyzHip3") return rate.assetCategory === "xyzHip3";
         if (filterType === "vntlHip3") return rate.assetCategory === "vntlHip3";
         if (filterType === "standard") return rate.assetCategory === "standard";
         return true;
-      },
-      fetchRates: async () => {
-        const rates = await getAllFundingRatesWithHistory();
-        return rates.map(mapToExchangeFundingRate);
       },
       fetchDetailData: async (symbol: string, interval: ChartInterval): Promise<DetailData> => {
         const [candleData, fundingHistory] = await Promise.all([
@@ -184,7 +247,7 @@ export default function FundingMonitor() {
         </div>
       ),
     }),
-    [],
+    [fetchRates, hydrateRates],
   );
 
   return <ExchangeFundingMonitor config={config} />;

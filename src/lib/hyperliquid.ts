@@ -71,6 +71,46 @@ interface AssetContext {
   dayBaseVlm: string;
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchHyperliquidInfo<T>(body: Record<string, unknown>, maxAttempts: number = 3): Promise<T | null> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch("https://api.hyperliquid.xyz/info", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://app.hyperliquid.xyz",
+          Referer: "https://app.hyperliquid.xyz/",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (response.ok) {
+        return (await response.json()) as T;
+      }
+
+      if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts - 1) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+
+      return null;
+    } catch (error) {
+      if (attempt >= maxAttempts - 1) {
+        console.error("Error fetching Hyperliquid info:", error);
+        return null;
+      }
+
+      await sleep(250 * (attempt + 1));
+    }
+  }
+
+  return null;
+}
+
 const KNOWN_XYZ_HIP3_ASSETS = [
   "xyz:SILVER",
   "xyz:GOLD",
@@ -141,17 +181,14 @@ const INTERVAL_MS: Record<ChartInterval, number> = {
 
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   try {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "metaAndAssetCtxs" }),
-    });
+    const data = await fetchHyperliquidInfo<any[]>(
+      { type: "metaAndAssetCtxs" },
+      2,
+    );
 
-    if (!response.ok) {
+    if (!data) {
       throw new Error("Failed to fetch funding rates");
     }
-
-    const data = await response.json();
     const meta = data[0];
     const assetCtxs: AssetContext[] = data[1];
 
@@ -185,17 +222,14 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 
 async function getHip3MarketData(dex: "xyz" | "vntl"): Promise<Map<string, Partial<FundingRate>>> {
   try {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "metaAndAssetCtxs", dex }),
-    });
+    const data = await fetchHyperliquidInfo<any[]>(
+      { type: "metaAndAssetCtxs", dex },
+      2,
+    );
 
-    if (!response.ok) {
+    if (!data) {
       throw new Error(`Failed to fetch ${dex} HIP-3 market data`);
     }
-
-    const data = await response.json();
     const meta = data[0];
     const assetCtxs: AssetContext[] = data[1];
 
@@ -261,10 +295,9 @@ async function getDexFundingRates(dex: "xyz" | "vntl", knownAssets: string[]): P
 }
 
 export async function getHip3FundingRates(): Promise<FundingRate[]> {
-  const [xyzRates, vntlRates] = await Promise.all([
-    getDexFundingRates("xyz", KNOWN_XYZ_HIP3_ASSETS),
-    getDexFundingRates("vntl", KNOWN_VNTL_HIP3_ASSETS),
-  ]);
+  const xyzRates = await getDexFundingRates("xyz", KNOWN_XYZ_HIP3_ASSETS);
+  await sleep(150);
+  const vntlRates = await getDexFundingRates("vntl", KNOWN_VNTL_HIP3_ASSETS);
 
   return [...xyzRates, ...vntlRates];
 }
@@ -337,6 +370,34 @@ export async function getFundingHistory(coin: string, startTimeSeconds?: number)
   } catch (error) {
     console.error(`[API] Error fetching funding history for ${coin}:`, error);
     return [];
+  }
+}
+
+export async function getLatestSettledFundingRate(coin: string, lookbackHours: number = 72): Promise<number> {
+  try {
+    const endTime = Date.now();
+    const startTime = endTime - lookbackHours * 60 * 60 * 1000;
+
+    const data = await fetchHyperliquidInfo<any[]>(
+      {
+        type: "fundingHistory",
+        coin,
+        startTime,
+        endTime,
+      },
+      2,
+    );
+
+    if (!Array.isArray(data) || data.length === 0) {
+      return Number.NaN;
+    }
+
+    const latestEntry = data[data.length - 1];
+    const latestRate = Number.parseFloat(latestEntry?.fundingRate ?? "");
+    return Number.isFinite(latestRate) ? latestRate : Number.NaN;
+  } catch (error) {
+    console.error(`[API] Error fetching latest settled funding for ${coin}:`, error);
+    return Number.NaN;
   }
 }
 

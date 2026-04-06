@@ -18,39 +18,39 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  let lastError: Error | null = null;
+  try {
+    const data = await Promise.any(
+      GATE_API_URLS.map(async (baseUrl) => {
+        const url = `${baseUrl}/futures/usdt/funding_rate?contract=${contract}&limit=${limit}`;
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          },
+          signal: AbortSignal.timeout(5000),
+        });
 
-  for (const baseUrl of GATE_API_URLS) {
-    try {
-      const url = `${baseUrl}/futures/usdt/funding_rate?contract=${contract}&limit=${limit}`;
-      console.log(`[Gate API] Trying: ${url}`);
-      
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-        signal: AbortSignal.timeout(10000),
-      });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+        return response.json();
+      }),
+    );
 
-      const data = await response.json();
-      console.log(`[Gate API] Success, got ${data.length} records`);
-      return NextResponse.json(data);
-    } catch (error) {
-      lastError = error as Error;
-      console.error(`[Gate API] Failed:`, error);
-      continue;
-    }
+    return NextResponse.json(data);
+  } catch (error) {
+    const message = error instanceof AggregateError
+      ? error.errors?.[0]?.message || "Failed to fetch funding rate history"
+      : error instanceof Error
+        ? error.message
+        : "Failed to fetch funding rate history";
+
+    return NextResponse.json(
+      { error: message },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json(
-    { error: lastError?.message || "Failed to fetch funding rate history" },
-    { status: 500 }
-  );
 }

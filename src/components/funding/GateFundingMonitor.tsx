@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import GateFundingCandlesChart from "@/components/funding/GateFundingCandlesChart";
 import ExchangeFundingMonitor, {
   type CategoryConfig,
@@ -17,6 +17,7 @@ import {
   formatVolume,
   getAllFundingRates,
   getAverageFundingRatesByInterval,
+  getBatchFundingHistory,
   getCandleSnapshot,
   getFundingHistoryForDays,
   type CandleSnapshotItem as GateCandle,
@@ -30,6 +31,7 @@ function mapToExchangeFundingRate(rate: FundingRate): ExchangeFundingRate {
   return {
     symbol: rate.coin,
     fundingRate: parseFloat(rate.fundingRateIndicative || rate.fundingRate),
+    lastSettlementRate: Number.NaN,
     markPrice: parseFloat(rate.markPrice),
     lastPrice: parseFloat(rate.lastPrice),
     change24h: parseFloat(rate.change24h),
@@ -76,6 +78,94 @@ function GateChartWrapper({ selectedCoin, interval, candles, intervalFundingRate
 // ==================== Main Component ====================
 
 export default function GateFundingMonitor() {
+  const detailCacheRef = useRef(new Map<string, DetailData>());
+
+  const buildDetailData = useCallback(async (
+    symbol: string,
+    interval: ChartInterval,
+    rates: ExchangeFundingRate[],
+  ): Promise<DetailData> => {
+    const cacheKey = `${symbol}:${interval}`;
+    const cached = detailCacheRef.current.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const selectedRate = rates.find((r) => r.symbol === symbol);
+    const fundingIntervalSeconds = selectedRate?.fundingInterval || 28800;
+    const [candleData, fundingHistory] = await Promise.all([
+      getCandleSnapshot(symbol, interval, 30),
+      getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds),
+    ]);
+
+    const mappedCandles = candleData.map((c: GateCandle) => ({ ...c }));
+    const visibleCandles = interval === "1d" ? mappedCandles : mappedCandles.slice(Math.max(mappedCandles.length - 30, 0));
+    const aggregatedFundingRates = getAverageFundingRatesByInterval(fundingHistory, interval);
+    const visibleFundingRates = aggregatedFundingRates.filter((item) =>
+      visibleCandles.some((candle) => candle.openTime === item.bucketStartTime),
+    );
+    const hourlyFundingRates = getAverageFundingRatesByInterval(fundingHistory, "1h");
+
+    const detailData = {
+      candles: visibleCandles,
+      intervalFundingRates: visibleFundingRates,
+      hourlyFundingRates30d: hourlyFundingRates,
+    };
+
+    detailCacheRef.current.set(cacheKey, detailData);
+    return detailData;
+  }, []);
+
+  const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
+    const rates = await getAllFundingRates();
+    return rates.map(mapToExchangeFundingRate);
+  }, []);
+
+  const hydrateRates = useCallback(async (
+    rates: ExchangeFundingRate[],
+    updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
+    targetSymbols: string[],
+    ): Promise<void> => {
+    const batchSize = 10;
+    const rateMap = new Map(rates.map((rate) => [rate.symbol, rate]));
+    const targetRates = targetSymbols
+      .map((symbol) => rateMap.get(symbol))
+      .filter((rate): rate is ExchangeFundingRate => Boolean(rate))
+      .filter((rate) => !Number.isFinite(rate.lastSettlementRate));
+
+    for (let i = 0; i < targetRates.length; i += batchSize) {
+      const batch = targetRates.slice(i, Math.min(i + batchSize, targetRates.length));
+      const contractMap = new Map(batch.map((rate) => [`${rate.symbol}_USDT`, rate.symbol]));
+      const batchHistory = await getBatchFundingHistory(Array.from(contractMap.keys()));
+      const updates = Array.from(batchHistory.entries()).map(([contract, history]) => {
+        const symbol = contractMap.get(contract);
+        if (!symbol || history.length === 0) {
+          return null;
+        }
+
+        return {
+          symbol,
+          lastSettlementRate: parseFloat(history[0].fundingRate),
+        };
+      });
+
+      const validUpdates = updates.filter((item): item is { symbol: string; lastSettlementRate: number } => item !== null);
+
+      if (validUpdates.length > 0) {
+        updateRates((prev) =>
+          prev.map((item) => {
+            const update = validUpdates.find((entry) => entry.symbol === item.symbol);
+            return update ? { ...item, lastSettlementRate: update.lastSettlementRate } : item;
+          }),
+        );
+      }
+
+      if (i + batchSize < targetRates.length) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  }, []);
+
   const config: ExchangeFundingMonitorConfig = useMemo(
     () => ({
       exchangeName: "Gate.io",
@@ -89,36 +179,9 @@ export default function GateFundingMonitor() {
       formatVolume: (volume: number) => formatVolume(volume),
       ChartComponent: GateChartWrapper,
       searchPlaceholder: "搜索交易对，例如 BTC、ETH、SOL",
-      fetchRates: async () => {
-        const rates = await getAllFundingRates();
-        return rates.map(mapToExchangeFundingRate);
-      },
-      fetchDetailData: async (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]): Promise<DetailData> => {
-        const selectedRate = rates.find((r) => r.symbol === symbol);
-        const fundingIntervalSeconds = selectedRate?.fundingInterval || 28800;
-        const [candleData, fundingHistory] = await Promise.all([
-          getCandleSnapshot(symbol, interval, 30),
-          getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds),
-        ]);
-
-        // Map Gate candles to shared type
-        const mappedCandles = candleData.map((c: GateCandle) => ({ ...c }));
-
-        const visibleCandles =
-          interval === "1d" ? mappedCandles : mappedCandles.slice(Math.max(mappedCandles.length - 30, 0));
-
-        const aggregatedFundingRates = getAverageFundingRatesByInterval(fundingHistory, interval);
-        const visibleFundingRates = aggregatedFundingRates.filter((item) =>
-          visibleCandles.some((candle) => candle.openTime === item.bucketStartTime),
-        );
-        const hourlyFundingRates = getAverageFundingRatesByInterval(fundingHistory, "1h");
-
-        return {
-          candles: visibleCandles,
-          intervalFundingRates: visibleFundingRates,
-          hourlyFundingRates30d: hourlyFundingRates,
-        };
-      },
+      fetchRates,
+      hydrateRates,
+      fetchDetailData: buildDetailData,
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">Gate.io 永续合约</p>
@@ -139,7 +202,7 @@ export default function GateFundingMonitor() {
         </div>
       ),
     }),
-    [],
+    [buildDetailData, fetchRates, hydrateRates],
   );
 
   return <ExchangeFundingMonitor config={config} />;

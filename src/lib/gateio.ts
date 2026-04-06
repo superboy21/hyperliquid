@@ -36,6 +36,11 @@ export interface GateFundingHistoryItem {
   r: string;                           // 资金费率
 }
 
+export interface GateBatchFundingRatesResponseItem {
+  contract?: string;
+  data?: GateFundingHistoryItem[];
+}
+
 export interface GateCandlestick {
   t: number;                           // K 线开始时间（秒）
   o: string;                           // 开盘价
@@ -196,6 +201,55 @@ export async function getFundingHistory(
   } catch (error) {
     console.error(`Error fetching funding history for ${contract}:`, error);
     return [];
+  }
+}
+
+/**
+ * 批量获取多个合约的历史资金费率
+ */
+export async function getBatchFundingHistory(
+  contracts: string[]
+): Promise<Map<string, FundingHistoryItem[]>> {
+  if (contracts.length === 0) {
+    return new Map();
+  }
+
+  try {
+    const response = await fetch(
+      `${API_PROXY_BASE}/futures/${SETTLE}/funding_rates`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contracts }),
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Batch Gate.io funding history failed: ${response.status} ${errorText}`);
+      return new Map();
+    }
+
+    const data: GateBatchFundingRatesResponseItem[] = await response.json();
+    if (!Array.isArray(data)) {
+      return new Map();
+    }
+
+    return new Map(
+      data
+        .filter((item): item is { contract: string; data: GateFundingHistoryItem[] } => Boolean(item.contract && Array.isArray(item.data)))
+        .map((item) => [
+          item.contract,
+          item.data.map((entry) => ({
+            time: entry.t * 1000,
+            fundingRate: entry.r,
+          })),
+        ])
+    );
+  } catch (error) {
+    console.error("Error fetching batch Gate.io funding history:", error);
+    return new Map();
   }
 }
 

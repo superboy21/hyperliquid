@@ -1,6 +1,6 @@
 "use client";
 
-import { ComponentType, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { ComponentType, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ==================== Types ====================
 
@@ -10,6 +10,7 @@ export type SortField = "rate" | "name" | "volume" | "price" | "change" | "oi";
 export interface ExchangeFundingRate {
   symbol: string;
   fundingRate: number;
+  lastSettlementRate: number;
   markPrice: number;
   lastPrice: number;
   change24h: number;
@@ -66,6 +67,16 @@ export interface DetailData {
   bidAskSpread?: number | null;
 }
 
+export interface HydrationPolicy {
+  initialCount: number;
+  enableScrollHydration: boolean;
+  resetOnFilterChange?: boolean;
+  onRowClickHydrate?: (
+    clickedSymbol: string,
+    filteredRates: ExchangeFundingRate[],
+  ) => string[];
+}
+
 export interface ExchangeFundingMonitorConfig {
   exchangeName: string;
   exchangeColor: string;
@@ -78,12 +89,19 @@ export interface ExchangeFundingMonitorConfig {
   formatVolume: (volume: number) => string;
   ChartComponent: ComponentType<ChartComponentProps>;
   fetchRates: () => Promise<ExchangeFundingRate[]>;
+  hydrateRates?: (
+    rates: ExchangeFundingRate[],
+    updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
+    targetSymbols: string[],
+    hydrationKey: number,
+  ) => Promise<void>;
   fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
   searchPlaceholder?: string;
   filterFn?: (rate: ExchangeFundingRate, filterType: string) => boolean;
+  hydrationPolicy?: HydrationPolicy;
 }
 
 // ==================== Constants ====================
@@ -169,6 +187,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     formatVolume,
     ChartComponent,
     fetchRates,
+    hydrateRates,
     fetchDetailData,
     renderExchangeBadge,
     renderInfoSection,
@@ -194,6 +213,11 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [intervalFundingRates, setIntervalFundingRates] = useState<IntervalFundingRateItem[]>([]);
   const [hourlyFundingRates30d, setHourlyFundingRates30d] = useState<IntervalFundingRateItem[]>([]);
   const [detailBidAskSpread, setDetailBidAskSpread] = useState<number | null>(null);
+  const [hydrationTargetSymbols, setHydrationTargetSymbols] = useState<string[]>([]);
+  const [hydrationKey, setHydrationKey] = useState(0);
+  const fundingRatesRef = useRef<ExchangeFundingRate[]>([]);
+  const selectedCoinRef = useRef<string | null>(null);
+  const filteredRatesRef = useRef<ExchangeFundingRate[]>([]);
 
   // Fetch rates
   const handleFetchRates = useCallback(async () => {
@@ -204,7 +228,17 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         setError("未能获取到资金费率数据，请稍后重试。");
         return;
       }
-      setFundingRates(rates);
+      setFundingRates((prev) => {
+        const previousSettlementMap = new Map(prev.map((rate) => [rate.symbol, rate.lastSettlementRate]));
+        const mergedRates = rates.map((rate) => {
+          const previousSettlementRate = previousSettlementMap.get(rate.symbol);
+          return previousSettlementRate !== undefined && Number.isFinite(previousSettlementRate)
+            ? { ...rate, lastSettlementRate: previousSettlementRate }
+            : rate;
+        });
+        fundingRatesRef.current = mergedRates;
+        return mergedRates;
+      });
       setLastUpdate(new Date());
     } catch (fetchError) {
       console.error("Error fetching data:", fetchError);
@@ -216,7 +250,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
   useEffect(() => {
     handleFetchRates();
-    const interval = setInterval(handleFetchRates, 60000);
+    const interval = setInterval(handleFetchRates, 300000);
     return () => clearInterval(interval);
   }, [handleFetchRates]);
 
@@ -231,7 +265,8 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       setDetailBidAskSpread(null);
 
       try {
-        const detailData = await fetchDetailData(symbol, interval, fundingRates);
+        const currentRates = fundingRatesRef.current;
+        const detailData = await fetchDetailData(symbol, interval, currentRates);
         if (detailData.candles.length === 0) {
           setDetailError(`暂时拿不到该资产最近 30 天的${intervalLabels[interval]}数据。`);
           return;
@@ -247,7 +282,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         setDetailLoading(false);
       }
     },
-    [fetchDetailData, fundingRates],
+    [fetchDetailData],
   );
 
   useEffect(() => {
@@ -289,6 +324,54 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         return sortDesc ? comparison : -comparison;
       });
   }, [fundingRates, searchTerm, sortBy, sortDesc, filterType, filterFn]);
+
+  useEffect(() => {
+    fundingRatesRef.current = fundingRates;
+  }, [fundingRates]);
+
+  useEffect(() => {
+    selectedCoinRef.current = selectedCoin;
+  }, [selectedCoin]);
+
+  useEffect(() => {
+    filteredRatesRef.current = filteredAndSortedRates;
+  }, [filteredAndSortedRates]);
+
+  const filteredOrderKey = useMemo(
+    () => filteredAndSortedRates.map((rate) => rate.symbol).join("|"),
+    [filteredAndSortedRates],
+  );
+
+  useEffect(() => {
+    if (!hydrateRates || loading || filteredAndSortedRates.length === 0) {
+      return;
+    }
+
+    void hydrateRates(filteredAndSortedRates, (updater) => {
+      setFundingRates((prev) => {
+        const next = updater(prev);
+        fundingRatesRef.current = next;
+        return next;
+      });
+    }, hydrationTargetSymbols, hydrationKey);
+  }, [filteredAndSortedRates, hydrateRates, hydrationTargetSymbols, hydrationKey, loading]);
+
+  const initialCount = config.hydrationPolicy?.initialCount ?? 50;
+  const resetOnFilterChange = config.hydrationPolicy?.resetOnFilterChange ?? true;
+  useEffect(() => {
+    if (!resetOnFilterChange) {
+      setHydrationTargetSymbols((prev) => {
+        if (prev.length > 0 || filteredAndSortedRates.length === 0) {
+          return prev;
+        }
+
+        return filteredAndSortedRates.slice(0, initialCount).map((rate) => rate.symbol);
+      });
+      return;
+    }
+
+    setHydrationTargetSymbols(filteredAndSortedRates.slice(0, initialCount).map((rate) => rate.symbol));
+  }, [filteredAndSortedRates, filteredOrderKey, initialCount, resetOnFilterChange]);
 
   // Auto-select first coin
   useEffect(() => {
@@ -515,7 +598,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       {/* Last update */}
       {lastUpdate && (
         <div className="text-sm text-gray-500">
-          最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 60 秒自动刷新）
+          最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 300 秒自动刷新）
         </div>
       )}
 
@@ -534,34 +617,64 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               {searchTerm && `（从 ${fundingRates.length} 个中筛选）`}
             </p>
           </div>
-          <div className="max-h-[960px] overflow-x-auto overflow-y-auto lg:min-h-0 lg:flex-1">
+          <div
+            className="max-h-[960px] overflow-x-auto overflow-y-auto lg:min-h-0 lg:flex-1"
+            onScroll={config.hydrationPolicy?.enableScrollHydration ?? true ? (e) => {
+              const rowHeight = 41;
+              const target = e.currentTarget;
+              const startIndex = Math.max(0, Math.floor(target.scrollTop / rowHeight));
+              const visibleCount = Math.ceil(target.clientHeight / rowHeight) + 2;
+              const endIndex = Math.min(filteredAndSortedRates.length, startIndex + visibleCount);
+              const visibleSymbols = filteredAndSortedRates.slice(startIndex, endIndex).map((rate) => rate.symbol);
+
+              setHydrationTargetSymbols((prev) => {
+                const next = new Set(prev);
+                for (const symbol of visibleSymbols) {
+                  next.add(symbol);
+                }
+                return Array.from(next);
+              });
+            } : undefined}
+          >
             <table className="w-full">
               <thead className="sticky top-0 bg-gray-900">
                 <tr>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">交易对</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">价格</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 涨跌</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">预测费率</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">24h 成交额</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">持仓价值</th>
+                  <th className="px-3 py-2 text-left text-sm font-medium text-gray-400">交易对</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">价格</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">24h 涨跌</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">预测费率</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">最新结算费率</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">24h 成交额</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">持仓价值</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
                 {filteredAndSortedRates.map((rate) => (
                   <tr
                     key={rate.symbol}
-                    onClick={() => setSelectedCoin(rate.symbol)}
+                    onClick={() => {
+                      setSelectedCoin(rate.symbol);
+                      if (config.hydrationPolicy?.onRowClickHydrate) {
+                        const symbols = config.hydrationPolicy.onRowClickHydrate(rate.symbol, filteredAndSortedRates);
+                        setHydrationTargetSymbols((prev) => {
+                          const next = new Set(prev);
+                          for (const s of symbols) next.add(s);
+                          return Array.from(next);
+                        });
+                        setHydrationKey((k) => k + 1);
+                      }
+                    }}
                     className={`cursor-pointer transition-colors hover:bg-gray-700 ${
                       selectedCoin === rate.symbol ? "bg-gray-700/90" : ""
                     }`}
                   >
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2">
                       <span className="text-xs font-medium text-white">{rate.symbol}</span>
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2 text-right">
                       <span className="font-mono text-sm text-gray-300">{formatPrice(rate.lastPrice)}</span>
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2 text-right">
                       <span
                         className={`font-mono text-sm ${
                           rate.change24h > 0 ? "text-green-400" : rate.change24h < 0 ? "text-red-400" : "text-gray-400"
@@ -571,22 +684,36 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                         {rate.change24h.toFixed(2)}%
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <div>
-                        <span
+                    <td className="px-3 py-2 text-right">
+                      <div className="text-right">
+                        <div
                           className={`font-mono font-medium ${
                             rate.fundingRate > 0 ? "text-green-400" : rate.fundingRate < 0 ? "text-red-400" : "text-gray-400"
                           }`}
                         >
                           {formatAnnualizedRate(rate.fundingRate, rate.fundingInterval)}
-                        </span>
-                        <span className="ml-2 text-xs text-gray-500">({formatFundingRate(rate.fundingRate)})</span>
+                        </div>
+                        <div className="text-xs text-gray-500">({formatFundingRate(rate.fundingRate)})</div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2 text-right">
+                      {Number.isFinite(rate.lastSettlementRate) ? (
+                        <div className="text-right">
+                          <div
+                            className={`font-mono font-medium ${
+                              rate.lastSettlementRate > 0 ? "text-green-400" : rate.lastSettlementRate < 0 ? "text-red-400" : "text-gray-400"
+                            }`}
+                          >
+                            {formatAnnualizedRate(rate.lastSettlementRate, rate.fundingInterval)}
+                          </div>
+                          <div className="text-xs text-gray-500">({formatFundingRate(rate.lastSettlementRate)})</div>
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-right">
                       <span className="font-mono text-sm text-gray-400">{formatVolume(rate.quoteVolume)}</span>
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2 text-right">
                       <span className="font-mono text-sm text-gray-400">{formatVolume(rate.notionalValue)}</span>
                     </td>
                   </tr>

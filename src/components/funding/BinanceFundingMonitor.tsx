@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import BinanceFundingCandlesChart from "@/components/funding/BinanceFundingCandlesChart";
 import ExchangeFundingMonitor, {
   type CategoryConfig,
@@ -46,6 +46,7 @@ interface BinanceFundingRate {
   markPrice: string;
   indexPrice: string;
   lastFundingRate: string;
+  latestSettledRate: string;
   nextFundingTime: number;
   lastPrice: string;
   bidPrice: string;
@@ -60,6 +61,12 @@ interface BinanceFundingRate {
 
 interface FundingHistoryItem {
   time: number;
+  fundingRate: string;
+}
+
+interface BinanceFundingHistoryResponseItem {
+  symbol: string;
+  fundingTime: number;
   fundingRate: string;
 }
 
@@ -177,6 +184,7 @@ function mapToExchangeFundingRate(rate: BinanceFundingRate): ExchangeFundingRate
   return {
     symbol: rate.symbol,
     fundingRate: parseFloat(rate.fundingRate),
+    lastSettlementRate: rate.latestSettledRate ? parseFloat(rate.latestSettledRate) : Number.NaN,
     markPrice: parseFloat(rate.markPrice),
     lastPrice: parseFloat(rate.lastPrice || rate.markPrice),
     change24h: parseFloat(rate.priceChangePercent),
@@ -218,8 +226,6 @@ function BinanceChartWrapper({ selectedCoin, interval, candles, intervalFundingR
 // ==================== Main Component ====================
 
 export default function BinanceFundingMonitor() {
-  const [fundingRates, setFundingRates] = useState<BinanceFundingRate[]>([]);
-
   // Async fetch openInterest
   const fetchOpenInterestAsync = useCallback(async (
     premiumMap: Map<string, PremiumIndex>,
@@ -260,6 +266,36 @@ export default function BinanceFundingMonitor() {
     return openInterestMap;
   }, []);
 
+  const fetchLatestSettledRatesBulk = useCallback(async (): Promise<Map<string, string>> => {
+    const response = await fetch("https://fapi.binance.com/fapi/v1/fundingRate?limit=1000");
+    if (!response.ok) {
+      throw new Error(`Funding history API failed: ${response.status}`);
+    }
+
+    const data: BinanceFundingHistoryResponseItem[] = await response.json();
+    if (!Array.isArray(data)) {
+      return new Map<string, string>();
+    }
+
+    const latestBySymbol = new Map<string, { fundingTime: number; fundingRate: string }>();
+    for (const item of data) {
+      if (!item.symbol?.endsWith("USDT")) continue;
+      if (DELISTED_SYMBOLS.has(item.symbol)) continue;
+
+      const existing = latestBySymbol.get(item.symbol);
+      if (!existing || item.fundingTime > existing.fundingTime) {
+        latestBySymbol.set(item.symbol, {
+          fundingTime: item.fundingTime,
+          fundingRate: item.fundingRate,
+        });
+      }
+    }
+
+    return new Map(
+      Array.from(latestBySymbol.entries()).map(([symbol, value]) => [symbol, value.fundingRate]),
+    );
+  }, []);
+
   // Fetch rates with Binance-specific logic
   const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
     const tickersRes = await fetch("https://fapi.binance.com/fapi/v1/ticker/24hr");
@@ -283,6 +319,11 @@ export default function BinanceFundingMonitor() {
     const fundingInfoMap = new Map(fundingInfos.map((f) => [f.symbol, f]));
     const bookTickerMap = new Map(bookTickers.map((b) => [b.symbol, b]));
 
+    const [openInterestMap, latestSettledRateMap] = await Promise.all([
+      fetchOpenInterestAsync(premiumMap),
+      fetchLatestSettledRatesBulk().catch(() => new Map<string, string>()),
+    ]);
+
     const rates: BinanceFundingRate[] = [];
     for (const [symbol, premium] of premiumMap) {
       if (!symbol.endsWith("USDT")) continue;
@@ -293,13 +334,13 @@ export default function BinanceFundingMonitor() {
       const fundingInterval = fundingInfo?.fundingIntervalHours ? fundingInfo.fundingIntervalHours * 3600 : 8 * 60 * 60;
       const bookTicker = bookTickerMap.get(symbol);
       const quoteVolume = parseFloat(ticker?.quoteVolume || "0");
-
       rates.push({
         symbol,
         fundingRate: premium.lastFundingRate || "0",
         markPrice: premium.markPrice || "0",
         indexPrice: premium.indexPrice || "0",
         lastFundingRate: premium.lastFundingRate || "0",
+        latestSettledRate: latestSettledRateMap.get(symbol) || "",
         nextFundingTime: premium.nextFundingTime || 0,
         lastPrice: premium.lastPrice || premium.markPrice || "0",
         bidPrice: bookTicker?.bidPrice || "0",
@@ -312,8 +353,6 @@ export default function BinanceFundingMonitor() {
         assetCategory: getAssetCategory(symbol),
       });
     }
-
-    const openInterestMap = await fetchOpenInterestAsync(premiumMap);
 
     const ratesWithRealOI = rates.map((rate) => {
       const oiValue = openInterestMap.get(rate.symbol);
@@ -329,9 +368,8 @@ export default function BinanceFundingMonitor() {
       return rate;
     });
 
-    setFundingRates(ratesWithRealOI);
     return ratesWithRealOI.map(mapToExchangeFundingRate);
-  }, [fetchOpenInterestAsync]);
+  }, [fetchOpenInterestAsync, fetchLatestSettledRatesBulk]);
 
   // Fetch detail data
   const fetchDetailData = useCallback(

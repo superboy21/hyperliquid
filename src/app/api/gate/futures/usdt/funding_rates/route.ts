@@ -6,30 +6,34 @@ const GATE_API_URLS = [
   "https://fx-api.gateio.ws/api/v4",
 ];
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const contract = searchParams.get("contract");
-  const interval = searchParams.get("interval") || "1d";
-  const limit = searchParams.get("limit") || "30";
+interface BatchFundingRatesRequest {
+  contracts: string[];
+}
 
-  if (!contract) {
-    return NextResponse.json(
-      { error: "contract parameter is required" },
-      { status: 400 }
-    );
+export async function POST(request: NextRequest) {
+  let body: BatchFundingRatesRequest;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "invalid json body" }, { status: 400 });
+  }
+
+  if (!Array.isArray(body.contracts) || body.contracts.length === 0) {
+    return NextResponse.json({ error: "contracts is required" }, { status: 400 });
   }
 
   try {
     const data = await Promise.any(
       GATE_API_URLS.map(async (baseUrl) => {
-        const url = `${baseUrl}/futures/usdt/candlesticks?contract=${contract}&interval=${interval}&limit=${limit}`;
-        const response = await fetch(url, {
-          method: "GET",
+        const response = await fetch(`${baseUrl}/futures/usdt/funding_rates`, {
+          method: "POST",
           headers: {
             "Content-Type": "application/json",
             Accept: "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
           },
+          body: JSON.stringify(body),
           signal: AbortSignal.timeout(5000),
         });
 
@@ -44,14 +48,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(data);
   } catch (error) {
     const message = error instanceof AggregateError
-      ? error.errors?.[0]?.message || "Failed to fetch candlesticks"
+      ? error.errors?.[0]?.message || "Failed to fetch batch funding rates"
       : error instanceof Error
         ? error.message
-        : "Failed to fetch candlesticks";
+        : "Failed to fetch batch funding rates";
 
-    return NextResponse.json(
-      { error: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

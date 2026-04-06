@@ -9,18 +9,15 @@ const BINANCE_API_BASE = "https://fapi.binance.com";
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const endpoint = searchParams.get("endpoint") || "premiumIndex";
-  const symbol = searchParams.get("symbol");
-  const limit = searchParams.get("limit");
 
   try {
     let url = `${BINANCE_API_BASE}/fapi/v1/${endpoint}`;
     const params = new URLSearchParams();
 
-    if (symbol) {
-      params.append("symbol", symbol);
-    }
-    if (limit) {
-      params.append("limit", limit);
+    for (const [key, value] of searchParams.entries()) {
+      if (key !== "endpoint") {
+        params.append(key, value);
+      }
     }
 
     if (params.toString()) {

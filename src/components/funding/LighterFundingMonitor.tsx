@@ -143,6 +143,7 @@ function mapToExchangeFundingRate(rate: LighterFundingRate): ExchangeFundingRate
   return {
     symbol: rate.symbol,
     fundingRate: parseFloat(rate.fundingRate),
+    lastSettlementRate: parseFloat(rate.fundingRate),
     markPrice: parseFloat(rate.markPrice),
     lastPrice: parseFloat(rate.lastPrice || rate.markPrice),
     change24h: parseFloat(rate.priceChangePercent || "0"),

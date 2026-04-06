@@ -24,9 +24,11 @@
 - **Lighter**: 支持 160+ 永续合约，包括股票、ETF、外汇、商品、加密货币
 
 ### 📈 实时数据监控
-- **自动刷新**: 每 60 秒自动更新数据
+- **自动刷新**: 每 300 秒自动更新数据
 - **多维度排序**: 资金费率、价格、涨跌幅、成交量、持仓价值
 - **智能筛选**: 按资产类别（Crypto、股票、ETF、外汇、商品等）快速筛选
+- **最新结算费率**: 支持 Hyperliquid、Binance、Gate.io 的真实已结算费率展示
+- **保守请求策略**: Hyperliquid 采用按需加载（首屏前 10 + 点击 ±3），避免 API 限流
 
 ### 🎯 专业图表分析
 - **K 线图表**: 支持日线、4小时线、1小时线切换
@@ -90,6 +92,8 @@
 - **历史波动率**: 基于对数收益率计算的年化波动率
 - **资金收益率**: 基于中位数价格和平均费率计算的年化收益率
 - **useMemo 优化**: 所有派生数据使用 `useMemo` 缓存，避免不必要的重算
+- **保守请求策略**: Hyperliquid 采用按需加载最新结算费率，避免 API 限流
+- **智能 hydration**: Gate.io 支持滚动按需加载，Binance/Hyperliquid 采用 batch/按需策略
 
 ---
 
@@ -183,6 +187,8 @@ src/
 | 实时资金费率 | ✅ |
 | 历史数据 | ✅ |
 | K 线图表 | ✅ |
+| 最新结算费率 | ✅ |
+| 保守请求策略 | ✅ |
 
 ### Gate.io
 | 功能 | 支持状态 |
@@ -255,11 +261,18 @@ NEXT_PUBLIC_GATE_API=https://api.gate.io/api/v4
 
 ### 数据刷新间隔
 
-默认每 60 秒自动刷新数据。可在 `ExchangeFundingMonitor.tsx` 中修改：
+默认每 300 秒自动刷新数据。可在 `ExchangeFundingMonitor.tsx` 中修改：
 
 ```typescript
-const interval = setInterval(handleFetchRates, 60000); // 60 秒
+const interval = setInterval(handleFetchRates, 300000); // 300 秒
 ```
+
+### Hyperliquid 保守请求策略
+
+Hyperliquid 页面采用按需加载最新结算费率策略：
+- **初始加载**: 仅获取前 10 个交易对
+- **点击行**: 加载当前点击交易对及其上下各 3 个交易对
+- **其他情况**: 不自动获取最新结算费率，避免 API 限流
 
 ---
 
@@ -331,6 +344,19 @@ const interval = setInterval(handleFetchRates, 60000); // 60 秒
 ---
 
 ## 📝 更新日志
+
+### v2026.04.06-2 (2026-04-06)
+- ✨ **最新结算费率修复**: Hyperliquid 改用 `fundingHistory` API 获取真实已结算费率，不再错误复用预测费率
+- ✨ **保守请求策略**: Hyperliquid 采用按需加载最新结算费率（首屏前 10 + 点击 ±3），避免 API 限流
+- ✨ **智能 hydration**: Gate.io 支持滚动按需加载 + batch 请求（10 个/组）
+- ✨ **Binance 统计卡恢复**: 修复 7 天/30 天统计卡数据缺失问题
+- ✨ **重试/退避机制**: Hyperliquid `/info` 请求增加轻量重试与指数退避
+- ✨ **请求合并**: 刷新主列表时保留已加载的 `lastSettlementRate`，避免重复 hydration
+- 🐛 Gate.io 页面加载优化：前 50 初始化 + 滚动按需加载，不再全表加载
+- 🐛 最新结算费率显示优化：无法获取时显示空白，不再显示错误值
+- 🔄 自动刷新间隔统一改为 300 秒
+- ♻️ 新增 `hydrationPolicy` 配置：支持各交易所自定义 hydration 策略
+- ♻️ 新增 `getLatestSettledFundingRate()`：Hyperliquid 专用轻量结算费率获取函数
 
 ### v2026.04.06 (2026-04-06)
 - ✨ **跨交易所搜索页**: 输入关键字搜索 Hyperliquid、Gate.io、Binance、Lighter 四个交易所的交易对
