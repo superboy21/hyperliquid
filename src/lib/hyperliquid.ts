@@ -1,3 +1,5 @@
+import { isAbortLikeError, sleep, throwIfAborted } from "./utils/abort";
+
 export interface FundingRate {
   coin: string;
   fundingRate: string;
@@ -71,13 +73,15 @@ interface AssetContext {
   dayBaseVlm: string;
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchHyperliquidInfo<T>(body: Record<string, unknown>, maxAttempts: number = 3): Promise<T | null> {
+async function fetchHyperliquidInfo<T>(
+  body: Record<string, unknown>,
+  maxAttempts: number = 3,
+  signal?: AbortSignal,
+): Promise<T | null> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
+      throwIfAborted(signal);
+
       const response = await fetch("https://api.hyperliquid.xyz/info", {
         method: "POST",
         headers: {
@@ -86,6 +90,7 @@ async function fetchHyperliquidInfo<T>(body: Record<string, unknown>, maxAttempt
           Referer: "https://app.hyperliquid.xyz/",
         },
         body: JSON.stringify(body),
+        signal,
       });
 
       if (response.ok) {
@@ -93,18 +98,22 @@ async function fetchHyperliquidInfo<T>(body: Record<string, unknown>, maxAttempt
       }
 
       if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts - 1) {
-        await sleep(250 * (attempt + 1));
+        await sleep(250 * (attempt + 1), signal);
         continue;
       }
 
       return null;
     } catch (error) {
+      if (isAbortLikeError(error) || signal?.aborted) {
+        return null;
+      }
+
       if (attempt >= maxAttempts - 1) {
         console.error("Error fetching Hyperliquid info:", error);
         return null;
       }
 
-      await sleep(250 * (attempt + 1));
+      await sleep(250 * (attempt + 1), signal);
     }
   }
 
@@ -329,8 +338,14 @@ export async function getAllFundingRatesWithHistory(): Promise<FundingRate[]> {
   }
 }
 
-export async function getFundingHistory(coin: string, startTimeSeconds?: number): Promise<FundingHistoryItem[]> {
+export async function getFundingHistory(
+  coin: string,
+  startTimeSeconds?: number,
+  signal?: AbortSignal,
+): Promise<FundingHistoryItem[]> {
   try {
+    throwIfAborted(signal);
+
     const body: Record<string, unknown> = {
       type: "fundingHistory",
       coin,
@@ -346,9 +361,10 @@ export async function getFundingHistory(coin: string, startTimeSeconds?: number)
         "Content-Type": "application/json",
         Origin: "https://app.hyperliquid.xyz",
         Referer: "https://app.hyperliquid.xyz/",
-      },
-      body: JSON.stringify(body),
-    });
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
 
     if (!response.ok) {
       return [];
@@ -368,12 +384,20 @@ export async function getFundingHistory(coin: string, startTimeSeconds?: number)
       indexPrice: item.indexPrice || "0",
     }));
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return [];
+    }
+
     console.error(`[API] Error fetching funding history for ${coin}:`, error);
     return [];
   }
 }
 
-async function fetchLatestSettledFundingRateInWindow(coin: string, lookbackHours: number): Promise<number> {
+async function fetchLatestSettledFundingRateInWindow(
+  coin: string,
+  lookbackHours: number,
+  signal?: AbortSignal,
+): Promise<number> {
   const endTime = Date.now();
   const startTime = endTime - lookbackHours * 60 * 60 * 1000;
 
@@ -385,6 +409,7 @@ async function fetchLatestSettledFundingRateInWindow(coin: string, lookbackHours
       endTime,
     },
     2,
+    signal,
   );
 
   if (!Array.isArray(data) || data.length === 0) {
@@ -396,9 +421,13 @@ async function fetchLatestSettledFundingRateInWindow(coin: string, lookbackHours
   return Number.isFinite(latestRate) ? latestRate : Number.NaN;
 }
 
-export async function getLatestSettledFundingRate(coin: string, lookbackHours: number = 12): Promise<number> {
+export async function getLatestSettledFundingRate(
+  coin: string,
+  lookbackHours: number = 12,
+  signal?: AbortSignal,
+): Promise<number> {
   try {
-    const latestRate = await fetchLatestSettledFundingRateInWindow(coin, lookbackHours);
+    const latestRate = await fetchLatestSettledFundingRateInWindow(coin, lookbackHours, signal);
     if (Number.isFinite(latestRate)) {
       return latestRate;
     }
@@ -407,21 +436,29 @@ export async function getLatestSettledFundingRate(coin: string, lookbackHours: n
       return Number.NaN;
     }
 
-    return await fetchLatestSettledFundingRateInWindow(coin, 72);
+    return await fetchLatestSettledFundingRateInWindow(coin, 72, signal);
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return Number.NaN;
+    }
+
     console.error(`[API] Error fetching latest settled funding for ${coin}:`, error);
     return Number.NaN;
   }
 }
 
-export async function getFundingHistoryForDays(coin: string, days: number = 30): Promise<FundingHistoryItem[]> {
+export async function getFundingHistoryForDays(
+  coin: string,
+  days: number = 30,
+  signal?: AbortSignal,
+): Promise<FundingHistoryItem[]> {
   const endTimeSeconds = Math.floor(Date.now() / 1000);
   const midpointSeconds = endTimeSeconds - 15 * 24 * 60 * 60;
   const startTimeSeconds = endTimeSeconds - days * 24 * 60 * 60;
 
   const [olderHistory, recentHistory] = await Promise.all([
-    getFundingHistory(coin, startTimeSeconds),
-    getFundingHistory(coin, midpointSeconds),
+    getFundingHistory(coin, startTimeSeconds, signal),
+    getFundingHistory(coin, midpointSeconds, signal),
   ]);
 
   const uniqueHistory = Array.from(
@@ -438,8 +475,11 @@ export async function getCandleSnapshot(
   coin: string,
   interval: ChartInterval = "1d",
   days: number = 30,
+  signal?: AbortSignal,
 ): Promise<CandleSnapshotItem[]> {
   try {
+    throwIfAborted(signal);
+
     const endTime = Date.now();
     const startTime = endTime - days * 24 * 60 * 60 * 1000;
 
@@ -455,6 +495,7 @@ export async function getCandleSnapshot(
           endTime,
         },
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -479,6 +520,10 @@ export async function getCandleSnapshot(
       trades: item.n,
     }));
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return [];
+    }
+
     console.error(`[API] Error fetching candles for ${coin}:`, error);
     return [];
   }

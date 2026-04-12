@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAbortLikeError } from "@/lib/utils/abort";
 
 const LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai";
 
@@ -25,14 +26,12 @@ export async function GET(request: NextRequest) {
       url += `?${params.toString()}`;
     }
 
-    console.log(`[Lighter API] Fetching: ${url}`);
-
     const response = await fetch(url, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
       },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
       cache: "no-store",
     });
 
@@ -46,9 +45,15 @@ export async function GET(request: NextRequest) {
     }
 
     const data = await response.json();
-    console.log(`[Lighter API] Success: ${endpoint}`);
     return NextResponse.json(data);
   } catch (error) {
+    if (request.signal.aborted || isAbortLikeError(error)) {
+      return NextResponse.json(
+        { error: "Request cancelled" },
+        { status: 499 }
+      );
+    }
+
     console.error("[Lighter API] Error proxying request:", error);
     return NextResponse.json(
       { error: "Failed to proxy request" },

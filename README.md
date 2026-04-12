@@ -347,6 +347,13 @@ Hyperliquid 页面采用按需加载最新结算费率策略：
 
 ## 📝 更新日志
 
+### v2026.04.14 (2026-04-14)
+- ✨ **搜索页 detail 请求真正可取消**: 将 `AbortSignal` 从搜索页 UI 层传递到 Hyperliquid/Gate/Binance/Lighter 底层网络请求，旧请求不再只是"不回写 UI"，而是底层也会及时中止
+- ✨ **代理路由取消传播**: Gate 和 Lighter 的 Next API 路由同时监听客户端 abort 信号，客户端断开时服务端尽快结束，避免空等超时
+- ✨ **预期内取消日志降噪**: 检测 abort-like 错误并在日志级别降为静默/可选项，而非全部 `console.error`，减少控制台噪音
+- ✨ **Lighter 搜索优化**: 优先复用已有的 `marketId`，减少一次额外的 funding-rates 查询
+- ✨ **搜索页 Binance 最新结算费率按最大 fundingTime 取最新**: 修复与 Binance 单页口径一致（之前 limit>1 返回升序，取第一条约等于最旧）
+
 ### v2026.04.12 (2026-04-12)
 - ✨ **Hyperliquid / Lighter 最新结算费率加载优化**: 首屏改为 `selected + 可见行` 按需 hydration，总上限 `7`，减少不必要的 settlement 请求
 - ✨ **点击预取收紧**: Hyperliquid / Lighter 的 latest settlement 预取范围调整为 `±3`

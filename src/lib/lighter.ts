@@ -1,3 +1,5 @@
+import { isAbortLikeError, throwIfAborted } from "./utils/abort";
+
 // Lighter.xyz API 资金费率监控模块
 // API 文档: https://apidocs.lighter.xyz
 
@@ -237,9 +239,10 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 
 export async function getLatestSettledFundingRate(
   marketId: number,
-  lookbackHours: number = 6
+  lookbackHours: number = 6,
+  signal?: AbortSignal,
 ): Promise<number> {
-  const latestRate = await fetchLatestSettledFundingRateInWindow(marketId, lookbackHours);
+  const latestRate = await fetchLatestSettledFundingRateInWindow(marketId, lookbackHours, signal);
   if (Number.isFinite(latestRate)) {
     return latestRate;
   }
@@ -248,7 +251,7 @@ export async function getLatestSettledFundingRate(
     return Number.NaN;
   }
 
-  return fetchLatestSettledFundingRateInWindow(marketId, 24);
+  return fetchLatestSettledFundingRateInWindow(marketId, 24, signal);
 }
 /**
  * 获取指定市场的历史资金费率
@@ -257,19 +260,23 @@ export async function getLatestSettledFundingRate(
  */
 export async function getFundingHistory(
   marketId: number,
-  limit: number = 100
+  limit: number = 100,
+  signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
   try {
+    throwIfAborted(signal);
+
     const now = Math.floor(Date.now() / 1000);
     const startTime = now - (limit * LIGHTER_FUNDING_INTERVAL_SECONDS);
     
     const response = await fetch(
       `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${limit}`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-      }
+        {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          signal,
+        }
     );
 
     if (!response.ok) {
@@ -293,6 +300,10 @@ export async function getFundingHistory(
       };
     });
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return [];
+    }
+
     console.error(`Error fetching funding history for market ${marketId}:`, error);
     return [];
   }
@@ -307,12 +318,15 @@ export async function getFundingHistory(
 async function fetchLatestSettledFundingRateInWindow(
   marketId: number,
   lookbackHours: number,
+  signal?: AbortSignal,
 ): Promise<number> {
   // 限制最大回看时间，避免请求过多数据
   const boundedHours = Math.min(Math.max(lookbackHours, 1), 168); // 1-168 小时
   const countBack = boundedHours;
 
   try {
+  throwIfAborted(signal);
+
   const now = Math.floor(Date.now() / 1000);
   const startTime = now - (boundedHours * LIGHTER_FUNDING_INTERVAL_SECONDS);
 
@@ -322,6 +336,7 @@ async function fetchLatestSettledFundingRateInWindow(
       method: "GET",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
+      signal,
     }
   );
 
@@ -358,6 +373,10 @@ async function fetchLatestSettledFundingRateInWindow(
 
     return normalizedRate;
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return Number.NaN;
+    }
+
     console.error(`Error fetching latest settled funding rate for market ${marketId}:`, error);
     return Number.NaN;
   }
@@ -368,10 +387,11 @@ async function fetchLatestSettledFundingRateInWindow(
  */
 export async function getFundingHistoryForDays(
   marketId: number,
-  days: number = 30
+  days: number = 30,
+  signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
   const limit = Math.min(days * 24, 1000); // 每天24小时
-  return getFundingHistory(marketId, limit);
+  return getFundingHistory(marketId, limit, signal);
 }
 
 /**
@@ -380,9 +400,12 @@ export async function getFundingHistoryForDays(
 export async function getCandleSnapshot(
   marketId: number,
   interval: ChartInterval,
-  limit: number = 30
+  limit: number = 30,
+  signal?: AbortSignal,
 ): Promise<CandleSnapshotItem[]> {
   try {
+    throwIfAborted(signal);
+
     const now = Date.now();
     let startTime: number;
     
@@ -406,6 +429,7 @@ export async function getCandleSnapshot(
         method: "GET",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
+        signal,
       }
     );
 
@@ -428,6 +452,10 @@ export async function getCandleSnapshot(
       volume: candle.v,
     }));
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return [];
+    }
+
     console.error(`Error fetching candles for market ${marketId}:`, error);
     return [];
   }

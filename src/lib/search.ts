@@ -26,6 +26,7 @@ import {
   getFundingHistoryForDays as lighterGetFundingHistoryForDays,
   getCandleSnapshot as lighterGetCandleSnapshot,
 } from "./lighter";
+import { isAbortLikeError } from "./utils/abort";
 
 // ==================== Interfaces ====================
 
@@ -609,7 +610,7 @@ export async function fetchDetailForSymbol(
     case "Binance":
       return fetchBinanceDetail(rate.symbol, rate.bestBid, rate.bestAsk, signal);
     case "Lighter":
-      return fetchLighterDetail(rate.symbol, rate.bestBid, rate.bestAsk, signal);
+      return fetchLighterDetail(rate.marketId, rate.symbol, rate.bestBid, rate.bestAsk, signal);
   }
 }
 
@@ -622,9 +623,9 @@ async function fetchHyperliquidDetail(
   signal?: AbortSignal,
 ): Promise<DetailResult> {
   const [candles, fundingHistory, latestSettledRate] = await Promise.all([
-    hlGetCandleSnapshot(symbol, "1d", 30),
-    hlGetFundingHistoryForDays(symbol, 30),
-    hlGetLatestSettledFundingRate(symbol),
+    hlGetCandleSnapshot(symbol, "1d", 30, signal),
+    hlGetFundingHistoryForDays(symbol, 30, signal),
+    hlGetLatestSettledFundingRate(symbol, 12, signal),
   ]);
 
   if (signal?.aborted) {
@@ -655,8 +656,8 @@ async function fetchGateioDetail(
   signal?: AbortSignal,
 ): Promise<DetailResult> {
   const [candles, fundingHistory] = await Promise.all([
-    gateGetCandleSnapshot(symbol, "1d", 30),
-    gateGetFundingHistoryForDays(symbol, 30, fundingIntervalSeconds),
+    gateGetCandleSnapshot(symbol, "1d", 30, signal),
+    gateGetFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal),
   ]);
 
   // Get latest settled rate from the first entry in funding history (same as GateFundingMonitor hydration)
@@ -689,8 +690,8 @@ async function fetchBinanceDetail(
   signal?: AbortSignal,
 ): Promise<DetailResult> {
   const [candleRes, fundingRes] = await Promise.allSettled([
-    fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=30`),
-    fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1000`),
+    fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=30`, { signal }),
+    fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1000`, { signal }),
   ]);
 
   if (signal?.aborted) {
@@ -752,26 +753,32 @@ async function fetchBinanceDetail(
 // ==================== Lighter Detail ====================
 
 async function fetchLighterDetail(
+  marketId: number | undefined,
   symbol: string,
   bestBid?: number,
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<DetailResult> {
-  let marketId: number | null = null;
-  try {
-    const fundingRes = await fetch("/api/lighter?endpoint=funding-rates");
-    if (fundingRes.ok) {
-      const fundingData = await fundingRes.json();
-      const entry = (fundingData.funding_rates || []).find(
-        (e: LighterFundingEntry) => e.exchange === "lighter" && e.symbol === symbol,
-      );
-      if (entry) marketId = entry.market_id;
+  let resolvedMarketId = marketId ?? null;
+
+  if (resolvedMarketId === null) {
+    try {
+      const fundingRes = await fetch("/api/lighter?endpoint=funding-rates", { signal });
+      if (fundingRes.ok) {
+        const fundingData = await fundingRes.json();
+        const entry = (fundingData.funding_rates || []).find(
+          (e: LighterFundingEntry) => e.exchange === "lighter" && e.symbol === symbol,
+        );
+        if (entry) resolvedMarketId = entry.market_id;
+      }
+    } catch (error) {
+      if (!(isAbortLikeError(error) || signal?.aborted)) {
+        console.warn(`[Search] Failed to resolve Lighter marketId for ${symbol}:`, error);
+      }
     }
-  } catch {
-    // Continue without marketId
   }
 
-  if (marketId === null) {
+  if (resolvedMarketId === null) {
     return {
       lastSettlementRate: null,
       avgFundingRate1d: null,
@@ -787,13 +794,15 @@ async function fetchLighterDetail(
 
   const [candlesRes, fundingRes, orderBookRes, latestSettledRate] = await Promise.allSettled([
     fetch(
-      `/api/lighter?endpoint=candles&market_id=${marketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`,
+      `/api/lighter?endpoint=candles&market_id=${resolvedMarketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`,
+      { signal },
     ),
     fetch(
-      `/api/lighter?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`,
+      `/api/lighter?endpoint=fundings&market_id=${resolvedMarketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`,
+      { signal },
     ),
-    fetch(`/api/lighter?endpoint=orderBookOrders&market_id=${marketId}&limit=1`),
-    lighterGetLatestSettledFundingRate(marketId),
+    fetch(`/api/lighter?endpoint=orderBookOrders&market_id=${resolvedMarketId}&limit=1`, { signal }),
+    lighterGetLatestSettledFundingRate(resolvedMarketId, 6, signal),
   ]);
 
   if (signal?.aborted) {
@@ -894,7 +903,11 @@ export async function batchFetchDetails(
 
       onUpdate(rate, detail);
     } catch (error) {
-      console.error(`[Search] Detail fetch failed for ${rate.symbol}:`, error);
+      if (isAbortLikeError(error) || signal?.aborted) {
+        return;
+      }
+
+      console.warn(`[Search] Detail fetch failed for ${rate.symbol}:`, error);
       if (!signal?.aborted) {
         onUpdate(rate, {
           lastSettlementRate: null,

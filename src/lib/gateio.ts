@@ -1,3 +1,5 @@
+import { isAbortLikeError, throwIfAborted } from "./utils/abort";
+
 // Gate.io API 资金费率监控模块
 // API 文档: https://www.gate.com/docs/developers/apiv4/en/
 
@@ -173,15 +175,19 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
  */
 export async function getFundingHistory(
   contract: string,
-  limit: number = 100
+  limit: number = 100,
+  signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
   try {
+    throwIfAborted(signal);
+
     const response = await fetch(
       `${API_PROXY_BASE}/futures/${SETTLE}/funding_rate?contract=${contract}&limit=${limit}`,
       {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
+        signal,
       }
     );
 
@@ -199,6 +205,10 @@ export async function getFundingHistory(
       fundingRate: item.r,
     }));
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return [];
+    }
+
     console.error(`Error fetching funding history for ${contract}:`, error);
     return [];
   }
@@ -262,12 +272,13 @@ export async function getBatchFundingHistory(
 export async function getFundingHistoryForDays(
   coin: string,
   days: number = 30,
-  fundingIntervalSeconds: number = 28800
+  fundingIntervalSeconds: number = 28800,
+  signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
   const contract = toContractName(coin);
   const settlementsPerDay = 86400 / fundingIntervalSeconds;
   const limit = Math.min(Math.ceil(days * settlementsPerDay), 1000);
-  return getFundingHistory(contract, limit);
+  return getFundingHistory(contract, limit, signal);
 }
 
 /**
@@ -279,19 +290,23 @@ export async function getFundingHistoryForDays(
 export async function getCandleSnapshot(
   coin: string,
   interval: ChartInterval = "1d",
-  limit: number = 30
+  limit: number = 30,
+  signal?: AbortSignal,
 ): Promise<CandleSnapshotItem[]> {
   try {
+    throwIfAborted(signal);
+
     const contract = toContractName(coin);
     const intervalParam = convertInterval(interval);
 
     const response = await fetch(
       `${API_PROXY_BASE}/futures/${SETTLE}/candlesticks?contract=${contract}&interval=${intervalParam}&limit=${limit}`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-      }
+        {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          signal,
+        }
     );
 
     if (!response.ok) {
@@ -318,6 +333,10 @@ export async function getCandleSnapshot(
       };
     });
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return [];
+    }
+
     console.error(`Error fetching candles for ${coin}:`, error);
     return [];
   }
