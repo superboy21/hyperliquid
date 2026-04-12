@@ -115,6 +115,58 @@ export interface NormalizedIntervalFundingRate {
   sampleCount: number;            // 样本数量
 }
 
+export type TransportMode = "native" | "ccxt";
+
+export interface CanonicalFundingRateRow {
+  exchange: ExchangeId;
+  transportMode: TransportMode;
+  symbol: string;
+  rawSymbol: string;
+  marketKey: string;
+  settlementHydrationKey?: string;
+  fundingRate: number;
+  predictedFundingRate?: number | null;
+  lastSettlementRate?: number | null;
+  markPrice: number;
+  indexPrice?: number | null;
+  lastPrice: number;
+  change24h: number;
+  quoteVolume: number;
+  openInterest: number;
+  notionalValue: number;
+  fundingIntervalSeconds: number;
+  assetCategory: string;
+  bestBid?: number | null;
+  bestAsk?: number | null;
+}
+
+export interface CanonicalFundingHistoryPoint {
+  timestamp: number;
+  fundingRate: number;
+}
+
+export interface CanonicalCandlePoint {
+  openTime: number;
+  closeTime: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
+export interface CanonicalFundingDetail {
+  exchange: ExchangeId;
+  transportMode: TransportMode;
+  symbol: string;
+  rawSymbol: string;
+  marketKey: string;
+  fundingHistory: CanonicalFundingHistoryPoint[];
+  candles: CanonicalCandlePoint[];
+  lastSettlementRate: number | null;
+  bidAskSpread: number | null;
+}
+
 // ==================== 图表周期 ====================
 
 export type ChartInterval = "1d" | "4h" | "1h";

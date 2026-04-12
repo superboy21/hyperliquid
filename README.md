@@ -347,6 +347,19 @@ Hyperliquid 页面采用按需加载最新结算费率策略：
 
 ## 📝 更新日志
 
+### v2026.04.14 (2026-04-13)
+- ✨ CCXT 迁移基础设施：新增 canonical adapter contract 和 transport flags 系统
+- ✨ 新增 Binance CCXT 路径：`/api/binance/ccxt`，默认启用并保留 native fallback
+- ✨ 新增 Gate CCXT 路径：`/api/gate/futures/usdt/ccxt`，默认 native 但支持 transport 切换
+- ✨ 新增 `src/lib/adapters/binance.ts` 和 `src/lib/adapters/gate.ts` 统一适配器层
+- ✨ 新增 `src/lib/exchange-flags.ts` transport 模式控制（环境变量 `NEXT_PUBLIC_*_TRANSPORT_MODE`）
+- ✨ 新增 `src/lib/types.ts` CanonicalFundingRateRow 等统一数据类型
+- ✨ 新增 `src/lib/binance-metadata.ts` Binance 资产分类和下架资产定义
+- ✨ 优化 Hyperliquid search detail：移除冗余的 latest-settlement API 调用，现在从 30d history 推导
+- 🐛 修复 Gate.io batch funding history 500 错误：改用服务端 fan-out 替代损坏的上游 batch endpoint
+- 🐛 修复 Binance native 路径丢失 openInterest 和 notionalValue 的问题
+- 🐛 修复 typecheck 脚本依赖 `.next/types` 的问题，新增 `tsconfig.typecheck.json`
+
 ### v2026.04.13 (2026-04-13)
 - ✨ **搜索页 detail 请求真正可取消**: 将 `AbortSignal` 从搜索页 UI 层传递到 Hyperliquid/Gate/Binance/Lighter 底层网络请求，旧请求不再只是"不回写 UI"，而是底层也会及时中止
 - ✨ **代理路由取消传播**: Gate 和 Lighter 的 Next API 路由同时监听客户端 abort 信号，客户端断开时服务端尽快结束，避免空等超时

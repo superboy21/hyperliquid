@@ -7,7 +7,6 @@ import {
   getCandleSnapshot as hlGetCandleSnapshot,
   getFundingHistoryForDays as hlGetFundingHistoryForDays,
   getAverageFundingRatesByInterval as hlGetAverageFundingRatesByInterval,
-  getLatestSettledFundingRate as hlGetLatestSettledFundingRate,
   type FundingHistoryItem as HlFundingHistoryItem,
   type CandleSnapshotItem as HlCandleSnapshotItem,
 } from "./hyperliquid";
@@ -27,6 +26,15 @@ import {
   getCandleSnapshot as lighterGetCandleSnapshot,
 } from "./lighter";
 import { isAbortLikeError } from "./utils/abort";
+import {
+  fetchBinanceCanonicalDetail,
+  fetchBinanceSearchRates,
+  mapDetailToMetrics as mapBinanceDetailToMetrics,
+} from "@/lib/adapters/binance";
+import {
+  fetchGateCanonicalDetail,
+  fetchGateSearchRates,
+} from "@/lib/adapters/gate";
 
 // ==================== Interfaces ====================
 
@@ -65,55 +73,6 @@ interface DetailResult {
   bidAskSpread: number | null;
   avgFundingRate7d: number | null;
   avgFundingRate30d: number | null;
-}
-
-// ==================== Binance API Types ====================
-
-interface BinancePremiumIndex {
-  symbol: string;
-  markPrice: string;
-  indexPrice: string;
-  lastFundingRate: string;
-  nextFundingTime: number;
-  lastPrice: string;
-}
-
-interface BinanceTicker24hr {
-  symbol: string;
-  priceChangePercent: string;
-  quoteVolume: string;
-  lastPrice: string;
-}
-
-interface BinanceFundingInfo {
-  symbol: string;
-  fundingIntervalHours: number;
-}
-
-interface BinanceBookTicker {
-  symbol: string;
-  bidPrice: string;
-  askPrice: string;
-}
-
-interface BinanceOpenInterestResponse {
-  openInterest: string;
-  symbol?: string;
-}
-
-interface BinanceKline {
-  openTime: number;
-  closeTime: number;
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  volume: string;
-}
-
-interface BinanceFundingHistoryItem {
-  fundingTime: number;
-  fundingRate: string;
 }
 
 // ==================== Lighter API Types ====================
@@ -173,45 +132,6 @@ function getLighterAssetCategory(symbol: string): string {
   if (LIGHTER_FX.includes(symbol)) return "FX";
   if (LIGHTER_COMMODITIES.includes(symbol)) return "Commodities";
   return "Crypto";
-}
-
-// ==================== Binance Asset Categories ====================
-
-const BINANCE_DELISTED = new Set([
-  "1000WHYUSDT", "1000XUSDT", "42USDT", "AGIXUSDT", "AI16ZUSDT", "ALPACAUSDT", "ALPHAUSDT",
-  "AMBUSDT", "BADGERUSDT", "BAKEUSDT", "BALUSDT", "BDXNUSDT", "BIDUSDT", "BLZUSDT", "BNXUSDT",
-  "BONDUSDT", "BSWUSDT", "BTCSTUSDT", "CHESSUSDT", "COMBOUSDT", "COMMONUSDT", "CUDISUSDT",
-  "DARUSDT", "DEFIUSDT", "DFUSDT", "DGBUSDT", "DMCUSDT", "EOSUSDT", "EPTUSDT", "FISUSDT",
-  "FLMUSDT", "FRONTUSDT", "FTMUSDT", "FTTUSDT", "FXSUSDT", "GAIBUSDT", "GHSTUSDT", "GLMRUSDT",
-  "HIFIUSDT", "IDEXUSDT", "KDAUSDT", "KEYUSDT", "KLAYUSDT", "LEVERUSDT", "LINAUSDT", "LOKAUSDT",
-  "LOOMUSDT", "MATICUSDT", "MDTUSDT", "MEMEFIUSDT", "MILKUSDT", "MKRUSDT", "MYROUSDT",
-  "NEIROETHUSDT", "NKNUSDT", "NULSUSDT", "OBOLUSDT", "OCEANUSDT", "OMGUSDT", "OMNIUSDT",
-  "OMUSDT", "ORBSUSDT", "PERPUSDT", "PONKEUSDT", "PORT3USDT", "QUICKUSDT", "RADUSDT",
-  "RAYUSDT", "REEFUSDT", "REIUSDT", "RENUSDT", "RVVUSDT", "SCUSDT", "SKATEUSDT", "SLERFUSDT",
-  "SNTUSDT", "STMXUSDT", "STPTUSDT", "STRAXUSDT", "SWELLUSDT", "SXPUSDT", "TANSSIUSDT",
-  "TOKENUSDT", "TROYUSDT", "UNFIUSDT", "UXLINKUSDT", "VFYUSDT", "VIDTUSDT", "VOXELUSDT",
-  "WAVESUSDT", "XCNUSDT", "XEMUSDT", "YALAUSDT", "ZRCUSDT",
-  "A2ZUSDT", "FORTHUSDT", "HOOKUSDT", "LRCUSDT", "NTRNUSDT", "RDNTUSDT",
-]);
-
-const BINANCE_MAJORS = ["BTC", "ETH", "BNB", "SOL", "HYPE", "LINK", "XRP", "TRX", "ADA", "WLFI", "AAVE", "SKY", "DOGE", "BCH"];
-const BINANCE_METALS = ["XAU", "XAG", "XPT", "XPD", "COPPER", "PAXG", "XAUT"];
-const BINANCE_ENERGY = ["CL", "BZ", "NATGAS"];
-const BINANCE_STOCKS = [
-  "TSLA", "MSTR", "AMZN", "AAPL", "NVDA", "EWY", "EWJ", "QQQ", "SPY", "META", "GOOGL", "MSFT", "NFLX", "AMD", "INTC", "COIN",
-  "BABA", "TSM", "JPM", "V", "MA", "DIS", "PYPL", "UBER", "ABNB", "SOFI", "PLTR", "HOOD", "RIVN", "LCID", "NIO",
-  "XOM", "CRCL", "PFE", "JNJ", "UNH", "HD", "WMT", "COST", "TGT", "NKE", "SBUX", "MCD", "KO", "PEP",
-  "QQQX", "TQQQ", "SPXL", "SOXL", "TNA", "UVXY", "VIX", "TLT", "IEF", "LQD", "HYG", "EMB", "PAYP",
-  "MSTRX", "COINX", "NVDAX", "AAPLX", "GOOGLX", "ORCLX", "TQQQX", "PLTRX", "METAX", "AMZNX", "HOODX",
-];
-
-function getBinanceAssetCategory(symbol: string): string {
-  const base = symbol.replace("USDT", "").toUpperCase();
-  if (BINANCE_MAJORS.includes(base)) return "Majors";
-  if (BINANCE_METALS.includes(base)) return "Metals";
-  if (BINANCE_ENERGY.includes(base)) return "Energy";
-  if (BINANCE_STOCKS.includes(base)) return "Stocks";
-  return "Other Crypto";
 }
 
 // ==================== Interval Helpers ====================
@@ -393,126 +313,13 @@ async function fetchHyperliquidRates(): Promise<SearchExchangeRate[]> {
 // ==================== Gate.io Rates ====================
 
 async function fetchGateioRates(): Promise<SearchExchangeRate[]> {
-  const rates = await gateGetAllFundingRates();
-  return rates.map((r) => ({
-    exchange: "Gate.io" as const,
-    exchangeColor: "cyan",
-    symbol: r.coin,
-    rawSymbol: r.coin,
-    fundingRate: parseFloat(r.fundingRateIndicative || r.fundingRate),
-    markPrice: parseFloat(r.markPrice),
-    lastPrice: parseFloat(r.lastPrice),
-    change24h: parseFloat(r.change24h),
-    quoteVolume: parseFloat(r.dayVolume),
-    openInterest: parseFloat(r.openInterest),
-    notionalValue: parseFloat(r.notionalValue) || 0,
-    fundingInterval: r.fundingInterval || 28800,
-    assetCategory: r.assetCategory || "其他",
-    bestBid: r.bestBid ? parseFloat(r.bestBid) : undefined,
-    bestAsk: r.bestAsk ? parseFloat(r.bestAsk) : undefined,
-  }));
+  return fetchGateSearchRates();
 }
 
 // ==================== Binance Rates ====================
 
 async function fetchBinanceRates(): Promise<SearchExchangeRate[]> {
-  const [tickersRes, premiumRes, fundingInfoRes, bookTickerRes] = await Promise.allSettled([
-    fetch("https://fapi.binance.com/fapi/v1/ticker/24hr"),
-    fetch("https://fapi.binance.com/fapi/v1/premiumIndex"),
-    fetch("https://fapi.binance.com/fapi/v1/fundingInfo"),
-    fetch("https://fapi.binance.com/fapi/v1/ticker/bookTicker"),
-  ]);
-
-  if (tickersRes.status !== "fulfilled" || !tickersRes.value.ok) {
-    throw new Error("Binance ticker fetch failed");
-  }
-  if (premiumRes.status !== "fulfilled" || !premiumRes.value.ok) {
-    throw new Error("Binance premium fetch failed");
-  }
-
-  const tickers: BinanceTicker24hr[] = await tickersRes.value.json();
-  const premiums: BinancePremiumIndex[] = await premiumRes.value.json();
-
-  const fundingInfos: BinanceFundingInfo[] = fundingInfoRes.status === "fulfilled" && fundingInfoRes.value.ok
-    ? await fundingInfoRes.value.json()
-    : [];
-  const bookTickers: BinanceBookTicker[] = bookTickerRes.status === "fulfilled" && bookTickerRes.value.ok
-    ? await bookTickerRes.value.json()
-    : [];
-
-  const tickerMap = new Map(tickers.map((t) => [t.symbol, t]));
-  const premiumMap = new Map(premiums.map((p) => [p.symbol, p]));
-  const fundingInfoMap = new Map(fundingInfos.map((f) => [f.symbol, f]));
-  const bookTickerMap = new Map(bookTickers.map((b) => [b.symbol, b]));
-
-  const usdtSymbols = Array.from(premiumMap.keys()).filter((symbol) => symbol.endsWith("USDT") && !BINANCE_DELISTED.has(symbol));
-  const openInterestMap = new Map<string, number>();
-  const batchSize = 50;
-
-  for (let i = 0; i < usdtSymbols.length; i += batchSize) {
-    const batch = usdtSymbols.slice(i, i + batchSize);
-    const batchResults = await Promise.all(
-      batch.map(async (symbol) => {
-        try {
-          const oiRes = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`);
-          if (!oiRes.ok) return { symbol, value: 0 };
-          const oiData: BinanceOpenInterestResponse = await oiRes.json();
-          const oi = parseFloat(oiData.openInterest || "0");
-          const premium = premiumMap.get(symbol);
-          const markPrice = parseFloat(premium?.markPrice || "0");
-          return { symbol, value: oi * markPrice };
-        } catch {
-          return { symbol, value: 0 };
-        }
-      }),
-    );
-
-    for (const result of batchResults) {
-      openInterestMap.set(result.symbol, result.value);
-    }
-
-    if (i + batchSize < usdtSymbols.length) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-
-  const results: SearchExchangeRate[] = [];
-
-  for (const [symbol, premium] of premiumMap) {
-    if (!symbol.endsWith("USDT")) continue;
-    if (BINANCE_DELISTED.has(symbol)) continue;
-
-    const ticker = tickerMap.get(symbol);
-    const fundingInfo = fundingInfoMap.get(symbol);
-    const fundingInterval = fundingInfo?.fundingIntervalHours
-      ? fundingInfo.fundingIntervalHours * 3600
-      : 8 * 60 * 60;
-    const bookTicker = bookTickerMap.get(symbol);
-    const quoteVolume = parseFloat(ticker?.quoteVolume || "0");
-    const markPrice = parseFloat(premium.markPrice || "0");
-    const oiValue = openInterestMap.get(symbol) || 0;
-    const openInterest = markPrice > 0 ? oiValue / markPrice : 0;
-
-    results.push({
-      exchange: "Binance" as const,
-      exchangeColor: "yellow",
-      symbol,
-      rawSymbol: symbol,
-      fundingRate: parseFloat(premium.lastFundingRate || "0"),
-      markPrice,
-      lastPrice: parseFloat(premium.lastPrice || premium.markPrice || "0"),
-      change24h: parseFloat(ticker?.priceChangePercent || "0"),
-      quoteVolume,
-      openInterest,
-      notionalValue: oiValue > 0 ? oiValue : quoteVolume,
-      fundingInterval,
-      assetCategory: getBinanceAssetCategory(symbol),
-      bestBid: bookTicker?.bidPrice ? parseFloat(bookTicker.bidPrice) : undefined,
-      bestAsk: bookTicker?.askPrice ? parseFloat(bookTicker.askPrice) : undefined,
-    });
-  }
-
-  return results;
+  return fetchBinanceSearchRates();
 }
 
 // ==================== Lighter Rates ====================
@@ -622,10 +429,9 @@ async function fetchHyperliquidDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<DetailResult> {
-  const [candles, fundingHistory, latestSettledRate] = await Promise.all([
+  const [candles, fundingHistory] = await Promise.all([
     hlGetCandleSnapshot(symbol, "1d", 30, signal),
     hlGetFundingHistoryForDays(symbol, 30, signal),
-    hlGetLatestSettledFundingRate(symbol, 12, signal),
   ]);
 
   if (signal?.aborted) {
@@ -635,6 +441,9 @@ async function fetchHyperliquidDetail(
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
   const avg1d = computeAvgFundingRate1d(fundingHistory);
+  const latestSettledRate = fundingHistory.length > 0
+    ? Number.parseFloat(fundingHistory[fundingHistory.length - 1]?.fundingRate ?? "")
+    : Number.NaN;
 
   return {
     lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
@@ -655,27 +464,21 @@ async function fetchGateioDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<DetailResult> {
-  const [candles, fundingHistory] = await Promise.all([
-    gateGetCandleSnapshot(symbol, "1d", 30, signal),
-    gateGetFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal),
-  ]);
-
-  // Get latest settled rate from the first entry in funding history (same as GateFundingMonitor hydration)
-  const latestSettledRate = fundingHistory.length > 0 ? parseFloat(fundingHistory[0].fundingRate) : NaN;
-
-  if (signal?.aborted) {
-    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
-  }
-
+  const detail = await fetchGateCanonicalDetail(symbol, "1d", fundingIntervalSeconds, bestBid, bestAsk, signal);
+  const candles = detail.candles.map((item) => ({ close: item.close }));
+  const fundingHistory = detail.fundingHistory.map((item) => ({
+    time: item.timestamp,
+    fundingRate: String(item.fundingRate),
+  }));
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
   const avg1d = computeAvgFundingRate1d(fundingHistory);
 
   return {
-    lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
+    lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
     avgFundingRate1d: avg1d,
     historicalVolatility,
-    bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
+    bidAskSpread: detail.bidAskSpread ?? computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
     avgFundingRate30d: avg30d,
   };
@@ -689,59 +492,20 @@ async function fetchBinanceDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<DetailResult> {
-  const [candleRes, fundingRes] = await Promise.allSettled([
-    fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=30`, { signal }),
-    fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1000`, { signal }),
-  ]);
-
-  if (signal?.aborted) {
-    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
-  }
-
-  // Parse candles
-  let candles: Array<{ close: string }> = [];
-  if (candleRes.status === "fulfilled" && candleRes.value.ok) {
-    const candleData = await candleRes.value.json();
-    if (Array.isArray(candleData)) {
-      candles = candleData.map((kline: unknown[]) => ({
-        close: String(kline[4]),
-      }));
-    }
-  }
-
-  // Parse funding history
-  let fundingHistory: { time: number; fundingRate: string }[] = [];
-  let latestSettledRate: number = NaN;
-  if (fundingRes.status === "fulfilled" && fundingRes.value.ok) {
-    const fundingData = await fundingRes.value.json();
-    if (Array.isArray(fundingData)) {
-      fundingHistory = fundingData.map((item: BinanceFundingHistoryItem) => ({
-        time: item.fundingTime,
-        fundingRate: item.fundingRate,
-      }));
-      // Binance funding history ordering is not guaranteed here, so select the newest row explicitly.
-      const latestFunding = fundingData.reduce<BinanceFundingHistoryItem | null>((latest, item) => {
-        if (!latest || item.fundingTime > latest.fundingTime) {
-          return item;
-        }
-        return latest;
-      }, null);
-
-      if (latestFunding) {
-        latestSettledRate = parseFloat(latestFunding.fundingRate ?? "");
-      }
-    }
-  }
-
+  const detail = mapBinanceDetailToMetrics(await fetchBinanceCanonicalDetail(symbol, "1d", signal));
+  const candles = detail.candles.map((item) => ({ close: item.close }));
+  const fundingHistory = detail.fundingHistory.map((item) => ({
+    time: item.timestamp,
+    fundingRate: String(item.fundingRate),
+  }));
   const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const fundingHistory30d = fundingHistory.filter((item) => item.time >= thirtyDaysAgo);
-
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory30d);
   const avg1d = computeAvgFundingRate1d(fundingHistory30d);
 
   return {
-    lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
+    lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
     avgFundingRate1d: avg1d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
