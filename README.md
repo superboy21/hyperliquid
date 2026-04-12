@@ -1,4 +1,4 @@
-﻿# 馃殌 Exchange Funding Rate Monitor
+﻿# 🚀 Exchange Funding Rate Monitor
 
 <div align="center">
 
@@ -7,508 +7,508 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-4-38bdf8)
 
-**瀹炴椂鐩戞帶 Hyperliquid銆丟ate.io銆丅inance 鍜?Lighter 璧勯噾璐圭巼鐨勪笓涓氫氦鏄撳伐鍏?*
+**实时监控 Hyperliquid、Gate.io、Binance 和 Lighter 资金费率的专业交易工具**
 
-[鍦ㄧ嚎婕旂ず](https://your-demo-link.com) 路 [鎶ュ憡闂](https://github.com/your-repo/issues) 路 [鍔熻兘寤鸿](https://github.com/your-repo/discussions)
-
+[在线演示](https://your-demo-link.com) · [报告问题](https://github.com/your-repo/issues) · [功能建议](https://github.com/your-repo/discussions)
 
 </div>
 
 ---
 
-## 鉁?鏍稿績鍔熻兘
+## ✨ 核心功能
 
-### 馃搳 澶氫氦鏄撴墍鏀寔
-- **Hyperliquid**: 鏀寔姘哥画鍚堢害鍜?HIP-3 璧勪骇锛堣偂绁ㄣ€佸晢鍝併€丒TF锛?
-- **Gate.io**: 鏀寔 655+ 姘哥画鍚堢害锛岃嚜鍔ㄨ瘑鍒祫浜х被鍒?
-- **Binance**: 鏀寔 200+ USDT 姘哥画鍚堢害锛屾櫤鑳借祫浜у垎绫荤瓫閫?
-- **Lighter**: 鏀寔 160+ 姘哥画鍚堢害锛屽寘鎷偂绁ㄣ€丒TF銆佸姹囥€佸晢鍝併€佸姞瀵嗚揣甯?
+### 📊 多交易所支持
+- **Hyperliquid**: 支持永续合约和 HIP-3 资产（股票、商品、ETF）
+- **Gate.io**: 支持 655+ 永续合约，自动识别资产类别
+- **Binance**: 支持 200+ USDT 永续合约，智能资产分类筛选
+- **Lighter**: 支持 160+ 永续合约，包括股票、ETF、外汇、商品、加密货币
 
-### 馃搱 瀹炴椂鏁版嵁鐩戞帶
-- **鑷姩鍒锋柊**: 姣?300 绉掕嚜鍔ㄦ洿鏂版暟鎹?
-- **澶氱淮搴︽帓搴?*: 璧勯噾璐圭巼銆佷环鏍笺€佹定璺屽箙銆佹垚浜ら噺銆佹寔浠撲环鍊?
-- **鏅鸿兘绛涢€?*: 鎸夎祫浜х被鍒紙Crypto銆佽偂绁ㄣ€丒TF銆佸姹囥€佸晢鍝佺瓑锛夊揩閫熺瓫閫?
-- **鏈€鏂扮粨绠楄垂鐜?*: 鏀寔 Hyperliquid銆丅inance銆丟ate.io銆丩ighter 鐨勭湡瀹炲凡缁撶畻璐圭巼灞曠ず
-- **淇濆畧璇锋眰绛栫暐**: Hyperliquid 閲囩敤鎸夐渶鍔犺浇锛堥灞忓墠 10 + 鐐瑰嚮 卤5锛夛紝閬垮厤 API 闄愭祦
-- **璺ㄤ氦鏄撴墍鎼滅储**: 鏀寔鎼滅储鍥涗釜浜ゆ槗鎵€鐨勪氦鏄撳锛?+ 鏍稿績鎸囨爣瀵规瘮
+### 📈 实时数据监控
+- **自动刷新**: 每 300 秒自动更新数据
+- **多维度排序**: 资金费率、价格、涨跌幅、成交量、持仓价值
+- **智能筛选**: 按资产类别（Crypto、股票、ETF、外汇、商品等）快速筛选
+- **最新结算费率**: 支持 Hyperliquid、Binance、Gate.io、Lighter 的真实已结算费率展示
+- **保守请求策略**: Hyperliquid 采用按需加载（首屏前 10 + 点击 ±5），避免 API 限流
+- **跨交易所搜索**: 支持搜索四个交易所的交易对，9+ 核心指标对比
 
-### 馃幆 涓撲笟鍥捐〃鍒嗘瀽
-- **K 绾垮浘琛?*: 鏀寔鏃ョ嚎銆?灏忔椂绾裤€?灏忔椂绾垮垏鎹?
-- **璧勯噾璐圭巼鍓浘**: 骞村寲棰勬祴璐圭巼鍙鍖?
-- **30 鍛ㄦ湡鍘嗗彶鏁版嵁**: 瀹屾暣鐨勫巻鍙茶祫閲戣垂鐜囪秼鍔?
-- **鏅鸿兘骞村寲**: 鏍规嵁鍥捐〃鍛ㄦ湡鑷姩璋冩暣骞村寲绯绘暟
+### 🎯 专业图表分析
+- **K 线图表**: 支持日线、4小时线、1小时线切换
+- **资金费率副图**: 年化预测费率可视化
+- **30 周期历史数据**: 完整的历史资金费率趋势
+- **智能年化**: 根据图表周期自动调整年化系数
 
-### 馃挕 鏅鸿兘缁熻
-- **鍘嗗彶娉㈠姩鐜?*: 鍩轰簬30鍛ㄦ湡瀵规暟鏀剁泭鐜囪绠楃殑骞村寲娉㈠姩鐜?
-- **褰撳墠涔板崠浠峰樊**: 瀹炴椂涔板崠浠峰樊鏄剧ず锛屽叕寮?`(Best Ask - Best Bid) / Mid Price 脳 100`
-- **7澶?30澶╃粺璁?*: 鏈€楂樸€佹渶浣庛€佸钩鍧囪祫閲戣垂鐜?
-- **骞村寲璁＄畻**: 鑷姩鎹㈢畻骞村寲棰勬祴璐圭巼锛堟敮鎸佷笉鍚岀粨绠楀懆鏈燂級
-- **鎸佷粨浠峰€煎姞鏉?*: 鍩轰簬鎸佷粨閲忕殑鍔犳潈骞冲潎骞村寲
-
----
-
-## 馃帹 鐣岄潰棰勮
-
-```
-鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
-鈹? 浜ゆ槗鎵€璧勯噾璐圭巼鐩戞帶                                               鈹?
-鈹? [Hyperliquid] [Gate.io] [Binance] [Lighter]                    鈹?
-鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
-鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?  鈹?
-鈹? 鈹備氦鏄撳鏁伴噺鈹?鈹傛璧勯噾璐圭巼鈹?鈹傝礋璧勯噾璐圭巼鈹?鈹傚钩鍧囧勾鍖? 鈹?鈹?缁撶畻鍛ㄦ湡 鈹?  鈹?
-鈹? 鈹?  200   鈹?鈹?  142   鈹?鈹?   58   鈹?鈹?+8.3%   鈹?鈹?  8h    鈹?  鈹?
-鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?  鈹?
-鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
-鈹? [鍏ㄩ儴] [Majors] [Metals] [Stocks] [Other Crypto]               鈹?
-鈹溾攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
-鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?
-鈹? 鈹?浜ゆ槗瀵瑰垪琛?                      鈹?鈹?K 绾?+ 璧勯噾璐圭巼鍥捐〃      鈹?鈹?
-鈹? 鈹?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ 鈹?鈹?                        鈹?鈹?
-鈹? 鈹?BTC   69,832   -2.40%  +15.2%  鈹?鈹?BTC 杩?30澶?[鏃ョ嚎][4h][1h]鈹?鈹?
-鈹? 鈹?ETH    3,845   -3.15%  +8.7%   鈹?鈹?   馃搱 K绾?+ 鍓浘璐圭巼      鈹?鈹?
-鈹? 鈹?SOL    178.5   -5.82%  +22.1%  鈹?鈹?                        鈹?鈹?
-鈹? 鈹?...                            鈹?鈹?                        鈹?鈹?
-鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?
-鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?
-```
+### 💡 智能统计
+- **历史波动率**: 基于30周期对数收益率计算的年化波动率
+- **当前买卖价差**: 实时买卖价差显示，公式 `(Best Ask - Best Bid) / Mid Price × 100`
+- **7天/30天统计**: 最高、最低、平均资金费率
+- **年化计算**: 自动换算年化预测费率（支持不同结算周期）
+- **持仓价值加权**: 基于持仓量的加权平均年化
 
 ---
 
-## 馃洜锔?鎶€鏈爤
+## 🎨 界面预览
 
-| 鎶€鏈?| 鐗堟湰 | 鐢ㄩ€?|
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  交易所资金费率监控                                               │
+│  [Hyperliquid] [Gate.io] [Binance] [Lighter]                    │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │
+│  │交易对数量│ │正资金费率│ │负资金费率│ │平均年化  │ │ 结算周期 │   │
+│  │   200   │ │   142   │ │    58   │ │ +8.3%   │ │   8h    │   │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘   │
+├─────────────────────────────────────────────────────────────────┤
+│  [全部] [Majors] [Metals] [Stocks] [Other Crypto]               │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────┐ ┌─────────────────────────┐ │
+│  │ 交易对列表                       │ │ K 线 + 资金费率图表      │ │
+│  │ ─────────────────────────────── │ │                         │ │
+│  │ BTC   69,832   -2.40%  +15.2%  │ │ BTC 近 30天 [日线][4h][1h]│ │
+│  │ ETH    3,845   -3.15%  +8.7%   │ │    📈 K线 + 副图费率      │ │
+│  │ SOL    178.5   -5.82%  +22.1%  │ │                         │ │
+│  │ ...                            │ │                         │ │
+│  └─────────────────────────────────┘ └─────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🛠️ 技术栈
+
+| 技术 | 版本 | 用途 |
 |------|------|------|
-| **Next.js** | 16.x | React 妗嗘灦锛孉pp Router |
-| **React** | 19.x | UI 缁勪欢搴?|
-| **TypeScript** | 5.x | 绫诲瀷瀹夊叏 |
-| **Tailwind CSS** | 4.x | 鍝嶅簲寮忔牱寮?|
-| **ECharts** | 6.x | 涓撲笟鍥捐〃搴?|
-| **Docker** | - | 瀹瑰櫒鍖栭儴缃?|
+| **Next.js** | 16.x | React 框架，App Router |
+| **React** | 19.x | UI 组件库 |
+| **TypeScript** | 5.x | 类型安全 |
+| **Tailwind CSS** | 4.x | 响应式样式 |
+| **ECharts** | 6.x | 专业图表库 |
+| **Docker** | - | 容器化部署 |
 
-### 鏋舵瀯鐗圭偣
+### 架构特点
 
-- **鍏变韩 ExchangeFundingMonitor 缁勪欢**: 4 涓氦鏄撴墍鍏辩敤鍚屼竴 UI 缁勪欢锛堝噺灏?~47% 浠ｇ爜閲忥級
-- **缁熶竴鏁版嵁鏍囧噯鍖栧眰**: 鎵€鏈変氦鏄撴墍鏁版嵁杞崲涓虹粺涓€鏍煎紡 `ExchangeFundingRate`
-- **浜ゆ槗鎵€ Normalizer**: 姣忎釜浜ゆ槗鎵€鐙珛鐨勬爣鍑嗗寲鍑芥暟锛屼究浜庢墿灞?
-- **澶氬懆鏈熷勾鍖栬绠?*: 鏍规嵁鍥捐〃鍛ㄦ湡锛?d/4h/1h锛夎嚜鍔ㄨ皟鏁村勾鍖栫郴鏁?
-- **鍘嗗彶娉㈠姩鐜?*: 鍩轰簬瀵规暟鏀剁泭鐜囪绠楃殑骞村寲娉㈠姩鐜?
-- **璧勯噾鏀剁泭鐜?*: 鍩轰簬涓綅鏁颁环鏍煎拰骞冲潎璐圭巼璁＄畻鐨勫勾鍖栨敹鐩婄巼
-- **useMemo 浼樺寲**: 鎵€鏈夋淳鐢熸暟鎹娇鐢?`useMemo` 缂撳瓨锛岄伩鍏嶄笉蹇呰鐨勯噸绠?
-- **淇濆畧璇锋眰绛栫暐**: Hyperliquid 閲囩敤鎸夐渶鍔犺浇鏈€鏂扮粨绠楄垂鐜囷紝閬垮厤 API 闄愭祦
-- **鏅鸿兘 hydration**: Gate.io 鏀寔婊氬姩鎸夐渶鍔犺浇锛孊inance/Hyperliquid 閲囩敤 batch/鎸夐渶绛栫暐
+- **共享 ExchangeFundingMonitor 组件**: 4 个交易所共用同一 UI 组件（减少 ~47% 代码量）
+- **统一数据标准化层**: 所有交易所数据转换为统一格式 `ExchangeFundingRate`
+- **交易所 Normalizer**: 每个交易所独立的标准化函数，便于扩展
+- **多周期年化计算**: 根据图表周期（1d/4h/1h）自动调整年化系数
+- **历史波动率**: 基于对数收益率计算的年化波动率
+- **资金收益率**: 基于中位数价格和平均费率计算的年化收益率
+- **useMemo 优化**: 所有派生数据使用 `useMemo` 缓存，避免不必要的重算
+- **保守请求策略**: Hyperliquid 采用按需加载最新结算费率，避免 API 限流
+- **智能 hydration**: Gate.io 支持滚动按需加载，Binance/Hyperliquid 采用 batch/按需策略
 
 ---
 
-## 馃殌 蹇€熷紑濮?
+## 🚀 快速开始
 
-### 鐜瑕佹眰
+### 环境要求
 
 - Node.js 18+
-- npm 鎴?yarn 鎴?bun
+- npm 或 yarn 或 bun
 
-### 瀹夎涓庤繍琛?
+### 安装与运行
 
 ```bash
-# 鍏嬮殕椤圭洰
+# 克隆项目
 git clone https://github.com/your-repo/exchange-funding-monitor.git
 cd exchange-funding-monitor
 
-# 瀹夎渚濊禆
+# 安装依赖
 npm install
 
-# 鍚姩寮€鍙戞湇鍔″櫒
+# 启动开发服务器
 npm run dev
 
-# 璁块棶 http://localhost:3000/funding
+# 访问 http://localhost:3000/funding
 ```
 
-### Docker 閮ㄧ讲
+### Docker 部署
 
 ```bash
-# 鏋勫缓闀滃儚
+# 构建镜像
 docker build -t funding-monitor .
 
-# 杩愯瀹瑰櫒
+# 运行容器
 docker run -d -p 3000:3000 --name funding-monitor funding-monitor
 
-# 鎴栦娇鐢?Docker Compose
+# 或使用 Docker Compose
 docker compose up -d --build
 ```
 
 ---
 
-## 馃搧 椤圭洰缁撴瀯
+## 📁 项目结构
 
 ```
 src/
-鈹溾攢鈹€ app/
-鈹?  鈹溾攢鈹€ funding/
-鈹?  鈹?  鈹斺攢鈹€ page.tsx                    # 璧勯噾璐圭巼鐩戞帶涓婚〉闈?
-鈹?  鈹溾攢鈹€ search/
-鈹?  鈹?  鈹斺攢鈹€ page.tsx                    # 璺ㄤ氦鏄撴墍鎼滅储椤甸潰
-鈹?  鈹溾攢鈹€ api/
-鈹?  鈹?  鈹溾攢鈹€ gate/                       # Gate.io API 浠ｇ悊
-鈹?  鈹?  鈹溾攢鈹€ binance/                    # Binance API 浠ｇ悊锛堝惈 klines锛?
-鈹?  鈹?  鈹斺攢鈹€ lighter/                    # Lighter API 浠ｇ悊
-鈹?  鈹斺攢鈹€ page.tsx                        # 棣栭〉
-鈹溾攢鈹€ components/
-鈹?  鈹溾攢鈹€ funding/
-鈹?  鈹?  鈹溾攢鈹€ ExchangeFundingMonitor.tsx  # 鍏变韩 UI 缁勪欢锛堣〃鏍笺€佺粺璁°€佺瓫閫夈€佹帓搴忥級
-鈹?  鈹?  鈹溾攢鈹€ FundingMonitor.tsx          # Hyperliquid 鏁版嵁鑾峰彇 + 閰嶇疆
-鈹?  鈹?  鈹溾攢鈹€ GateFundingMonitor.tsx      # Gate.io 鏁版嵁鑾峰彇 + 閰嶇疆
-鈹?  鈹?  鈹溾攢鈹€ BinanceFundingMonitor.tsx   # Binance 鏁版嵁鑾峰彇 + 閰嶇疆
-鈹?  鈹?  鈹溾攢鈹€ LighterFundingMonitor.tsx   # Lighter 鏁版嵁鑾峰彇 + 閰嶇疆
-鈹?  鈹?  鈹斺攢鈹€ *Chart.tsx                  # 鍚勪氦鏄撴墍鍥捐〃缁勪欢
-鈹?  鈹斺攢鈹€ search/
-鈹?      鈹斺攢鈹€ CrossExchangeSearch.tsx     # 璺ㄤ氦鏄撴墍鎼滅储鏍稿績缁勪欢
-鈹溾攢鈹€ lib/
-鈹?  鈹溾攢鈹€ types.ts                        # 缁熶竴鏁版嵁鎺ュ彛瀹氫箟
-鈹?  鈹溾攢鈹€ search.ts                       # 璺ㄤ氦鏄撴墍鎼滅储宸ュ叿鍑芥暟
-鈹?  鈹溾攢鈹€ normalizers/                    # 鏁版嵁鏍囧噯鍖栧眰
-鈹?  鈹?  鈹溾攢鈹€ index.ts                    # 缁熶竴瀵煎嚭鍜屽伐鍏峰嚱鏁?
-鈹?  鈹?  鈹溾攢鈹€ hyperliquid.ts              # Hyperliquid 鏍囧噯鍖?
-鈹?  鈹?  鈹溾攢鈹€ gateio.ts                   # Gate.io 鏍囧噯鍖?
-鈹?  鈹?  鈹斺攢鈹€ binance.ts                  # Binance 鏍囧噯鍖?
-鈹?  鈹溾攢鈹€ hyperliquid.ts                  # Hyperliquid API 灏佽
-鈹?  鈹溾攢鈹€ gateio.ts                       # Gate.io API 灏佽
-鈹?  鈹溾攢鈹€ lighter.ts                      # Lighter 鏍煎紡鍖栧嚱鏁?
-鈹?  鈹斺攢鈹€ utils/                          # 宸ュ叿鍑芥暟
-鈹?      鈹斺攢鈹€ funding.ts                  # 璧勯噾璐圭巼璁＄畻宸ュ叿
-鈹斺攢鈹€ ...
+├── app/
+│   ├── funding/
+│   │   └── page.tsx                    # 资金费率监控主页面
+│   ├── search/
+│   │   └── page.tsx                    # 跨交易所搜索页面
+│   ├── api/
+│   │   ├── gate/                       # Gate.io API 代理
+│   │   ├── binance/                    # Binance API 代理（含 klines）
+│   │   └── lighter/                    # Lighter API 代理
+│   └── page.tsx                        # 首页
+├── components/
+│   ├── funding/
+│   │   ├── ExchangeFundingMonitor.tsx  # 共享 UI 组件（表格、统计、筛选、排序）
+│   │   ├── FundingMonitor.tsx          # Hyperliquid 数据获取 + 配置
+│   │   ├── GateFundingMonitor.tsx      # Gate.io 数据获取 + 配置
+│   │   ├── BinanceFundingMonitor.tsx   # Binance 数据获取 + 配置
+│   │   ├── LighterFundingMonitor.tsx   # Lighter 数据获取 + 配置
+│   │   └── *Chart.tsx                  # 各交易所图表组件
+│   └── search/
+│       └── CrossExchangeSearch.tsx     # 跨交易所搜索核心组件
+├── lib/
+│   ├── types.ts                        # 统一数据接口定义
+│   ├── search.ts                       # 跨交易所搜索工具函数
+│   ├── normalizers/                    # 数据标准化层
+│   │   ├── index.ts                    # 统一导出和工具函数
+│   │   ├── hyperliquid.ts              # Hyperliquid 标准化
+│   │   ├── gateio.ts                   # Gate.io 标准化
+│   │   └── binance.ts                  # Binance 标准化
+│   ├── hyperliquid.ts                  # Hyperliquid API 封装
+│   ├── gateio.ts                       # Gate.io API 封装
+│   ├── lighter.ts                      # Lighter 格式化函数
+│   └── utils/                          # 工具函数
+│       └── funding.ts                  # 资金费率计算工具
+└── ...
 ```
 
 ---
 
-## 馃幆 鏀寔鐨勪氦鏄撴墍
+## 🎯 支持的交易所
 
 ### Hyperliquid
-| 鍔熻兘 | 鏀寔鐘舵€?|
+| 功能 | 支持状态 |
 |------|----------|
-| 姘哥画鍚堢害 | 鉁?|
-| HIP-3 璧勪骇 | 鉁?|
-| 瀹炴椂璧勯噾璐圭巼 | 鉁?|
-| 鍘嗗彶鏁版嵁 | 鉁?|
-| K 绾垮浘琛?| 鉁?|
-| 鏈€鏂扮粨绠楄垂鐜?| 鉁?|
-| 淇濆畧璇锋眰绛栫暐 | 鉁?|
+| 永续合约 | ✅ |
+| HIP-3 资产 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
+| 最新结算费率 | ✅ |
+| 保守请求策略 | ✅ |
 
 ### Gate.io
-| 鍔熻兘 | 鏀寔鐘舵€?|
+| 功能 | 支持状态 |
 |------|----------|
-| 姘哥画鍚堢害 (USDT) | 鉁?|
-| 655+ 浜ゆ槗瀵?| 鉁?|
-| 璧勪骇绫诲埆绛涢€?| 鉁?|
-| 瀹炴椂璧勯噾璐圭巼 | 鉁?|
-| 鍘嗗彶鏁版嵁 | 鉁?|
-| K 绾垮浘琛?| 鉁?|
+| 永续合约 (USDT) | ✅ |
+| 655+ 交易对 | ✅ |
+| 资产类别筛选 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
 
 ### Binance
-| 鍔熻兘 | 鏀寔鐘舵€?|
+| 功能 | 支持状态 |
 |------|----------|
-| 姘哥画鍚堢害 (USDT) | 鉁?|
-| 200+ 浜ゆ槗瀵?| 鉁?|
-| 璧勪骇绫诲埆绛涢€?| 鉁?|
-| 瀹炴椂璧勯噾璐圭巼 | 鉁?|
-| 鍘嗗彶鏁版嵁 | 鉁?|
-| K 绾垮浘琛?| 鉁?|
-| 涔板崠浠峰樊鏄剧ず | 鉁?|
-| 鎸佷粨浠峰€硷紙寮傛鍔犺浇锛?| 鉁?|
+| 永续合约 (USDT) | ✅ |
+| 200+ 交易对 | ✅ |
+| 资产类别筛选 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
+| 买卖价差显示 | ✅ |
+| 持仓价值（异步加载） | ✅ |
 
 ### Lighter
-| 鍔熻兘 | 鏀寔鐘舵€?|
+| 功能 | 支持状态 |
 |------|----------|
-| 姘哥画鍚堢害 | 鉁?|
-| 160+ 浜ゆ槗瀵?| 鉁?|
-| 璧勪骇绫诲埆绛涢€?| 鉁?|
-| 瀹炴椂璧勯噾璐圭巼 | 鉁?|
-| 鍘嗗彶鏁版嵁 | 鉁?|
-| K 绾垮浘琛?| 鉁?|
-| 涔板崠浠峰樊鏄剧ず | 鉁?|
+| 永续合约 | ✅ |
+| 160+ 交易对 | ✅ |
+| 资产类别筛选 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
+| 买卖价差显示 | ✅ |
 
 ---
 
-## 馃搳 璧勪骇绫诲埆鍒嗙被
+## 📊 资产类别分类
 
 ### Gate.io
-- **Crypto**: 涓绘祦甯併€丮eme銆丩ayer 1/2銆丏eFi銆丄I銆佹父鎴忋€丷WA
-- **鑲＄エ/鎸囨暟**: BABA銆乀SLA銆丯VDA銆丼PY銆丵QQ銆丼PX500銆丳AYP銆丟VZ銆丒WY 绛?
-- **鍟嗗搧**: XAU銆乆AG銆乆BR銆丳AXG銆丼LVON 绛?
-- **鍏朵粬**: 鍏朵粬绫诲瀷鐨勬案缁悎绾?
+- **Crypto**: 主流币、Meme、Layer 1/2、DeFi、AI、游戏、RWA
+- **股票/指数**: BABA、TSLA、NVDA、SPY、QQQ、SPX500、PAYP、GVZ、EWY 等
+- **商品**: XAU、XAG、XBR、PAXG、SLVON 等
+- **其他**: 其他类型的永续合约
 
 ### Binance
 - **Majors**: BTC, ETH, BNB, SOL, HYPE, LINK, XRP, TRX, ADA, WLFI, AAVE, SKY, DOGE, BCH
 - **Metals**: XAU, XAG, XPT, XPD, COPPER, PAXG, XAUT
-- **Energy**: CL (WTI 鍘熸补), BZ (甯冧鸡鐗瑰師娌?, NATGAS (澶╃劧姘?
-- **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT, PAYP 绛?
-- **Other Crypto**: 鍏朵粬鎵€鏈夊姞瀵嗚揣甯佹案缁悎绾?
+- **Energy**: CL (WTI 原油), BZ (布伦特原油), NATGAS (天然气)
+- **Stocks**: TSLA, MSTR, AMZN, AAPL, NVDA, EWY, EWJ, QQQ, SPY, META, GOOGL, MSFT, PAYP 等
+- **Other Crypto**: 其他所有加密货币永续合约
 
 ### Lighter
 - **Equities**: HOOD, AAPL, META, INTC, AMZN, BMNR, PLTR, COIN, SAMSUNG, STRC, AMD, SNDK, HANMI, HYUNDAI, ASML, CRCL, TSLA, NVDA, GOOGL, MSTR, MSFT
 - **ETF/Index**: QQQ, SPY, KRCOMP, URA, IWM, MAGS, BOTZ, DIA
 - **FX**: EURUSD, USDKRW, USDJPY, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD
 - **Commodities**: XAU, XAG, WTI, BRENTOIL, XPT, XCU, XPD
-- **Crypto**: 鍏朵粬鎵€鏈夊姞瀵嗚揣甯佹案缁悎绾?
+- **Crypto**: 其他所有加密货币永续合约
 
 ---
 
-## 馃敡 閰嶇疆閫夐」
+## 🔧 配置选项
 
-### 鐜鍙橀噺
+### 环境变量
 
 ```env
-# 鍙€夛細鑷畾涔?API 鍩虹 URL
+# 可选：自定义 API 基础 URL
 NEXT_PUBLIC_HYPERLIQUID_API=https://api.hyperliquid.xyz
 NEXT_PUBLIC_GATE_API=https://api.gate.io/api/v4
 ```
 
-### 鏁版嵁鍒锋柊闂撮殧
+### 数据刷新间隔
 
-榛樿姣?300 绉掕嚜鍔ㄥ埛鏂版暟鎹€傚彲鍦?`ExchangeFundingMonitor.tsx` 涓慨鏀癸細
+默认每 300 秒自动刷新数据。可在 `ExchangeFundingMonitor.tsx` 中修改：
 
 ```typescript
-const interval = setInterval(handleFetchRates, 300000); // 300 绉?
+const interval = setInterval(handleFetchRates, 300000); // 300 秒
 ```
 
-### Hyperliquid 淇濆畧璇锋眰绛栫暐
+### Hyperliquid 保守请求策略
 
-Hyperliquid 椤甸潰閲囩敤鎸夐渶鍔犺浇鏈€鏂扮粨绠楄垂鐜囩瓥鐣ワ細
-- **鍒濆鍔犺浇**: 浠呰幏鍙栧墠 10 涓氦鏄撳
-- **鐐瑰嚮琛?*: 鍔犺浇褰撳墠鐐瑰嚮浜ゆ槗瀵瑰強鍏朵笂涓嬪悇 5 涓氦鏄撳
-- **鍒囨崲鏍囩**: 鍔犺浇璇ユ爣绛鹃〉鍓?10 涓氦鏄撳
-- **鍏朵粬鎯呭喌**: 涓嶈嚜鍔ㄨ幏鍙栨渶鏂扮粨绠楄垂鐜囷紝閬垮厤 API 闄愭祦
+Hyperliquid 页面采用按需加载最新结算费率策略：
+- **初始加载**: 仅获取前 10 个交易对
+- **点击行**: 加载当前点击交易对及其上下各 5 个交易对
+- **切换标签**: 加载该标签页前 10 个交易对
+- **其他情况**: 不自动获取最新结算费率，避免 API 限流
 
 ---
 
-## 馃搱 璁＄畻鍏紡
+## 📈 计算公式
 
-### 骞村寲璧勯噾璐圭巼
-
-```
-骞村寲璐圭巼 = 璧勯噾璐圭巼 脳 (24 / 缁撶畻鍛ㄦ湡灏忔椂) 脳 365 脳 100
-```
-
-- **1灏忔椂缁撶畻 (Hyperliquid)**: `璐圭巼 脳 24 脳 365 脳 100`
-- **8灏忔椂缁撶畻 (Gate.io)**: `璐圭巼 脳 3 脳 365 脳 100`
-- **4灏忔椂缁撶畻**: `璐圭巼 脳 6 脳 365 脳 100`
-
-### 鍘嗗彶娉㈠姩鐜囷紙骞村寲锛?
+### 年化资金费率
 
 ```
-1. 璁＄畻瀵规暟鏀剁泭鐜? r_i = ln(P_i / P_{i-1})
-2. 璁＄畻鏍囧噯宸? 蟽 = std(r_i)
-3. 骞村寲娉㈠姩鐜? HV = 蟽 脳 鈭?姣忓勾鍛ㄦ湡鏁? 脳 100
+年化费率 = 资金费率 × (24 / 结算周期小时) × 365 × 100
 ```
 
-- **鏃ョ嚎 (1d)**: HV = 蟽 脳 鈭?65 脳 100
-- **4灏忔椂绾?(4h)**: HV = 蟽 脳 鈭?190 脳 100
-- **1灏忔椂绾?(1h)**: HV = 鈭?760 脳 100
+- **1小时结算 (Hyperliquid)**: `费率 × 24 × 365 × 100`
+- **8小时结算 (Gate.io)**: `费率 × 3 × 365 × 100`
+- **4小时结算**: `费率 × 6 × 365 × 100`
 
-### 璧勯噾鏀剁泭鐜囷紙骞村寲锛?
-
-```
-1. 姣忓懆鏈熶腑浣嶆暟浠锋牸: P_median = (High + Low) / 2
-2. 姣忓懆鏈熸敹鐩? Return_i = P_median_i 脳 FundingRate_i
-3. 30鍛ㄦ湡鎬绘敹鐩? Total_Return = 危(Return_i)
-4. 骞村寲鏀剁泭鐜? Yield = (Total_Return / Latest_Price) 脳 骞村寲绯绘暟 脳 100
-```
-
-- **鏃ョ嚎 (1d)**: 骞村寲绯绘暟 = 12
-- **4灏忔椂绾?(4h)**: 骞村寲绯绘暟 = 72
-- **1灏忔椂绾?(1h)**: 骞村寲绯绘暟 = 288
-
-### 鎸佷粨浠峰€煎姞鏉冨钩鍧?
+### 历史波动率（年化）
 
 ```
-鍔犳潈骞冲潎骞村寲 = 危(骞村寲璐圭巼 脳 鎸佷粨浠峰€? / 危(鎸佷粨浠峰€?
+1. 计算对数收益率: r_i = ln(P_i / P_{i-1})
+2. 计算标准差: σ = std(r_i)
+3. 年化波动率: HV = σ × √(每年周期数) × 100
 ```
 
-### 褰撳墠涔板崠浠峰樊
+- **日线 (1d)**: HV = σ × √365 × 100
+- **4小时线 (4h)**: HV = σ × √2190 × 100
+- **1小时线 (1h)**: HV = √8760 × 100
+
+### 资金收益率（年化）
 
 ```
-涔板崠浠峰樊 = (Best Ask - Best Bid) / Mid Price 脳 100
+1. 每周期中位数价格: P_median = (High + Low) / 2
+2. 每周期收益: Return_i = P_median_i × FundingRate_i
+3. 30周期总收益: Total_Return = Σ(Return_i)
+4. 年化收益率: Yield = (Total_Return / Latest_Price) × 年化系数 × 100
 ```
 
-- **Best Ask**: 鏈€浣庡崠浠凤紙浜ゆ槗鎵€鎻愪緵锛?
-- **Best Bid**: 鏈€楂樹拱浠凤紙浜ゆ槗鎵€鎻愪緵锛?
-- **Mid Price**: 涓棿浠?`(Best Ask + Best Bid) / 2`
+- **日线 (1d)**: 年化系数 = 12
+- **4小时线 (4h)**: 年化系数 = 72
+- **1小时线 (1h)**: 年化系数 = 288
+
+### 持仓价值加权平均
+
+```
+加权平均年化 = Σ(年化费率 × 持仓价值) / Σ(持仓价值)
+```
+
+### 当前买卖价差
+
+```
+买卖价差 = (Best Ask - Best Bid) / Mid Price × 100
+```
+
+- **Best Ask**: 最低卖价（交易所提供）
+- **Best Bid**: 最高买价（交易所提供）
+- **Mid Price**: 中间价 `(Best Ask + Best Bid) / 2`
 
 ---
 
-## 馃 璐＄尞鎸囧崡
+## 🤝 贡献指南
 
-娆㈣繋鎻愪氦 Issue 鍜?Pull Request锛?
+欢迎提交 Issue 和 Pull Request！
 
-1. Fork 鏈粨搴?
-2. 鍒涘缓鍔熻兘鍒嗘敮 (`git checkout -b feature/AmazingFeature`)
-3. 鎻愪氦鏇存敼 (`git commit -m 'Add AmazingFeature'`)
-4. 鎺ㄩ€佸埌鍒嗘敮 (`git push origin feature/AmazingFeature`)
-5. 鍒涘缓 Pull Request
+1. Fork 本仓库
+2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 创建 Pull Request
 
 ---
 
-## 馃摑 鏇存柊鏃ュ織
+## 📝 更新日志
 
 ### v2026.04.12 (2026-04-12)
-- Hyperliquid / Lighter 鏈€鏂扮粨绠楄垂鐜囬灞忓姞杞芥敼涓?`selected + 鍙琛宍锛宧ydration 鎬讳笂闄?`7`
-- 鐐瑰嚮浜ゆ槗瀵瑰悗鐨?latest settlement 棰勫彇鑼冨洿璋冩暣涓?`卤3`
-- 鍏变韩 hydration 灞傛柊澧?`60000ms` settlement 缂撳瓨鍜?inflight 鍘婚噸
-- selected 琛屽浘琛?detail 璇锋眰鐜板湪浼氶『鎵嬪洖濉?latest settlement锛屽噺灏戦澶栧崟鐙姹?- Hyperliquid 鍏堟煡 `12h` 鍚庡洖閫€ `72h`锛孡ighter 鍏堟煡 `6h` 鍚庡洖閫€ `24h`
+- ✨ **Hyperliquid / Lighter 最新结算费率加载优化**: 首屏改为 `selected + 可见行` 按需 hydration，总上限 `7`，减少不必要的 settlement 请求
+- ✨ **点击预取收紧**: Hyperliquid / Lighter 的 latest settlement 预取范围调整为 `±3`
+- ✨ **共享缓存与去重**: `ExchangeFundingMonitor` 新增 `60000ms` settlement 缓存与 inflight 去重，减少重复 API 调用
+- ✨ **selected 行自动回填**: 图表 detail funding history 请求现在会顺手回填 latest settlement，避免额外单独请求
+- ✨ **短窗口回退策略**: Hyperliquid 先查 `12h` 后回退 `72h`，Lighter 先查 `6h` 后回退 `24h`，在保持显示口径不变的前提下减少请求数据量
 
 ### v2026.04.07 (2026-04-07)
-- 鉁?**Lighter 鏈€鏂扮粨绠楄垂鐜囦慨澶?*: 鏀圭敤 `fundings` 鍘嗗彶鎺ュ彛鑾峰彇鐪熷疄宸茬粨绠楄垂鐜囷紝淇 12.5x 鎹㈢畻绯绘暟锛屾樉绀洪€昏緫涓庨〉闈竴鑷?
-- 鉁?**璺ㄤ氦鏄撴墍鎼滅储椤垫柊澧炲垪**: 
-  - 鈥滄渶鏂扮粨绠楄垂鐜団€濆垪锛氬榻愬悇浜ゆ槗鎵€椤甸潰鏈€鏂?settlement 鑾峰彇鏂瑰紡锛圚yperliquid: fundingHistory, Gate/Binance/Lighter: history 鏈€鏂颁竴鏉★級
-  - 鈥滃钩鍧囪垂鐜囷紙1澶╋級鈥濆垪锛氬榻愬悇浜ゆ槗鎵€鍥捐〃鏃ョ嚎鏈€鍚庝竴鏍?candle tooltip 鐨勬姌绠楀勾鍖栬垂鐜?
-- 鉁?**鎼滅储椤靛竷灞€浼樺寲**: 鍏ㄥ瀹瑰櫒 + 绱у噾琛ㄦ牸 + 绂佹鎹㈣锛屽噺灏戞í鍚戞粴鍔?
-- 鉁?**鎼滅储椤靛欢杩熷姞杞?*: 鏂板鍒椾笌鍏朵粬 detail 鎸囨爣涓€鑷达紝浠呭湪鐢ㄦ埛鎼滅储琛屼负瑙﹀彂鍚庢墠鍔犺浇
-- 馃悰 鎼滅储椤祍ettlement鏄剧ず锛氫慨澶?Lighter 鍝嶅簲鏍煎紡鍏煎锛堝吋瀹?`{fundings: [...]}` 鍜?`[...]` 涓ょ杩斿洖锛?
-- 馃悰 K绾垮浘 tooltip 鏂囧瓧淇敼锛氣€滄姌绠楀勾鍖栭娴嬭垂鐜団€濇敼涓衡€滄姌绠楀勾鍖栬垂鐜団€濓紙4涓氦鏄撴墍缁熶竴锛?
-- 馃悰 Binance 绉婚櫎 7 涓凡涓嬫灦浜ゆ槗瀵癸細A2ZUSDT, FORTHUSDT, HOOKUSDT, LRCUSDT, NTRNUSDT, RDNTUSDT锛圡KUSDT 鍘熸湰宸插湪鍒楄〃锛?
+- ✨ **Lighter 最新结算费率修复**: 改用 `fundings` 历史接口获取真实已结算费率，修正 12.5x 换算系数，显示逻辑与页面一致
+- ✨ **跨交易所搜索页新增列**: 
+  - “最新结算费率”列：对齐各交易所页面最新 settlement 获取方式（Hyperliquid: fundingHistory, Gate/Binance/Lighter: history 最新一条）
+  - “平均费率（1天）”列：对齐各交易所图表日线最后一根 candle tooltip 的折算年化费率
+- ✨ **搜索页布局优化**: 全宽容器 + 紧凑表格 + 禁止换行，减少横向滚动
+- ✨ **搜索页延迟加载**: 新增列与其他 detail 指标一致，仅在用户搜索行为触发后才加载
+- 🐛 搜索页settlement显示：修复 Lighter 响应格式兼容（兼容 `{fundings: [...]}` 和 `[...]` 两种返回）
+- 🐛 K线图 tooltip 文字修改：“折算年化预测费率”改为“折算年化费率”（4个交易所统一）
+- 🐛 Binance 移除 7 个已下架交易对：A2ZUSDT, FORTHUSDT, HOOKUSDT, LRCUSDT, NTRNUSDT, RDNTUSDT（MKUSDT 原本已在列表）
 
 ### v2026.04.06-2 (2026-04-06)
-- 鉁?**鏈€鏂扮粨绠楄垂鐜囦慨澶?*: Hyperliquid 鏀圭敤 `fundingHistory` API 鑾峰彇鐪熷疄宸茬粨绠楄垂鐜囷紝涓嶅啀閿欒澶嶇敤棰勬祴璐圭巼
-- 鉁?**淇濆畧璇锋眰绛栫暐**: Hyperliquid 閲囩敤鎸夐渶鍔犺浇鏈€鏂扮粨绠楄垂鐜囷紙棣栧睆鍓?10 + 鐐瑰嚮 卤3锛夛紝閬垮厤 API 闄愭祦
-- 鉁?**鏅鸿兘 hydration**: Gate.io 鏀寔婊氬姩鎸夐渶鍔犺浇 + batch 璇锋眰锛?0 涓?缁勶級
-- 鉁?**Binance 缁熻鍗℃仮澶?*: 淇 7 澶?30 澶╃粺璁″崱鏁版嵁缂哄け闂
-- 鉁?**閲嶈瘯/閫€閬挎満鍒?*: Hyperliquid `/info` 璇锋眰澧炲姞杞婚噺閲嶈瘯涓庢寚鏁伴€€閬?
-- 鉁?**璇锋眰鍚堝苟**: 鍒锋柊涓诲垪琛ㄦ椂淇濈暀宸插姞杞界殑 `lastSettlementRate`锛岄伩鍏嶉噸澶?hydration
-- 馃悰 Gate.io 椤甸潰鍔犺浇浼樺寲锛氬墠 50 鍒濆鍖?+ 婊氬姩鎸夐渶鍔犺浇锛屼笉鍐嶅叏琛ㄥ姞杞?
-- 馃悰 鏈€鏂扮粨绠楄垂鐜囨樉绀轰紭鍖栵細鏃犳硶鑾峰彇鏃舵樉绀虹┖鐧斤紝涓嶅啀鏄剧ず閿欒鍊?
-- 馃攧 鑷姩鍒锋柊闂撮殧缁熶竴鏀逛负 300 绉?
-- 鈾伙笍 鏂板 `hydrationPolicy` 閰嶇疆锛氭敮鎸佸悇浜ゆ槗鎵€鑷畾涔?hydration 绛栫暐
-- 鈾伙笍 鏂板 `getLatestSettledFundingRate()`锛欻yperliquid 涓撶敤杞婚噺缁撶畻璐圭巼鑾峰彇鍑芥暟
+- ✨ **最新结算费率修复**: Hyperliquid 改用 `fundingHistory` API 获取真实已结算费率，不再错误复用预测费率
+- ✨ **保守请求策略**: Hyperliquid 采用按需加载最新结算费率（首屏前 10 + 点击 ±3），避免 API 限流
+- ✨ **智能 hydration**: Gate.io 支持滚动按需加载 + batch 请求（10 个/组）
+- ✨ **Binance 统计卡恢复**: 修复 7 天/30 天统计卡数据缺失问题
+- ✨ **重试/退避机制**: Hyperliquid `/info` 请求增加轻量重试与指数退避
+- ✨ **请求合并**: 刷新主列表时保留已加载的 `lastSettlementRate`，避免重复 hydration
+- 🐛 Gate.io 页面加载优化：前 50 初始化 + 滚动按需加载，不再全表加载
+- 🐛 最新结算费率显示优化：无法获取时显示空白，不再显示错误值
+- 🔄 自动刷新间隔统一改为 300 秒
+- ♻️ 新增 `hydrationPolicy` 配置：支持各交易所自定义 hydration 策略
+- ♻️ 新增 `getLatestSettledFundingRate()`：Hyperliquid 专用轻量结算费率获取函数
 
 ### v2026.04.06 (2026-04-06)
-- 鉁?**璺ㄤ氦鏄撴墍鎼滅储椤?*: 杈撳叆鍏抽敭瀛楁悳绱?Hyperliquid銆丟ate.io銆丅inance銆丩ighter 鍥涗釜浜ゆ槗鎵€鐨勪氦鏄撳
-- 鉁?9 涓牳蹇冩寚鏍囧姣旓細浠锋牸銆?4h娑ㄨ穼銆侀娴嬭垂鐜囥€?4h鎴愪氦棰濄€佹寔浠撲环鍊笺€佸巻鍙叉尝鍔ㄧ巼(30鍛ㄦ湡鏃ョ嚎)銆佸綋鍓嶄拱鍗栦环宸€佸钩鍧囪祫閲戣垂鐜?7澶?銆佸钩鍧囪祫閲戣垂鐜?30澶?
-- 鉁?娓愯繘寮忓姞杞斤細瀛楁 1-5 绔嬪嵆鍙锛屽瓧娈?6-9 鍚庡彴娓愯繘寮忓姞杞斤紙骞跺彂 4 涓級
-- 鉁?鎼滅储缁撴灉榛樿鎸夋寔浠撲环鍊奸檷搴忔帓搴?
-- 鉁?鎼滅储璇嶅彉鍖栨椂鑷姩鍙栨秷杩涜涓殑璇锋眰
-- 鉁?琛ㄦ牸鍒楃偣鍑绘帓搴?
-- 鉁?鎼滅储椤典笌 funding 椤典簰鐩稿叆鍙ｆ寜閽?
-- 馃悰 鎼滅储椤典慨澶嶏細鍚勪氦鏄撴墍鍚屽悕浜ゆ槗瀵圭紦瀛樹簰鐩歌鐩栭棶棰?
-- 馃悰 鎼滅储椤典慨澶嶏細Lighter 棰勬祴璐圭巼骞村寲鍏紡锛?8 澶勭悊锛?
-- 馃悰 鎼滅储椤典慨澶嶏細Lighter 骞冲潎璐圭巼骞村寲鍏紡锛堜笌浜ゆ槗鎵€椤典竴鑷达級
-- 馃悰 鎼滅储椤典慨澶嶏細Lighter 涔板崠浠峰樊閫氳繃 orderBookOrders 鑾峰彇
-- 馃悰 鎼滅储椤典慨澶嶏細Binance 鎸佷粨浠峰€奸€氳繃 openInterest API 鑾峰彇
-- 馃悰 鎼滅储椤典慨澶嶏細骞冲潎璐圭巼璁＄畻鍏堣繃婊?30 澶╂暟鎹?
-- 鈾伙笍 閲嶆瀯 Exchange 鍒囨崲鎸夐挳涓洪厤缃暟缁勶紙DRY锛?
-- 鈾伙笍 鏂板 `src/lib/search.ts` 璺ㄤ氦鏄撴墍鎼滅储宸ュ叿鍑芥暟
-- 鈾伙笍 鏂板 `src/components/search/CrossExchangeSearch.tsx` 鏍稿績鎼滅储缁勪欢
+- ✨ **跨交易所搜索页**: 输入关键字搜索 Hyperliquid、Gate.io、Binance、Lighter 四个交易所的交易对
+- ✨ 9 个核心指标对比：价格、24h涨跌、预测费率、24h成交额、持仓价值、历史波动率(30周期日线)、当前买卖价差、平均资金费率(7天)、平均资金费率(30天)
+- ✨ 渐进式加载：字段 1-5 立即可见，字段 6-9 后台渐进式加载（并发 4 个）
+- ✨ 搜索结果默认按持仓价值降序排序
+- ✨ 搜索词变化时自动取消进行中的请求
+- ✨ 表格列点击排序
+- ✨ 搜索页与 funding 页互相入口按钮
+- 🐛 搜索页修复：各交易所同名交易对缓存互相覆盖问题
+- 🐛 搜索页修复：Lighter 预测费率年化公式（/8 处理）
+- 🐛 搜索页修复：Lighter 平均费率年化公式（与交易所页一致）
+- 🐛 搜索页修复：Lighter 买卖价差通过 orderBookOrders 获取
+- 🐛 搜索页修复：Binance 持仓价值通过 openInterest API 获取
+- 🐛 搜索页修复：平均费率计算先过滤 30 天数据
+- ♻️ 重构 Exchange 切换按钮为配置数组（DRY）
+- ♻️ 新增 `src/lib/search.ts` 跨交易所搜索工具函数
+- ♻️ 新增 `src/components/search/CrossExchangeSearch.tsx` 核心搜索组件
 
 ### v2026.04.01 (2026-04-01)
-- 鉁?Hyperliquid HIP-3 鏂板锛歋P500锛圫&P 500 鎸囨暟锛夈€丆RWV锛圕oreWeave锛夈€丏KNG锛圖raftKings锛夈€丠IMS锛圚ims & Hers锛夈€丆OST锛圕ostco锛夈€丩LY锛圗li Lilly锛?
-- 馃棏锔?Hyperliquid HIP-3 绉婚櫎锛歋PY銆丵QQ銆両WM銆丟LD銆丼LV銆乀LT銆乁VXY锛堜笌瑙勬牸琛ㄥ榻愶級
-- 鉁?Binance 鏂板 Energy 鍒嗙被锛欳L锛圵TI 鍘熸补锛夈€丅Z锛堝竷浼︾壒鍘熸补锛夈€丯ATGAS锛堝ぉ鐒舵皵锛?
-- 馃悰 Gate.io 鍘嗗彶璧勯噾璐圭巼淇锛?h/2h/1h 缁撶畻鍛ㄦ湡鐨勫悎绾︽棤娉曡幏鍙栧畬鏁?30 澶╂暟鎹紙鍘熺‖缂栫爜 `澶╂暟 脳 3`锛屽亣璁炬墍鏈夊悎绾?8 灏忔椂缁撶畻锛夈€備慨澶嶅悗鏍规嵁瀹為檯缁撶畻鍛ㄦ湡鍔ㄦ€佽绠?`limit`
-- 馃悰 Stat Card "褰撳墠锛? 鏀逛负 "鍛ㄦ湡锛?锛屾樉绀烘纭殑缁撶畻鍛ㄦ湡璐圭巼
-- 馃悰 鍛ㄦ湡璐圭巼璁＄畻淇锛氫粠骞村寲鍊煎弽鎺紝鍏紡 `annualizedPct 脳 缁撶畻鍛ㄦ湡灏忔椂 梅 8760`
-- 馃悰 Lighter 璧勯噾璐圭巼缁熻淇锛歴tat card 涓庤〃鏍煎勾鍖栧叕寮忕粺涓€锛屾秷闄?100x / 8x 鍋忓樊
+- ✨ Hyperliquid HIP-3 新增：SP500（S&P 500 指数）、CRWV（CoreWeave）、DKNG（DraftKings）、HIMS（Hims & Hers）、COST（Costco）、LLY（Eli Lilly）
+- 🗑️ Hyperliquid HIP-3 移除：SPY、QQQ、IWM、GLD、SLV、TLT、UVXY（与规格表对齐）
+- ✨ Binance 新增 Energy 分类：CL（WTI 原油）、BZ（布伦特原油）、NATGAS（天然气）
+- 🐛 Gate.io 历史资金费率修复：4h/2h/1h 结算周期的合约无法获取完整 30 天数据（原硬编码 `天数 × 3`，假设所有合约 8 小时结算）。修复后根据实际结算周期动态计算 `limit`
+- 🐛 Stat Card "当前：" 改为 "周期："，显示正确的结算周期费率
+- 🐛 周期费率计算修复：从年化值反推，公式 `annualizedPct × 结算周期小时 ÷ 8760`
+- 🐛 Lighter 资金费率统计修复：stat card 与表格年化公式统一，消除 100x / 8x 偏差
 
 ### v2026.03.30 (2026-03-30)
-- 鉁?Binance Stocks 鏂板锛歅AYP锛圥ayPal锛?
-- 鉁?Gate.io 鑲＄エ/鎸囨暟 鏂板锛歅AYP銆丟VZ锛圙old Volatility Index锛夈€丒WY锛坕Shares MSCI South Korea ETF锛?
-- 鈾伙笍 **鏋舵瀯閲嶆瀯**: 鎻愬彇鍏变韩 `ExchangeFundingMonitor` 缁勪欢锛? 涓氦鏄撴墍鍏辩敤鍚屼竴 UI锛堝噺灏?~47% 浠ｇ爜閲忥紝鍑€鍑?1683 琛岋級
-- 鈾伙笍 Binance / Lighter 闆嗘垚 normalizer 灞傦紝鍒犻櫎鏈湴閲嶅鍑芥暟
-- 鈿?鎵€鏈?Monitor 娲剧敓鏁版嵁鍔?`useMemo`锛坄positiveCount`銆乣negativeCount`銆乣weightedAvgRate` 绛夛級
-- 馃悰 Lighter 椤甸潰鍔犺浇浼樺寲锛? 涓?API 璇锋眰鍏ㄩ儴骞惰锛堝師涓?2 骞惰 + 1 涓茶锛?
-- 馃悰 Lighter API 浠ｇ悊澧炲姞 15 绉掕秴鏃讹紙闃叉涓婃父鎸傝捣闃诲锛?
-- 馃悰 Binance 鎸佷粨浠峰€间慨澶嶏細OI 鏁版嵁骞跺叆 fetchRates 涓绘祦绋嬶紝纭繚鍏变韩缁勪欢鎷垮埌鐪熷疄 OI
-- 馃悰 Lighter 璧勯噾璐圭巼骞村寲璁＄畻淇锛歴tat card 涓庤〃鏍间娇鐢ㄤ笉鍚屽叕寮忥紝閬垮厤 100x / 8x 鍋忓樊
-- 馃悰 Lighter 涔板崠浠峰樊淇锛歠etchDetailData 鏂板 orderBook 璇锋眰鑾峰彇 bid/ask
-- 馃帹 瀛楀彿浼樺寲锛氳〃鏍兼爣棰樸€佷氦鏄撳鍚嶃€佸浘琛ㄦ爣棰樸€佸懆鏈熸寜閽粺涓€缂╁皬
-- 馃帹 鍥捐〃鏍囬涓庡懆鏈熸寜閽敼涓哄悓涓€琛屾樉绀?
-- 馃棏锔?鍒犻櫎 `/gate-funding` 瀛ょ珛椤甸潰
-- 馃棏锔?鍒犻櫎 `GATE_API_URLS` 姝讳唬鐮?
-- 馃棏锔?鍘婚噸 Gate.io `ASSET_CATEGORIES`锛堝噺灏?~70% 鍐呭瓨鍗犵敤锛?
-- 馃棏锔?绉婚櫎鏈娇鐢ㄧ殑 `Geist_Mono` 瀛椾綋锛堣妭鐪?~50KB锛?
+- ✨ Binance Stocks 新增：PAYP（PayPal）
+- ✨ Gate.io 股票/指数 新增：PAYP、GVZ（Gold Volatility Index）、EWY（iShares MSCI South Korea ETF）
+- ♻️ **架构重构**: 提取共享 `ExchangeFundingMonitor` 组件，4 个交易所共用同一 UI（减少 ~47% 代码量，净减 1683 行）
+- ♻️ Binance / Lighter 集成 normalizer 层，删除本地重复函数
+- ⚡ 所有 Monitor 派生数据加 `useMemo`（`positiveCount`、`negativeCount`、`weightedAvgRate` 等）
+- 🐛 Lighter 页面加载优化：3 个 API 请求全部并行（原为 2 并行 + 1 串行）
+- 🐛 Lighter API 代理增加 15 秒超时（防止上游挂起阻塞）
+- 🐛 Binance 持仓价值修复：OI 数据并入 fetchRates 主流程，确保共享组件拿到真实 OI
+- 🐛 Lighter 资金费率年化计算修复：stat card 与表格使用不同公式，避免 100x / 8x 偏差
+- 🐛 Lighter 买卖价差修复：fetchDetailData 新增 orderBook 请求获取 bid/ask
+- 🎨 字号优化：表格标题、交易对名、图表标题、周期按钮统一缩小
+- 🎨 图表标题与周期按钮改为同一行显示
+- 🗑️ 删除 `/gate-funding` 孤立页面
+- 🗑️ 删除 `GATE_API_URLS` 死代码
+- 🗑️ 去重 Gate.io `ASSET_CATEGORIES`（减少 ~70% 内存占用）
+- 🗑️ 移除未使用的 `Geist_Mono` 字体（节省 ~50KB）
 
 ### v2.6.0 (2026-03-29)
-- 鉁?Lighter Equities 鏂板锛欳RCL銆乀SLA銆丯VDA銆丟OOGL銆丮STR銆丮SFT
-- 鉁?Lighter Commodities 鏂板锛歑PD
+- ✨ Lighter Equities 新增：CRCL、TSLA、NVDA、GOOGL、MSTR、MSFT
+- ✨ Lighter Commodities 新增：XPD
 
 ### v2.5.0 (2026-03-28)
-- 鉁?鏂板 Lighter 浜ゆ槗鎵€鏀寔锛?60+ 姘哥画鍚堢害锛?
-- 鉁?Lighter 璧勪骇鍒嗙被锛圗quities銆丒TF/Index銆丗X銆丆ommodities銆丆rypto锛?
-- 鉁?浣跨敤 Lighter 瀹樻柟 API 鑾峰彇鐪熷疄鍘嗗彶鏁版嵁
-- 鉁?OI 鍔犳潈骞冲潎骞村寲璧勯噾璐圭巼璁＄畻
-- 鉁?鍘嗗彶娉㈠姩鐜囪绠?
-- 鉁?涔板崠浠峰樊鏄剧ず
-- 馃悰 淇璧勯噾璐圭巼姝ｈ礋鍙烽棶棰橈紙鏍规嵁 direction 瀛楁锛?
-- 馃悰 淇 API 闄愭祦闂
+- ✨ 新增 Lighter 交易所支持（160+ 永续合约）
+- ✨ Lighter 资产分类（Equities、ETF/Index、FX、Commodities、Crypto）
+- ✨ 使用 Lighter 官方 API 获取真实历史数据
+- ✨ OI 加权平均年化资金费率计算
+- ✨ 历史波动率计算
+- ✨ 买卖价差显示
+- 🐛 修复资金费率正负号问题（根据 direction 字段）
+- 🐛 修复 API 限流问题
 
 ### v2.4.0 (2026-03-22)
-- 鉁?Binance 璧勪骇鍒嗙被閲嶆瀯锛圡ajors銆丮etals銆丼tocks銆丱ther Crypto锛?
-- 鉁?浼樺寲 Binance 椤甸潰鍔犺浇閫熷害锛堝紓姝ュ姞杞?openInterest锛?
-- 鉁?鑷姩鍒锋柊棰戠巼缁熶竴涓?60 绉?
-- 鉁?瀛楀彿浼樺寲锛堣〃澶淬€佷氦鏄撳鍚嶇О銆佸浘琛ㄦ爣棰橈級
-- 馃悰 淇 Gate.io API 浠ｇ悊瓒呮椂闂
-- 馃悰 淇宸蹭笅鏋惰祫浜ц繃婊ら€昏緫
+- ✨ Binance 资产分类重构（Majors、Metals、Stocks、Other Crypto）
+- ✨ 优化 Binance 页面加载速度（异步加载 openInterest）
+- ✨ 自动刷新频率统一为 60 秒
+- ✨ 字号优化（表头、交易对名称、图表标题）
+- 🐛 修复 Gate.io API 代理超时问题
+- 🐛 修复已下架资产过滤逻辑
 
 ### v2.3.0 (2026-03-22)
-- 鉁?鏂板 Binance 浜ゆ槗鎵€鏀寔锛?00+ USDT 姘哥画鍚堢害锛?
-- 鉁?Binance 璧勪骇绫诲埆绛涢€夛紙Layer1/Layer2銆丏eFi銆丮eme銆丄I銆丟ameFi銆丼torage 绛夛級
-- 鉁?Binance 鎸佷粨浠峰€兼樉绀猴紙openInterest 脳 markPrice锛?
-- 鉁?Binance 涔板崠浠峰樊鏄剧ず锛堜娇鐢?bookTicker API锛?
-- 鉁?Binance 绮剧‘ 30 澶?7 澶╄祫閲戣垂鐜囩粺璁?
-- 鉁?Binance 澶氱粨绠楀懆鏈熸敮鎸侊紙8h/4h/1h锛?
-- 鉁?鑷姩杩囨护宸蹭笅鏋惰祫浜э紙鏃犳硶鑾峰彇 openInterest锛?
-- 馃悰 淇 Binance 鍥捐〃 tooltip 涓嶆樉绀?K 绾夸俊鎭?
-- 馃悰 淇 Binance 骞村寲璁＄畻鏈箻浠?100
-- 馃悰 淇 Binance 鎺掑簭閫昏緫锛堜笌 Gate.io 涓€鑷达級
+- ✨ 新增 Binance 交易所支持（200+ USDT 永续合约）
+- ✨ Binance 资产类别筛选（Layer1/Layer2、DeFi、Meme、AI、GameFi、Storage 等）
+- ✨ Binance 持仓价值显示（openInterest × markPrice）
+- ✨ Binance 买卖价差显示（使用 bookTicker API）
+- ✨ Binance 精确 30 天/7 天资金费率统计
+- ✨ Binance 多结算周期支持（8h/4h/1h）
+- ✨ 自动过滤已下架资产（无法获取 openInterest）
+- 🐛 修复 Binance 图表 tooltip 不显示 K 线信息
+- 🐛 修复 Binance 年化计算未乘以 100
+- 🐛 修复 Binance 排序逻辑（与 Gate.io 一致）
 
 ### v2.2.0 (2026-03-20)
-- 鉁?鏂板褰撳墠涔板崠浠峰樊鏄剧ず `(Best Ask - Best Bid) / Mid Price 脳 100`
-- 鉁?鏀寔 HIP3 璧勪骇鐨勪拱鍗栦环宸绠?
-- 鉁?浼樺寲棰勬祴璐圭巼鏄剧ず锛堝勾鍖栧€奸啋鐩?+ 褰撳墠璐圭巼鐏拌壊锛?
-- 鉁?绉婚櫎 HIP3 浜ゆ槗瀵圭殑褰╄壊鏍囩
-- 馃悰 淇 HIP3 璧勪骇涔板崠浠峰樊鏁版嵁缂哄け闂
+- ✨ 新增当前买卖价差显示 `(Best Ask - Best Bid) / Mid Price × 100`
+- ✨ 支持 HIP3 资产的买卖价差计算
+- ✨ 优化预测费率显示（年化值醒目 + 当前费率灰色）
+- ✨ 移除 HIP3 交易对的彩色标签
+- 🐛 修复 HIP3 资产买卖价差数据缺失问题
 
 ### v2.1.0 (2026-03-20)
-- 鉁?鏂板缁熶竴鏁版嵁鏍囧噯鍖栧眰锛坰rc/lib/types.ts 鍜?normalizers/锛?
-- 鉁?鏂板鍘嗗彶娉㈠姩鐜囪绠楋紙鏀寔澶氬懆鏈熷勾鍖栵細1d/4h/1h锛?
-- 鉁?鏂板璧勯噾鏀剁泭鐜囪绠楋紙鍩轰簬涓綅鏁颁环鏍煎拰骞冲潎璐圭巼锛?
-- 鉁?浼樺寲鍥捐〃鍛ㄦ湡鍒囨崲锛堟尝鍔ㄧ巼鍜屾敹鐩婄巼鑷姩鏇存柊锛?
-- 馃悰 淇 Gate.io 榧犳爣鎮仠鏄剧ず鐨勮祫閲戣垂鐜囷紙鑰冭檻缁撶畻鍛ㄦ湡锛?
-- 馃悰 淇骞村寲璁＄畻鍏紡锛堟敮鎸佷笉鍚岀粨绠楀懆鏈燂級
+- ✨ 新增统一数据标准化层（src/lib/types.ts 和 normalizers/）
+- ✨ 新增历史波动率计算（支持多周期年化：1d/4h/1h）
+- ✨ 新增资金收益率计算（基于中位数价格和平均费率）
+- ✨ 优化图表周期切换（波动率和收益率自动更新）
+- 🐛 修复 Gate.io 鼠标悬停显示的资金费率（考虑结算周期）
+- 🐛 修复年化计算公式（支持不同结算周期）
 
 ### v2.0.0 (2026-03-20)
-- 鉁?鏂板 Gate.io 浜ゆ槗鎵€鏀寔
-- 鉁?鏂板璧勪骇绫诲埆绛涢€夊姛鑳?
-- 鉁?鏂板澶氫氦鏄撴墍鍒囨崲鍔熻兘
-- 馃悰 淇骞村寲璐圭巼璁＄畻鍏紡
-- 馃悰 淇绛涢€夊悗缁熻鏁版嵁涓嶆洿鏂扮殑闂
+- ✨ 新增 Gate.io 交易所支持
+- ✨ 新增资产类别筛选功能
+- ✨ 新增多交易所切换功能
+- 🐛 修复年化费率计算公式
+- 🐛 修复筛选后统计数据不更新的问题
 
 ### v1.5.0 (2026-03-19)
-- 鉁?鏂板 K 绾垮浘琛ㄥ姛鑳?
-- 鉁?鏂板澶氬懆鏈熷垏鎹紙鏃ョ嚎/4h/1h锛?
-- 鉁?鏂板璧勯噾璐圭巼鍓浘
-- 馃悰 淇鏃堕棿妗跺榻愰棶棰?
+- ✨ 新增 K 线图表功能
+- ✨ 新增多周期切换（日线/4h/1h）
+- ✨ 新增资金费率副图
+- 🐛 修复时间桶对齐问题
 
 ### v1.0.0 (2026-03-18)
-- 馃帀 棣栨鍙戝竷
-- 鉁?Hyperliquid 璧勯噾璐圭巼鐩戞帶
-- 鉁?瀹炴椂鏁版嵁鍒锋柊
-- 鉁?鍘嗗彶鏁版嵁鏌ヨ
+- 🎉 首次发布
+- ✨ Hyperliquid 资金费率监控
+- ✨ 实时数据刷新
+- ✨ 历史数据查询
 
 ---
 
-## 鈿狅笍 鍏嶈矗澹版槑
+## ⚠️ 免责声明
 
-鏈伐鍏蜂粎渚涗俊鎭弬鑰冿紝涓嶆瀯鎴愭姇璧勫缓璁€傚姞瀵嗚揣甯佷氦鏄撳瓨鍦ㄩ噸澶ч闄╋紝鍙兘涓嶉€傚悎鎵€鏈夋姇璧勮€呫€傝繃寰€琛ㄧ幇涓嶄唬琛ㄦ湭鏉ユ敹鐩娿€傝鍦ㄥ仛鍑轰换浣曚氦鏄撳喅绛栧墠锛岃繘琛岃嚜宸辩殑鐮旂┒骞惰€冭檻鎮ㄧ殑璐㈠姟鐘跺喌銆?
+本工具仅供信息参考，不构成投资建议。加密货币交易存在重大风险，可能不适合所有投资者。过往表现不代表未来收益。请在做出任何交易决策前，进行自己的研究并考虑您的财务状况。
 
 ---
 
-## 馃搫 璁稿彲璇?
+## 📄 许可证
 
-MIT License - 璇﹁ [LICENSE](LICENSE) 鏂囦欢
+MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ---
 
 <div align="center">
 
-**濡傛灉杩欎釜椤圭洰瀵逛綘鏈夊府鍔╋紝璇风粰涓€涓?猸愶笍 Star 鏀寔涓€涓嬶紒**
+**如果这个项目对你有帮助，请给一个 ⭐️ Star 支持一下！**
 
-Made with 鉂わ笍 for crypto traders
+Made with ❤️ for crypto traders
 
 </div>
