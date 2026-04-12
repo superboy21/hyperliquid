@@ -146,6 +146,7 @@ function mapToExchangeFundingRate(rate: LighterFundingRate): ExchangeFundingRate
     symbol: rate.symbol,
     fundingRate: parseFloat(rate.fundingRate),
     lastSettlementRate: Number.NaN,
+    settlementHydrationKey: `lighter:${rate.marketId}`,
     markPrice: parseFloat(rate.markPrice),
     lastPrice: parseFloat(rate.lastPrice || rate.markPrice),
     change24h: parseFloat(rate.priceChangePercent || "0"),
@@ -379,10 +380,26 @@ export default function LighterFundingMonitor() {
 
       // Process funding history
       let fundingHistory: FundingHistoryItem[] = [];
+      let latestSettlementRate: number | null = null;
       if (fundingRes.ok) {
         const fundingData = await fundingRes.json();
         const fundingArray = fundingData.fundings || fundingData;
         if (Array.isArray(fundingArray)) {
+          const latestFunding = fundingArray.reduce<any | null>((latest, item) => {
+            if (!latest || item.timestamp > latest.timestamp) {
+              return item;
+            }
+            return latest;
+          }, null);
+
+          if (latestFunding) {
+            const latestRate = parseFloat(latestFunding.rate || latestFunding.value || "0");
+            const latestDirection = latestFunding.direction || "long";
+            const latestSignedRate = latestDirection === "short" ? -latestRate : latestRate;
+            const normalizedLatestRate = latestSignedRate / 12.5;
+            latestSettlementRate = Number.isFinite(normalizedLatestRate) ? normalizedLatestRate : null;
+          }
+
           fundingHistory = fundingArray.map((item: any) => {
             const rate = parseFloat(item.rate || "0");
             const direction = item.direction || "long";
@@ -431,6 +448,7 @@ export default function LighterFundingMonitor() {
         intervalFundingRates: visibleFundingRates,
         hourlyFundingRates30d,
         bidAskSpread,
+        latestSettlementRate,
       };
     },
     [fundingRates],
@@ -459,16 +477,12 @@ export default function LighterFundingMonitor() {
       fetchRates,
       hydrateRates,
       hydrationPolicy: {
-        initialCount: 10,
+        initialCount: 7,
+        initialTargetStrategy: "selected-and-visible",
+        initialHydrationCap: 7,
+        neighborRadius: 3,
         enableScrollHydration: false,
         resetOnFilterChange: true,
-        onRowClickHydrate: (clickedSymbol: string, filteredRates: ExchangeFundingRate[]) => {
-          const idx = filteredRates.findIndex((r) => r.symbol === clickedSymbol);
-          if (idx === -1) return [];
-          const start = Math.max(0, idx - 5);
-          const end = Math.min(filteredRates.length, idx + 6);
-          return filteredRates.slice(start, end).map((r) => r.symbol);
-        },
       } satisfies HydrationPolicy,
       fetchDetailData,
       renderExtraStatsCard: () => (

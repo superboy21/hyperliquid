@@ -50,6 +50,7 @@ function mapToExchangeFundingRate(rate: FundingRate): ExchangeFundingRate {
     symbol: rate.coin,
     fundingRate: parseFloat(rate.fundingRate),
     lastSettlementRate: Number.NaN,
+    settlementHydrationKey: `hyperliquid:${rate.coin}`,
     markPrice,
     lastPrice: markPrice,
     change24h,
@@ -164,16 +165,12 @@ export default function FundingMonitor() {
       fetchRates,
       hydrateRates,
       hydrationPolicy: {
-        initialCount: 10,
+        initialCount: 7,
+        initialTargetStrategy: "selected-and-visible",
+        initialHydrationCap: 7,
+        neighborRadius: 3,
         enableScrollHydration: false,
         resetOnFilterChange: true,
-        onRowClickHydrate: (clickedSymbol: string, filteredRates: ExchangeFundingRate[]) => {
-          const idx = filteredRates.findIndex((r) => r.symbol === clickedSymbol);
-          if (idx === -1) return [];
-          const start = Math.max(0, idx - 5);
-          const end = Math.min(filteredRates.length, idx + 6);
-          return filteredRates.slice(start, end).map((r) => r.symbol);
-        },
       } satisfies HydrationPolicy,
       filterFn: (rate: ExchangeFundingRate, filterType: string) => {
         if (filterType === "xyzHip3") return rate.assetCategory === "xyzHip3";
@@ -206,11 +203,16 @@ export default function FundingMonitor() {
           visibleCandles.some((candle) => candle.openTime === item.bucketStartTime),
         );
         const hourlyFundingRates = getAverageFundingRatesByInterval(fundingHistory, "1h");
+        const latestFundingEntry = fundingHistory[fundingHistory.length - 1];
+        const latestSettlementRate = latestFundingEntry
+          ? Number.parseFloat(latestFundingEntry.fundingRate ?? "")
+          : Number.NaN;
 
         return {
           candles: visibleCandles,
           intervalFundingRates: visibleFundingRates,
           hourlyFundingRates30d: hourlyFundingRates,
+          latestSettlementRate: Number.isFinite(latestSettlementRate) ? latestSettlementRate : null,
         };
       },
       renderExchangeBadge: (symbol: string) => (

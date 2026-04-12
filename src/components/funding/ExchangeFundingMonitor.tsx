@@ -11,6 +11,7 @@ export interface ExchangeFundingRate {
   symbol: string;
   fundingRate: number;
   lastSettlementRate: number;
+  settlementHydrationKey?: string;
   markPrice: number;
   lastPrice: number;
   change24h: number;
@@ -65,12 +66,16 @@ export interface DetailData {
   intervalFundingRates: IntervalFundingRateItem[];
   hourlyFundingRates30d: IntervalFundingRateItem[];
   bidAskSpread?: number | null;
+  latestSettlementRate?: number | null;
 }
 
 export interface HydrationPolicy {
   initialCount: number;
   enableScrollHydration: boolean;
   resetOnFilterChange?: boolean;
+  initialTargetStrategy?: "fixed-count" | "selected-and-visible";
+  initialHydrationCap?: number;
+  neighborRadius?: number;
   onRowClickHydrate?: (
     clickedSymbol: string,
     filteredRates: ExchangeFundingRate[],
@@ -105,6 +110,9 @@ export interface ExchangeFundingMonitorConfig {
 }
 
 // ==================== Constants ====================
+
+const TABLE_ROW_HEIGHT = 41;
+const SETTLEMENT_CACHE_TTL_MS = 60000;
 
 const intervalLabels: Record<ChartInterval, string> = {
   "1d": "日线",
@@ -218,6 +226,34 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const fundingRatesRef = useRef<ExchangeFundingRate[]>([]);
   const selectedCoinRef = useRef<string | null>(null);
   const filteredRatesRef = useRef<ExchangeFundingRate[]>([]);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const settlementCacheRef = useRef<Map<string, { value: number; timestamp: number }>>(new Map());
+  const settlementInflightRef = useRef<Set<string>>(new Set());
+
+  const getSettlementCacheKey = useCallback((rate: ExchangeFundingRate): string => {
+    return rate.settlementHydrationKey ?? rate.symbol;
+  }, []);
+
+  const cacheSettlementRate = useCallback((key: string, value: number) => {
+    settlementCacheRef.current.set(key, {
+      value,
+      timestamp: Date.now(),
+    });
+  }, []);
+
+  const getFreshCachedSettlementRate = useCallback((key: string): number | null => {
+    const cached = settlementCacheRef.current.get(key);
+    if (!cached) {
+      return null;
+    }
+
+    if (Date.now() - cached.timestamp > SETTLEMENT_CACHE_TTL_MS) {
+      settlementCacheRef.current.delete(key);
+      return null;
+    }
+
+    return cached.value;
+  }, []);
 
   // Fetch rates
   const handleFetchRates = useCallback(async () => {
@@ -236,6 +272,11 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
             ? { ...rate, lastSettlementRate: previousSettlementRate }
             : rate;
         });
+        for (const rate of mergedRates) {
+          if (Number.isFinite(rate.lastSettlementRate)) {
+            cacheSettlementRate(getSettlementCacheKey(rate), rate.lastSettlementRate);
+          }
+        }
         fundingRatesRef.current = mergedRates;
         return mergedRates;
       });
@@ -246,7 +287,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     } finally {
       setLoading(false);
     }
-  }, [fetchRates]);
+  }, [cacheSettlementRate, fetchRates, getSettlementCacheKey]);
 
   useEffect(() => {
     handleFetchRates();
@@ -275,6 +316,21 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         setIntervalFundingRates(detailData.intervalFundingRates);
         setHourlyFundingRates30d(detailData.hourlyFundingRates30d);
         setDetailBidAskSpread(detailData.bidAskSpread ?? null);
+        if (Number.isFinite(detailData.latestSettlementRate)) {
+          setFundingRates((prev) => {
+            const next = prev.map((rate) => {
+              if (rate.symbol !== symbol) {
+                return rate;
+              }
+
+              const latestSettlementRate = detailData.latestSettlementRate as number;
+              cacheSettlementRate(getSettlementCacheKey(rate), latestSettlementRate);
+              return { ...rate, lastSettlementRate: latestSettlementRate };
+            });
+            fundingRatesRef.current = next;
+            return next;
+          });
+        }
       } catch (fetchError) {
         console.error("Error fetching detail:", fetchError);
         setDetailError("加载图表数据时发生错误。");
@@ -282,7 +338,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         setDetailLoading(false);
       }
     },
-    [fetchDetailData],
+    [cacheSettlementRate, fetchDetailData, getSettlementCacheKey],
   );
 
   useEffect(() => {
@@ -341,37 +397,143 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     () => filteredAndSortedRates.map((rate) => rate.symbol).join("|"),
     [filteredAndSortedRates],
   );
+  const shouldDeferSelectedSettlementToDetail =
+    (config.hydrationPolicy?.initialTargetStrategy ?? "fixed-count") === "selected-and-visible";
 
   useEffect(() => {
     if (!hydrateRates || loading || filteredAndSortedRates.length === 0) {
       return;
     }
 
-    void hydrateRates(filteredAndSortedRates, (updater) => {
+    const rateMap = new Map(filteredAndSortedRates.map((rate) => [rate.symbol, rate]));
+    const selectedSymbol = selectedCoinRef.current;
+    const cachedUpdates = new Map<string, number>();
+    const symbolsToHydrate: string[] = [];
+    const inflightKeys: string[] = [];
+
+    for (const symbol of hydrationTargetSymbols) {
+      const rate = rateMap.get(symbol);
+      if (!rate) {
+        continue;
+      }
+
+      if (shouldDeferSelectedSettlementToDetail && selectedSymbol && symbol === selectedSymbol) {
+        continue;
+      }
+
+      if (Number.isFinite(rate.lastSettlementRate)) {
+        continue;
+      }
+
+      const cacheKey = getSettlementCacheKey(rate);
+      const cachedRate = getFreshCachedSettlementRate(cacheKey);
+      if (cachedRate !== null) {
+        cachedUpdates.set(symbol, cachedRate);
+        continue;
+      }
+
+      if (settlementInflightRef.current.has(cacheKey)) {
+        continue;
+      }
+
+      settlementInflightRef.current.add(cacheKey);
+      inflightKeys.push(cacheKey);
+      symbolsToHydrate.push(symbol);
+    }
+
+    if (cachedUpdates.size > 0) {
       setFundingRates((prev) => {
-        const next = updater(prev);
+        const next = prev.map((rate) =>
+          cachedUpdates.has(rate.symbol)
+            ? { ...rate, lastSettlementRate: cachedUpdates.get(rate.symbol) as number }
+            : rate,
+        );
         fundingRatesRef.current = next;
         return next;
       });
-    }, hydrationTargetSymbols, hydrationKey);
-  }, [filteredAndSortedRates, hydrateRates, hydrationTargetSymbols, hydrationKey, loading]);
+    }
+
+    if (symbolsToHydrate.length === 0) {
+      return;
+    }
+
+    void hydrateRates(filteredAndSortedRates, (updater) => {
+      setFundingRates((prev) => {
+        const next = updater(prev);
+        for (const rate of next) {
+          if (Number.isFinite(rate.lastSettlementRate)) {
+            cacheSettlementRate(getSettlementCacheKey(rate), rate.lastSettlementRate);
+          }
+        }
+        fundingRatesRef.current = next;
+        return next;
+      });
+    }, symbolsToHydrate, hydrationKey).finally(() => {
+      for (const key of inflightKeys) {
+        settlementInflightRef.current.delete(key);
+      }
+    });
+  }, [
+    cacheSettlementRate,
+    filteredAndSortedRates,
+    getFreshCachedSettlementRate,
+    getSettlementCacheKey,
+    hydrateRates,
+    hydrationTargetSymbols,
+    hydrationKey,
+    loading,
+    shouldDeferSelectedSettlementToDetail,
+  ]);
 
   const initialCount = config.hydrationPolicy?.initialCount ?? 50;
+  const initialHydrationCap = config.hydrationPolicy?.initialHydrationCap ?? initialCount;
+  const initialTargetStrategy = config.hydrationPolicy?.initialTargetStrategy ?? "fixed-count";
   const resetOnFilterChange = config.hydrationPolicy?.resetOnFilterChange ?? true;
   useEffect(() => {
+    if (filteredAndSortedRates.length === 0) {
+      setHydrationTargetSymbols([]);
+      return;
+    }
+
+    const nextTargetSymbols =
+      initialTargetStrategy === "selected-and-visible"
+        ? (() => {
+            const selectedSymbol = filteredAndSortedRates[0]?.symbol;
+            const visibleCount = Math.max(
+              1,
+              Math.ceil((tableScrollRef.current?.clientHeight ?? TABLE_ROW_HEIGHT) / TABLE_ROW_HEIGHT),
+            );
+            const visibleSymbols = filteredAndSortedRates
+              .slice(0, Math.min(filteredAndSortedRates.length, visibleCount))
+              .map((rate) => rate.symbol);
+
+            return Array.from(new Set([
+              ...(selectedSymbol ? [selectedSymbol] : []),
+              ...visibleSymbols,
+            ])).slice(0, initialHydrationCap);
+          })()
+        : filteredAndSortedRates.slice(0, initialCount).map((rate) => rate.symbol);
+
     if (!resetOnFilterChange) {
       setHydrationTargetSymbols((prev) => {
-        if (prev.length > 0 || filteredAndSortedRates.length === 0) {
+        if (prev.length > 0) {
           return prev;
         }
 
-        return filteredAndSortedRates.slice(0, initialCount).map((rate) => rate.symbol);
+        return nextTargetSymbols;
       });
       return;
     }
 
-    setHydrationTargetSymbols(filteredAndSortedRates.slice(0, initialCount).map((rate) => rate.symbol));
-  }, [filteredAndSortedRates, filteredOrderKey, initialCount, resetOnFilterChange]);
+    setHydrationTargetSymbols(nextTargetSymbols);
+  }, [
+    filteredAndSortedRates,
+    filteredOrderKey,
+    initialCount,
+    initialHydrationCap,
+    initialTargetStrategy,
+    resetOnFilterChange,
+  ]);
 
   // Auto-select first coin
   useEffect(() => {
@@ -618,12 +780,12 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
             </p>
           </div>
           <div
+            ref={tableScrollRef}
             className="max-h-[960px] overflow-x-auto overflow-y-auto lg:min-h-0 lg:flex-1"
             onScroll={config.hydrationPolicy?.enableScrollHydration ?? true ? (e) => {
-              const rowHeight = 41;
               const target = e.currentTarget;
-              const startIndex = Math.max(0, Math.floor(target.scrollTop / rowHeight));
-              const visibleCount = Math.ceil(target.clientHeight / rowHeight) + 2;
+              const startIndex = Math.max(0, Math.floor(target.scrollTop / TABLE_ROW_HEIGHT));
+              const visibleCount = Math.ceil(target.clientHeight / TABLE_ROW_HEIGHT) + 2;
               const endIndex = Math.min(filteredAndSortedRates.length, startIndex + visibleCount);
               const visibleSymbols = filteredAndSortedRates.slice(startIndex, endIndex).map((rate) => rate.symbol);
 
@@ -654,8 +816,18 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     key={rate.symbol}
                     onClick={() => {
                       setSelectedCoin(rate.symbol);
-                      if (config.hydrationPolicy?.onRowClickHydrate) {
-                        const symbols = config.hydrationPolicy.onRowClickHydrate(rate.symbol, filteredAndSortedRates);
+                      const symbols = config.hydrationPolicy?.onRowClickHydrate
+                        ? config.hydrationPolicy.onRowClickHydrate(rate.symbol, filteredAndSortedRates)
+                        : config.hydrationPolicy?.neighborRadius
+                          ? (() => {
+                              const idx = filteredAndSortedRates.findIndex((r) => r.symbol === rate.symbol);
+                              if (idx === -1) return [];
+                              const start = Math.max(0, idx - config.hydrationPolicy.neighborRadius);
+                              const end = Math.min(filteredAndSortedRates.length, idx + config.hydrationPolicy.neighborRadius + 1);
+                              return filteredAndSortedRates.slice(start, end).map((r) => r.symbol);
+                            })()
+                          : [];
+                      if (symbols.length > 0) {
                         setHydrationTargetSymbols((prev) => {
                           const next = new Set(prev);
                           for (const s of symbols) next.add(s);

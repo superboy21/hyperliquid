@@ -11,6 +11,14 @@
 
 [在线演示](https://your-demo-link.com) · [报告问题](https://github.com/your-repo/issues) · [功能建议](https://github.com/your-repo/discussions)
 
+### Release v2026.04.12
+
+- Hyperliquid / Lighter 最新结算费率首屏加载改为 `selected + 可见行`，hydration 总上限 `7`
+- 点击交易对后的 latest settlement 预取范围调整为 `±3`
+- 共享 hydration 层新增 `60000ms` settlement 缓存和 inflight 去重
+- selected 行图表 detail 请求现在会顺手回填 latest settlement，减少额外单独请求
+- Hyperliquid 先查 `12h` 后回退 `72h`，Lighter 先查 `6h` 后回退 `24h`
+
 </div>
 
 ---

@@ -373,28 +373,41 @@ export async function getFundingHistory(coin: string, startTimeSeconds?: number)
   }
 }
 
-export async function getLatestSettledFundingRate(coin: string, lookbackHours: number = 72): Promise<number> {
+async function fetchLatestSettledFundingRateInWindow(coin: string, lookbackHours: number): Promise<number> {
+  const endTime = Date.now();
+  const startTime = endTime - lookbackHours * 60 * 60 * 1000;
+
+  const data = await fetchHyperliquidInfo<any[]>(
+    {
+      type: "fundingHistory",
+      coin,
+      startTime,
+      endTime,
+    },
+    2,
+  );
+
+  if (!Array.isArray(data) || data.length === 0) {
+    return Number.NaN;
+  }
+
+  const latestEntry = data[data.length - 1];
+  const latestRate = Number.parseFloat(latestEntry?.fundingRate ?? "");
+  return Number.isFinite(latestRate) ? latestRate : Number.NaN;
+}
+
+export async function getLatestSettledFundingRate(coin: string, lookbackHours: number = 12): Promise<number> {
   try {
-    const endTime = Date.now();
-    const startTime = endTime - lookbackHours * 60 * 60 * 1000;
+    const latestRate = await fetchLatestSettledFundingRateInWindow(coin, lookbackHours);
+    if (Number.isFinite(latestRate)) {
+      return latestRate;
+    }
 
-    const data = await fetchHyperliquidInfo<any[]>(
-      {
-        type: "fundingHistory",
-        coin,
-        startTime,
-        endTime,
-      },
-      2,
-    );
-
-    if (!Array.isArray(data) || data.length === 0) {
+    if (lookbackHours >= 72) {
       return Number.NaN;
     }
 
-    const latestEntry = data[data.length - 1];
-    const latestRate = Number.parseFloat(latestEntry?.fundingRate ?? "");
-    return Number.isFinite(latestRate) ? latestRate : Number.NaN;
+    return await fetchLatestSettledFundingRateInWindow(coin, 72);
   } catch (error) {
     console.error(`[API] Error fetching latest settled funding for ${coin}:`, error);
     return Number.NaN;

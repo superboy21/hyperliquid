@@ -235,6 +235,21 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
+export async function getLatestSettledFundingRate(
+  marketId: number,
+  lookbackHours: number = 6
+): Promise<number> {
+  const latestRate = await fetchLatestSettledFundingRateInWindow(marketId, lookbackHours);
+  if (Number.isFinite(latestRate)) {
+    return latestRate;
+  }
+
+  if (lookbackHours >= 24) {
+    return Number.NaN;
+  }
+
+  return fetchLatestSettledFundingRateInWindow(marketId, 24);
+}
 /**
  * 获取指定市场的历史资金费率
  * @param marketId 市场 ID
@@ -289,36 +304,36 @@ export async function getFundingHistory(
  * @param lookbackHours 回看小时数，默认 24 小时
  * @returns 最近一次已结算费率（已处理正负方向），如果无法获取则返回 NaN
  */
-export async function getLatestSettledFundingRate(
+async function fetchLatestSettledFundingRateInWindow(
   marketId: number,
-  lookbackHours: number = 24
+  lookbackHours: number,
 ): Promise<number> {
   // 限制最大回看时间，避免请求过多数据
   const boundedHours = Math.min(Math.max(lookbackHours, 1), 168); // 1-168 小时
   const countBack = boundedHours;
 
   try {
-    const now = Math.floor(Date.now() / 1000);
-    const startTime = now - (boundedHours * LIGHTER_FUNDING_INTERVAL_SECONDS);
+  const now = Math.floor(Date.now() / 1000);
+  const startTime = now - (boundedHours * LIGHTER_FUNDING_INTERVAL_SECONDS);
 
-    const response = await fetch(
-      `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${countBack}`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-      }
-    );
-
-    if (!response.ok) {
-      return Number.NaN;
+  const response = await fetch(
+    `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${countBack}`,
+    {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
     }
+  );
 
-    const data = await response.json();
-    const fundingArray = data?.fundings ?? data;
-    if (!Array.isArray(fundingArray) || fundingArray.length === 0) {
-      return Number.NaN;
-    }
+  if (!response.ok) {
+    return Number.NaN;
+  }
+
+  const data = await response.json();
+  const fundingArray = data?.fundings ?? data;
+  if (!Array.isArray(fundingArray) || fundingArray.length === 0) {
+    return Number.NaN;
+  }
 
     // 按时间戳降序排序，取最新的一条
     const sortedData = [...fundingArray].sort((a, b) => b.timestamp - a.timestamp);
