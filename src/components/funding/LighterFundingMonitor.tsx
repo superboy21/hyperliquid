@@ -57,7 +57,7 @@ const LIGHTER_FUNDING_INTERVAL_SECONDS = 3600; // 1 hour
 const EQUITIES = ["HOOD", "AAPL", "META", "INTC", "AMZN", "BMNR", "PLTR", "COIN", "SAMSUNG", "STRC", "AMD", "SNDK", "HANMI", "HYUNDAI", "ASML", "CRCL", "TSLA", "NVDA", "GOOGL", "MSTR", "MSFT"];
 const ETF_INDEX = ["QQQ", "SPY", "KRCOMP", "URA", "IWM", "MAGS", "BOTZ", "DIA"];
 const FX = ["EURUSD", "USDKRW", "USDJPY", "GBPUSD", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD"];
-const COMMODITIES = ["XAU", "XAG", "WTI", "BRENTOIL", "XPT", "XCU", "XPD"];
+const COMMODITIES = ["XAU", "XAG", "WTI", "BRENTOIL", "XPT", "XCU", "XPD", "PAXG"];
 
 // ==================== Helpers ====================
 
