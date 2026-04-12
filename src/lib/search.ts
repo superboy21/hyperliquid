@@ -718,9 +718,16 @@ async function fetchBinanceDetail(
         time: item.fundingTime,
         fundingRate: item.fundingRate,
       }));
-      // First entry is the most recent settled rate (same as BinanceFundingMonitor hydration)
-      if (fundingData.length > 0) {
-        latestSettledRate = parseFloat(fundingData[0]?.fundingRate ?? "");
+      // Binance funding history ordering is not guaranteed here, so select the newest row explicitly.
+      const latestFunding = fundingData.reduce<BinanceFundingHistoryItem | null>((latest, item) => {
+        if (!latest || item.fundingTime > latest.fundingTime) {
+          return item;
+        }
+        return latest;
+      }, null);
+
+      if (latestFunding) {
+        latestSettledRate = parseFloat(latestFunding.fundingRate ?? "");
       }
     }
   }
