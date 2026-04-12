@@ -164,17 +164,21 @@ const MEME = ["DOGE", "SHIB", "PEPE", "FLOKI", "BONK", "WIF"];
 // AI 代币
 const AI = ["FET", "RNDR", "WLD", "AGIX", "TAO"];
 
+// 大宗商品
+const COMMODITIES = ["XAU", "XAG", "WTI", "BRENTOIL", "XPT", "XCU", "XPD", "PAXG"];
+
 /**
  * 获取资产类别
  */
 export function getAssetCategory(symbol: string): string {
   const base = symbol.replace("-USD", "").replace("-PERP", "").toUpperCase();
-  
+
   if (MAJORS.includes(base)) return "Majors";
   if (DEFI.includes(base)) return "DeFi";
   if (MEME.includes(base)) return "Meme";
   if (AI.includes(base)) return "AI";
-  
+  if (COMMODITIES.includes(base)) return "Commodities";
+
   return "Other";
 }
 
