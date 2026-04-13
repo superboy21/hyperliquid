@@ -1,6 +1,6 @@
 // ==================== 交易所标识 ====================
 
-export type ExchangeId = "hyperliquid" | "gateio" | "binance" | "lighter";
+export type ExchangeId = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx";
 
 export interface ExchangeInfo {
   id: ExchangeId;
@@ -33,6 +33,12 @@ export const EXCHANGES: Record<ExchangeId, ExchangeInfo> = {
     name: "Lighter",
     color: "purple",
     accentColor: "bg-purple-600",
+  },
+  okx: {
+    id: "okx",
+    name: "OKX",
+    color: "emerald",
+    accentColor: "bg-emerald-600",
   },
 };
 

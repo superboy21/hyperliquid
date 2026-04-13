@@ -9,6 +9,7 @@ export interface ExchangeTransportFlags {
   gateio: ExchangeTransportMode;
   hyperliquid: ExchangeTransportMode;
   lighter: ExchangeTransportMode;
+  okx: ExchangeTransportMode;
 }
 
 export function getExchangeTransportFlags(): ExchangeTransportFlags {
@@ -17,5 +18,6 @@ export function getExchangeTransportFlags(): ExchangeTransportFlags {
     gateio: parseMode(process.env.NEXT_PUBLIC_GATE_TRANSPORT_MODE, "native"),
     hyperliquid: parseMode(process.env.NEXT_PUBLIC_HYPERLIQUID_TRANSPORT_MODE, "native"),
     lighter: parseMode(process.env.NEXT_PUBLIC_LIGHTER_TRANSPORT_MODE, "native"),
+    okx: "native",
   };
 }

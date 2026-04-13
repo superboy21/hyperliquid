@@ -6,8 +6,9 @@ import FundingMonitor from "@/components/funding/FundingMonitor";
 import GateFundingMonitor from "@/components/funding/GateFundingMonitor";
 import BinanceFundingMonitor from "@/components/funding/BinanceFundingMonitor";
 import LighterFundingMonitor from "@/components/funding/LighterFundingMonitor";
+import OkxFundingMonitor from "@/components/funding/OkxFundingMonitor";
 
-type Exchange = "hyperliquid" | "gate" | "binance" | "lighter";
+type Exchange = "hyperliquid" | "gate" | "binance" | "lighter" | "okx";
 
 interface ExchangeConfig {
   id: Exchange;
@@ -45,6 +46,13 @@ const EXCHANGE_CONFIG: ExchangeConfig[] = [
     color: "purple",
     iconPath: "M13 10V3L4 14h7v7l9-11h-7z",
     component: <LighterFundingMonitor />,
+  },
+  {
+    id: "okx",
+    name: "OKX",
+    color: "emerald",
+    iconPath: "M5 5h5v5H5V5zm9 0h5v5h-5V5zM5 14h5v5H5v-5zm9-2h5v7h-7v-5h2v-2z",
+    component: <OkxFundingMonitor />,
   },
 ];
 
