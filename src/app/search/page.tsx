@@ -38,7 +38,7 @@ export default function SearchPage() {
             </Link>
           </div>
           <p className="text-gray-400">
-            输入关键字，搜索 Hyperliquid、Gate.io、Binance、Lighter 四个交易所的交易对，并对比 9 个核心指标。
+            输入关键字，搜索所有交易所的交易对，并对比 9核心指标。
           </p>
         </div>
 
