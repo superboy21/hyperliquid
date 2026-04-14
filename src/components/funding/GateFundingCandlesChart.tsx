@@ -244,7 +244,7 @@ export default function GateFundingCandlesChart({
       observer.disconnect();
       chart.dispose();
     };
-  }, [coin, interval, candles, intervalFundingRates]);
+  }, [coin, interval, candles, intervalFundingRates, fundingIntervalSeconds]);
 
   return <div ref={chartRef} className="h-[440px] w-full" />;
 }
