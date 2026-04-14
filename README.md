@@ -7,7 +7,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-4-38bdf8)
 
-**实时监控 Hyperliquid、Gate.io、Binance 和 Lighter 资金费率的专业交易工具**
+**实时监控 Hyperliquid、Gate.io、Binance、Lighter 和 OKX 资金费率的专业交易工具**
 
 [在线演示](https://your-demo-link.com) · [报告问题](https://github.com/your-repo/issues) · [功能建议](https://github.com/your-repo/discussions)
 
@@ -22,6 +22,7 @@
 - **Gate.io**: 支持 655+ 永续合约，自动识别资产类别
 - **Binance**: 支持 200+ USDT 永续合约，智能资产分类筛选
 - **Lighter**: 支持 160+ 永续合约，包括股票、ETF、外汇、商品、加密货币
+- **OKX**: 支持官方 SWAP 永续合约，原生路由直连，覆盖 Crypto、股票/指数、商品、外汇、债券等类别
 
 ### 📈 实时数据监控
 - **自动刷新**: 每 300 秒自动更新数据
@@ -29,7 +30,8 @@
 - **智能筛选**: 按资产类别（Crypto、股票、ETF、外汇、商品等）快速筛选
 - **最新结算费率**: 支持 Hyperliquid、Binance、Gate.io、Lighter 的真实已结算费率展示
 - **保守请求策略**: Hyperliquid 采用按需加载（首屏前 10 + 点击 ±5），避免 API 限流
-- **跨交易所搜索**: 支持搜索四个交易所的交易对，9+ 核心指标对比
+- **跨交易所搜索**: 支持搜索 Hyperliquid、Gate.io、Binance、Lighter、OKX 五个交易所的交易对，9+ 核心指标对比
+- **OKX native-only**: OKX 仅使用官方原生 API 路由，`/api/okx/ccxt` 已退役并固定走 native transport
 
 ### 🎯 专业图表分析
 - **K 线图表**: 支持日线、4小时线、1小时线切换
@@ -51,7 +53,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  交易所资金费率监控                                               │
-│  [Hyperliquid] [Gate.io] [Binance] [Lighter]                    │
+│  [Hyperliquid] [Gate.io] [Binance] [Lighter] [OKX]              │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │
 │  │交易对数量│ │正资金费率│ │负资金费率│ │平均年化  │ │ 结算周期 │   │
@@ -86,7 +88,7 @@
 
 ### 架构特点
 
-- **共享 ExchangeFundingMonitor 组件**: 4 个交易所共用同一 UI 组件（减少 ~47% 代码量）
+- **共享 ExchangeFundingMonitor 组件**: 5 个交易所共用同一 UI 组件，OKX 也复用统一表格、统计、筛选和图表布局
 - **统一数据标准化层**: 所有交易所数据转换为统一格式 `ExchangeFundingRate`
 - **交易所 Normalizer**: 每个交易所独立的标准化函数，便于扩展
 - **多周期年化计算**: 根据图表周期（1d/4h/1h）自动调整年化系数
@@ -95,6 +97,7 @@
 - **useMemo 优化**: 所有派生数据使用 `useMemo` 缓存，避免不必要的重算
 - **保守请求策略**: Hyperliquid 采用按需加载最新结算费率，避免 API 限流
 - **智能 hydration**: Gate.io 支持滚动按需加载，Binance/Hyperliquid 采用 batch/按需策略
+- **搜索/详情统一口径**: OKX 已接入共享 search pipeline 与 canonical detail metrics，搜索页和单交易所页使用一致的数据语义
 
 ---
 
@@ -148,6 +151,7 @@ src/
 │   ├── api/
 │   │   ├── gate/                       # Gate.io API 代理
 │   │   ├── binance/                    # Binance API 代理（含 klines）
+│   │   ├── okx/                        # OKX 原生 API 代理（CCXT 路径已退役）
 │   │   └── lighter/                    # Lighter API 代理
 │   └── page.tsx                        # 首页
 ├── components/
@@ -157,12 +161,15 @@ src/
 │   │   ├── GateFundingMonitor.tsx      # Gate.io 数据获取 + 配置
 │   │   ├── BinanceFundingMonitor.tsx   # Binance 数据获取 + 配置
 │   │   ├── LighterFundingMonitor.tsx   # Lighter 数据获取 + 配置
+│   │   ├── OkxFundingMonitor.tsx       # OKX 数据获取 + 配置
 │   │   └── *Chart.tsx                  # 各交易所图表组件
 │   └── search/
 │       └── CrossExchangeSearch.tsx     # 跨交易所搜索核心组件
 ├── lib/
 │   ├── types.ts                        # 统一数据接口定义
 │   ├── search.ts                       # 跨交易所搜索工具函数
+│   ├── adapters/
+│   │   └── okx.ts                      # OKX native adapter + detail/search 映射
 │   ├── normalizers/                    # 数据标准化层
 │   │   ├── index.ts                    # 统一导出和工具函数
 │   │   ├── hyperliquid.ts              # Hyperliquid 标准化
@@ -224,6 +231,18 @@ src/
 | K 线图表 | ✅ |
 | 买卖价差显示 | ✅ |
 
+### OKX
+| 功能 | 支持状态 |
+|------|----------|
+| SWAP 永续合约 | ✅ |
+| Native-only transport | ✅ |
+| 资产类别筛选 | ✅ |
+| 实时资金费率 | ✅ |
+| 历史数据 | ✅ |
+| K 线图表 | ✅ |
+| 最新结算费率补充 | ✅ |
+| 跨交易所搜索集成 | ✅ |
+
 ---
 
 ## 📊 资产类别分类
@@ -248,6 +267,14 @@ src/
 - **Commodities**: XAU, XAG, WTI, BRENTOIL, XPT, XCU, XPD
 - **Crypto**: 其他所有加密货币永续合约
 
+### OKX
+- **Crypto**: BTC、ETH、SOL 等主流与长尾加密货币 SWAP
+- **股票/指数**: 使用 OKX instrument category `3` 的永续品种
+- **商品**: XAU、XAG、BZ、CL 等商品类永续品种
+- **外汇**: 使用 OKX instrument category `5` 的永续品种
+- **债券**: 使用 OKX instrument category `6` 的永续品种
+- **其他**: 未命中分类映射时归入其他
+
 ---
 
 ## 🔧 配置选项
@@ -259,6 +286,14 @@ src/
 NEXT_PUBLIC_HYPERLIQUID_API=https://api.hyperliquid.xyz
 NEXT_PUBLIC_GATE_API=https://api.gate.io/api/v4
 ```
+
+### Transport 模式说明
+
+- `Binance` 默认使用 `ccxt`，保留 native fallback
+- `Gate.io` 默认使用 `native`，仍支持 transport 切换
+- `Hyperliquid` / `Lighter` 走 native 路径
+- `OKX` 固定 `native`，`getExchangeTransportFlags()` 会强制返回 `okx: "native"`
+- `/api/okx/ccxt` 已退役，访问时返回 `410 Gone`
 
 ### 数据刷新间隔
 
@@ -275,6 +310,13 @@ Hyperliquid 页面采用按需加载最新结算费率策略：
 - **点击行**: 加载当前点击交易对及其上下各 5 个交易对
 - **切换标签**: 加载该标签页前 10 个交易对
 - **其他情况**: 不自动获取最新结算费率，避免 API 限流
+
+### OKX 集成说明
+
+- Funding 页新增 OKX 标签，复用共享 `ExchangeFundingMonitor` 组件
+- Search 页已纳入 OKX，支持统一排序、渐进式 detail 加载和 30 天统计口径
+- OKX detail 通过 `src/lib/adapters/okx.ts` 聚合 funding history、history candles、open interest 等原生接口
+- 最新结算费率优先使用 OKX 官方 funding-rate 接口返回的 settled 信息进行补充
 
 ---
 
@@ -346,6 +388,12 @@ Hyperliquid 页面采用按需加载最新结算费率策略：
 ---
 
 ## 📝 更新日志
+
+### v2026.04.15 (2026-04-15)
+- ✨ 新增 **OKX funding monitor**：Funding 页接入 OKX SWAP 永续合约，复用共享监控 UI、筛选、图表和统计能力
+- ✨ 新增 **OKX search integration**：跨交易所搜索现在覆盖 OKX，并复用 canonical detail metrics 管线
+- ✨ 明确 **OKX native-only transport**：`src/lib/exchange-flags.ts` 固定 `okx: "native"`，`/api/okx/ccxt` 退役并返回 `410 Gone`
+- 📝 README 更新：补充 OKX 支持矩阵、asset category、transport 说明与 search 集成说明
 
 ### v2026.04.14 (2026-04-13)
 - ✨ CCXT 迁移基础设施：新增 canonical adapter contract 和 transport flags 系统
