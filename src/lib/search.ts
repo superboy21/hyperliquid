@@ -35,11 +35,17 @@ import {
   fetchGateCanonicalDetail,
   fetchGateSearchRates,
 } from "@/lib/adapters/gate";
+import {
+  computeOkxAverageFundingRatesByInterval,
+  fetchOkxCanonicalDetail,
+  fetchOkxCanonicalRates,
+  mapOkxDetailToMetrics,
+} from "@/lib/adapters/okx";
 
 // ==================== Interfaces ====================
 
 export interface SearchExchangeRate {
-  exchange: "Hyperliquid" | "Gate.io" | "Binance" | "Lighter";
+  exchange: "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX";
   exchangeColor: string;
   symbol: string;
   rawSymbol?: string;
@@ -249,11 +255,12 @@ function computeAvgFundingRate1d(
 // ==================== Fetch All Rates ====================
 
 export async function fetchAllRates(): Promise<SearchExchangeRate[]> {
-  const [hyperliquidRates, gateioRates, binanceRates, lighterRates] = await Promise.allSettled([
+  const [hyperliquidRates, gateioRates, binanceRates, lighterRates, okxRates] = await Promise.allSettled([
     fetchHyperliquidRates(),
     fetchGateioRates(),
     fetchBinanceRates(),
     fetchLighterRates(),
+    fetchOkxRates(),
   ]);
 
   const results: SearchExchangeRate[] = [];
@@ -280,6 +287,12 @@ export async function fetchAllRates(): Promise<SearchExchangeRate[]> {
     results.push(...lighterRates.value);
   } else {
     console.error("[Search] Lighter fetch failed:", lighterRates.reason);
+  }
+
+  if (okxRates.status === "fulfilled") {
+    results.push(...okxRates.value);
+  } else {
+    console.error("[Search] OKX fetch failed:", okxRates.reason);
   }
 
   return results;
@@ -320,6 +333,29 @@ async function fetchGateioRates(): Promise<SearchExchangeRate[]> {
 
 async function fetchBinanceRates(): Promise<SearchExchangeRate[]> {
   return fetchBinanceSearchRates();
+}
+
+// ==================== OKX Rates ====================
+
+async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
+  const rows = await fetchOkxCanonicalRates();
+  return rows.map((row) => ({
+    exchange: "OKX" as const,
+    exchangeColor: "emerald",
+    symbol: row.symbol,
+    rawSymbol: row.rawSymbol,
+    fundingRate: row.fundingRate,
+    markPrice: row.markPrice,
+    lastPrice: row.lastPrice,
+    change24h: row.change24h,
+    quoteVolume: row.quoteVolume,
+    openInterest: row.openInterest,
+    notionalValue: row.notionalValue,
+    fundingInterval: row.fundingIntervalSeconds,
+    assetCategory: row.assetCategory,
+    bestBid: row.bestBid ?? undefined,
+    bestAsk: row.bestAsk ?? undefined,
+  }));
 }
 
 // ==================== Lighter Rates ====================
@@ -416,6 +452,8 @@ export async function fetchDetailForSymbol(
       return fetchGateioDetail(rate.symbol, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Binance":
       return fetchBinanceDetail(rate.symbol, rate.bestBid, rate.bestAsk, signal);
+    case "OKX":
+      return fetchOkxDetail(rate.rawSymbol ?? `${rate.symbol}-USDT-SWAP`, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Lighter":
       return fetchLighterDetail(rate.marketId, rate.symbol, rate.bestBid, rate.bestAsk, signal);
   }
@@ -503,6 +541,40 @@ async function fetchBinanceDetail(
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory30d);
   const avg1d = computeAvgFundingRate1d(fundingHistory30d);
+
+  return {
+    lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
+    avgFundingRate1d: avg1d,
+    historicalVolatility,
+    bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
+    avgFundingRate7d: avg7d,
+    avgFundingRate30d: avg30d,
+  };
+}
+
+// ==================== OKX Detail ====================
+
+async function fetchOkxDetail(
+  rawSymbol: string,
+  fundingIntervalSeconds: number,
+  bestBid?: number,
+  bestAsk?: number,
+  signal?: AbortSignal,
+): Promise<DetailResult> {
+  const detail = mapOkxDetailToMetrics(
+    await fetchOkxCanonicalDetail(rawSymbol, "1d", fundingIntervalSeconds, signal),
+  );
+  const fundingHistory = detail.fundingHistory
+    .filter((item) => item.timestamp >= Date.now() - 30 * 24 * 60 * 60 * 1000)
+    .map((item) => ({
+      time: item.timestamp,
+      fundingRate: String(item.fundingRate),
+    }));
+  const candles = detail.candles.map((item) => ({ close: item.close }));
+  const historicalVolatility = computeHistoricalVolatility(candles);
+  const avg1dBuckets = computeOkxAverageFundingRatesByInterval(detail.fundingHistory, "1d");
+  const avg1d = avg1dBuckets.length > 0 ? avg1dBuckets[avg1dBuckets.length - 1]?.averageFundingRate ?? null : null;
+  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,

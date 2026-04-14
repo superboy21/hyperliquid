@@ -186,7 +186,11 @@ function getRequiredOkxFundingHistoryRows(fundingIntervalSeconds?: number): numb
   return Math.ceil((30 * 24 * 60 * 60) / interval) + 1;
 }
 
-async function fetchOkxFundingHistory(rawSymbol: string, fundingIntervalSeconds?: number): Promise<CanonicalFundingHistoryPoint[]> {
+async function fetchOkxFundingHistory(
+  rawSymbol: string,
+  fundingIntervalSeconds?: number,
+  signal?: AbortSignal,
+): Promise<CanonicalFundingHistoryPoint[]> {
   const pageSize = 100;
   const requiredRows = getRequiredOkxFundingHistoryRows(fundingIntervalSeconds);
   const pagesNeeded = Math.max(1, Math.ceil(requiredRows / pageSize));
@@ -204,7 +208,7 @@ async function fetchOkxFundingHistory(rawSymbol: string, fundingIntervalSeconds?
       search.set("after", cursor);
     }
 
-    const response = await fetch(`/api/okx?${search.toString()}`, { cache: "no-store" });
+    const response = await fetch(`/api/okx?${search.toString()}`, { cache: "no-store", signal });
     if (!response.ok) {
       throw new Error("Failed to fetch OKX funding history");
     }
@@ -244,8 +248,8 @@ async function fetchOkxFundingHistory(rawSymbol: string, fundingIntervalSeconds?
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
-async function fetchNativeFundingSnapshot(): Promise<Map<string, OkxNativeFundingRateEntry>> {
-  const response = await fetch("/api/okx?endpoint=public/funding-rate&instId=ANY", { cache: "no-store" });
+async function fetchNativeFundingSnapshot(signal?: AbortSignal): Promise<Map<string, OkxNativeFundingRateEntry>> {
+  const response = await fetch("/api/okx?endpoint=public/funding-rate&instId=ANY", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -377,11 +381,12 @@ export async function fetchOkxCanonicalDetail(
   rawSymbol: string,
   interval: OkxChartInterval,
   fundingIntervalSeconds?: number,
+  signal?: AbortSignal,
 ): Promise<CanonicalFundingDetail> {
   const [fundingHistory, candlesRes, snapshot] = await Promise.all([
-    fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds),
-    fetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store" }),
-    fetchNativeFundingSnapshot(),
+    fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal),
+    fetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store", signal }),
+    fetchNativeFundingSnapshot(signal),
   ]);
 
   if (!candlesRes.ok) {
