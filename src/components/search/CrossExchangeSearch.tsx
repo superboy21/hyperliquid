@@ -57,6 +57,7 @@ const EXCHANGE_DOT_COLORS: Record<string, string> = {
   "Gate.io": "bg-cyan-400",
   Binance: "bg-yellow-400",
   Lighter: "bg-purple-400",
+  OKX: "bg-emerald-400",
 };
 
 function formatSearchAnnualizedRate(rate: number, fundingInterval: number, exchange: string): string {
@@ -685,7 +686,7 @@ export default function CrossExchangeSearch() {
         </table>
         {sortedRates.length === 0 && searchTerm && (
           <div className="p-8 text-center text-gray-500">
-            没有找到包含 "{searchTerm}" 的交易对
+            没有找到包含 &quot;{searchTerm}&quot; 的交易对
           </div>
         )}
         {sortedRates.length === 0 && !searchTerm && allRates.length > 0 && (
