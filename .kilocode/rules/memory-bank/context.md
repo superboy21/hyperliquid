@@ -33,7 +33,6 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **OI-weighted average**: Current average annualized rate uses open interest weighted calculation
 - [x] **Position value weighted average**: Changed OI-weighted to position value (OI × markPrice) weighted for more accurate representation
 - [x] **Added comprehensive README.md**: Project overview, features, technology stack, and getting started guide
-- [x] **Documented OKX native-only integration**: README now covers OKX funding monitor support, search integration, and retired CCXT route notes
 
 ## Current Structure
 
@@ -131,4 +130,3 @@ export async function GET() {
 | 2026-03-01 | Added all 41 HIP-3 assets from specification list including XYZ100, PLATINUM, COPPER, CL, NATGAS, JPY, EUR, URNM, INTC, MU, PLTR, ORCL, HOOD, CRCL, SNDK, RIVN, USAR, TSM, SKHX, SMSN, HYUNDAI |
 | 2026-03-01 | Added market data columns: Mark price, 24h change %, 24h volume, open interest with sorting support |
 | 2026-03-01 | Changed weighted average calculation from OI-weighted to position value (OI × markPrice) weighted for more accurate representation |
-| 2026-04-15 | Updated README for OKX native-only transport, OKX funding/search support, and related release notes |
