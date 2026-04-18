@@ -140,6 +140,7 @@ export interface CanonicalFundingRateRow {
   quoteVolume: number;
   openInterest: number;
   notionalValue: number;
+  oiLoaded?: boolean;
   fundingIntervalSeconds: number;
   assetCategory: string;
   bestBid?: number | null;

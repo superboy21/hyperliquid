@@ -151,6 +151,12 @@ npm run start
 
 ## Release Notes
 
+### v2026.04.19
+
+- Fixed Lighter weekly (1w) candles - now aggregates from daily candles due to backend placeholder data after 09/14
+- Restriced faded/gray notional value display to Binance only on funding pages
+- Rewrote Binance OI hydration to use `openInterest × markPrice` formula with 50-symbol batch parallel requests
+
 ### v2026.04.15
 
 - Added OKX search detail support through the shared canonical search pipeline.

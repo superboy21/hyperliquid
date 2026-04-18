@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAbortLikeError } from "@/lib/utils/abort";
+import { proxyFetch } from "@/lib/utils/proxy";
 
 const OKX_API_BASE = "https://www.okx.com/api/v5";
 
@@ -16,26 +17,26 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const response = await fetch(buildUrl(endpoint, request.nextUrl.searchParams), {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(5000)]),
-      cache: "no-store",
+    const url = buildUrl(endpoint, request.nextUrl.searchParams);
+
+    const response = await proxyFetch(url, {
+      timeout: 10_000,
+      signal: request.signal,
     });
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    return NextResponse.json(await response.json());
+    const data = await response.json();
+    return NextResponse.json(data);
   } catch (error) {
     if (request.signal.aborted || isAbortLikeError(error)) {
       return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
     }
 
     const message = error instanceof Error ? error.message : "Failed to fetch OKX data";
+    console.error("[OKX API] Error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

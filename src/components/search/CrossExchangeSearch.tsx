@@ -6,14 +6,21 @@ import {
   filterByKeyword,
   fetchDetailForSymbol,
   batchFetchDetails,
+  hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
 } from "@/lib/search";
+import {
+  fetchSearchCandles,
+  type SearchChartInterval,
+  type SearchCandlePoint,
+} from "@/lib/search-candles";
 import {
   formatPrice,
   formatVolume,
   formatAnnualizedRate,
   formatFundingRate,
 } from "@/lib/types";
+import SearchCandlesChart from "./SearchCandlesChart";
 
 // ==================== Types ====================
 
@@ -152,6 +159,14 @@ export default function CrossExchangeSearch() {
   const [sortConfig, setSortConfig] = useState<SortConfig>({ field: "fundingRate", descending: true });
   const [detailCache, setDetailCache] = useState<Map<string, DetailCache>>(new Map());
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
+  const oiAbortRef = useRef<AbortController | null>(null);
+
+  // Chart state
+  const [selectedRate, setSelectedRate] = useState<SearchExchangeRate | null>(null);
+  const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
+  const [chartCandles, setChartCandles] = useState<SearchCandlePoint[]>([]);
+  const [chartLoading, setChartLoading] = useState(false);
+  const chartAbortRef = useRef<AbortController | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const ratesRef = useRef<SearchExchangeRate[]>([]);
@@ -277,6 +292,59 @@ export default function CrossExchangeSearch() {
     };
   }, [filteredRates, loading, searchTerm, startDetailFetching]);
 
+  // Hydrate Binance OI for current search results only.
+  // Initial notionalValue may use quoteVolume placeholder; replace it with OI * price progressively.
+  useEffect(() => {
+    if (!searchTerm.trim() || loading || filteredRates.length === 0) {
+      if (oiAbortRef.current) {
+        oiAbortRef.current.abort();
+      }
+      return;
+    }
+
+    const targets = filteredRates.filter(
+      (rate) => rate.exchange === "Binance" && !rate.oiLoaded,
+    );
+    if (targets.length === 0) {
+      return;
+    }
+
+    if (oiAbortRef.current) {
+      oiAbortRef.current.abort();
+    }
+    oiAbortRef.current = new AbortController();
+    const signal = oiAbortRef.current.signal;
+
+    hydrateSearchBinanceOpenInterest(targets, signal)
+      .then((oiMap) => {
+        if (signal.aborted || oiMap.size === 0) return;
+        setAllRates((prev) =>
+          prev.map((rate) => {
+            if (rate.exchange !== "Binance") return rate;
+            const hydrated = oiMap.get(rate.symbol);
+            if (!hydrated) return rate;
+            return {
+              ...rate,
+              openInterest: hydrated.openInterest,
+              notionalValue: hydrated.notionalValue,
+              oiLoaded: true,
+            };
+          }),
+        );
+      })
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.warn("[Search] Binance OI hydration failed:", error);
+        }
+      });
+
+    return () => {
+      if (oiAbortRef.current) {
+        oiAbortRef.current.abort();
+      }
+    };
+  }, [filteredRates, loading, searchTerm]);
+
   // When user searches, default results to sort by notional value descending.
   // When search is cleared, restore the page default sort.
   useEffect(() => {
@@ -302,6 +370,89 @@ export default function CrossExchangeSearch() {
       descending: prev.field === field ? !prev.descending : true,
     }));
   };
+
+  // Chart: handle row click to show candlestick chart
+  const handleRowClick = useCallback(
+    (rate: SearchExchangeRate) => {
+      // Toggle off if same row clicked
+      if (selectedRate?.exchange === rate.exchange && selectedRate?.symbol === rate.symbol) {
+        setSelectedRate(null);
+        setChartCandles([]);
+        return;
+      }
+
+      setSelectedRate(rate);
+      setChartCandles([]);
+      setChartLoading(true);
+
+      // Cancel previous chart request
+      if (chartAbortRef.current) {
+        chartAbortRef.current.abort();
+      }
+      chartAbortRef.current = new AbortController();
+      const signal = chartAbortRef.current.signal;
+
+      fetchSearchCandles(rate, chartInterval, signal)
+        .then((result) => {
+          if (!signal.aborted) {
+            setChartCandles(result.candles);
+            setChartLoading(false);
+          }
+        })
+        .catch((error) => {
+          if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted) {
+            console.error("[SearchChart] Fetch failed:", error);
+            setChartCandles([]);
+            setChartLoading(false);
+          }
+        });
+    },
+    [selectedRate, chartInterval],
+  );
+
+  // Re-fetch candles when interval changes (if a row is selected)
+  useEffect(() => {
+    if (!selectedRate) return;
+
+    if (chartAbortRef.current) {
+      chartAbortRef.current.abort();
+    }
+    chartAbortRef.current = new AbortController();
+    const signal = chartAbortRef.current.signal;
+
+    setChartCandles([]);
+    setChartLoading(true);
+
+    fetchSearchCandles(selectedRate, chartInterval, signal)
+      .then((result) => {
+        if (!signal.aborted) {
+          setChartCandles(result.candles);
+          setChartLoading(false);
+        }
+      })
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted) {
+          console.error("[SearchChart] Interval change fetch failed:", error);
+          setChartCandles([]);
+          setChartLoading(false);
+        }
+      });
+
+    return () => {
+      if (chartAbortRef.current) {
+        chartAbortRef.current.abort();
+      }
+    };
+  }, [selectedRate, chartInterval]);
+
+  // Cleanup chart abort on unmount
+  useEffect(() => {
+    return () => {
+      if (chartAbortRef.current) {
+        chartAbortRef.current.abort();
+      }
+    };
+  }, []);
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortConfig.field !== field) return <span className="text-gray-600 ml-1">↕</span>;
@@ -512,7 +663,15 @@ export default function CrossExchangeSearch() {
               const dotColor = EXCHANGE_DOT_COLORS[rate.exchange] || "bg-gray-400";
 
               return (
-                <tr key={`${rate.exchange}-${rate.symbol}`} className="transition-colors hover:bg-gray-700/50">
+                <tr
+                  key={`${rate.exchange}-${rate.symbol}`}
+                  className={`transition-colors cursor-pointer ${
+                    selectedRate?.exchange === rate.exchange && selectedRate?.symbol === rate.symbol
+                      ? "bg-blue-900/40 hover:bg-blue-900/50"
+                      : "hover:bg-gray-700/50"
+                  }`}
+                  onClick={() => handleRowClick(rate)}
+                >
                   {/* Exchange */}
                   <td className="px-2 py-2 xl:px-2.5">
                     <span className="flex items-center gap-1.5 whitespace-nowrap">
@@ -568,7 +727,9 @@ export default function CrossExchangeSearch() {
                   </td>
                   {/* Notional Value */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
-                      <span className="whitespace-nowrap font-mono text-xs text-gray-400">{formatVolume(rate.notionalValue)}</span>
+                      <span className={`whitespace-nowrap font-mono text-xs ${rate.exchange === "Binance" && !rate.oiLoaded ? "text-gray-600" : "text-gray-400"}`}>
+                        {formatVolume(rate.notionalValue)}
+                      </span>
                   </td>
                   {/* Volatility */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
@@ -693,6 +854,68 @@ export default function CrossExchangeSearch() {
           <div className="p-8 text-center text-gray-500">输入关键字开始搜索</div>
         )}
       </div>
+
+      {/* Candlestick Chart */}
+      {selectedRate && (
+        <div className="mt-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${EXCHANGE_DOT_COLORS[selectedRate.exchange] || "bg-gray-400"}`} />
+              <span className="text-sm font-medium text-white">
+                {selectedRate.exchange} {selectedRate.symbol}
+              </span>
+              <span className="text-xs text-gray-500">
+                {chartCandles.length > 0 ? `${chartCandles.length} 根K线` : ""}
+              </span>
+            </div>
+            <div className="flex gap-1">
+              {(["1w", "1d", "4h", "1h", "5m"] as SearchChartInterval[]).map((iv) => (
+                <button
+                  key={iv}
+                  onClick={() => setChartInterval(iv)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    chartInterval === iv
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200"
+                  }`}
+                >
+                  {iv === "1w" ? "1周" : iv === "1d" ? "1日" : iv}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  setSelectedRate(null);
+                  setChartCandles([]);
+                  if (chartAbortRef.current) chartAbortRef.current.abort();
+                }}
+                className="ml-2 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+          {chartLoading ? (
+            <div className="flex h-[440px] items-center justify-center">
+              <div className="text-center">
+                <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-b-2 border-blue-500" />
+                <p className="text-gray-400">正在加载K线数据...</p>
+              </div>
+            </div>
+          ) : chartCandles.length > 0 ? (
+            <SearchCandlesChart
+              symbol={selectedRate.symbol}
+              exchange={selectedRate.exchange}
+              exchangeColor={selectedRate.exchangeColor}
+              interval={chartInterval}
+              candles={chartCandles}
+            />
+          ) : (
+            <div className="flex h-[440px] items-center justify-center">
+              <p className="text-gray-500">暂无K线数据</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

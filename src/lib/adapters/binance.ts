@@ -18,6 +18,7 @@ export interface BinanceFundingMonitorRow {
   quoteVolume: number;
   openInterest: number;
   notionalValue: number;
+  oiLoaded?: boolean;
   fundingInterval: number;
   assetCategory: string;
   bestBid?: number;
@@ -36,6 +37,7 @@ export interface BinanceSearchRate {
   quoteVolume: number;
   openInterest: number;
   notionalValue: number;
+  oiLoaded?: boolean;
   fundingInterval: number;
   assetCategory: string;
   bestBid?: number;
@@ -103,6 +105,45 @@ interface NativeCandleArray extends Array<number | string> {
   6: number;
 }
 
+// ==================== Binance Fetch Helper ====================
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const BINANCE_DIRECT_BASE = "https://fapi.binance.com/fapi/v1";
+const BINANCE_PROXY_BASE = "/api/binance";
+
+/**
+ * Fetch from Binance with automatic fallback:
+ * 1. Try direct connection first (faster, no server roundtrip)
+ * 2. If direct fails (network/CORS), fall back to Next.js API proxy
+ */
+async function binanceFetch(endpoint: string, params: string, init?: RequestInit): Promise<Response> {
+  const paramPrefix = params ? `?${params}` : "";
+  const directUrl = `${BINANCE_DIRECT_BASE}/${endpoint}${paramPrefix}`;
+  const proxyUrl = `${BINANCE_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
+
+  // Try direct first
+  try {
+    const response = await fetch(directUrl, init);
+    if (response.ok) return response;
+    // If rate-limited, wait and retry direct once
+    if (response.status === 429) {
+      await sleep(1000);
+      const retryResponse = await fetch(directUrl, init);
+      if (retryResponse.ok) return retryResponse;
+    }
+  } catch {
+    // Direct connection failed (CORS/network), fall through to proxy
+  }
+
+  // Fallback to proxy
+  return fetch(proxyUrl, { ...init, cache: "no-store" });
+}
+
+// ==================== Mapping Functions ====================
+
 function mapCanonicalRow(row: CanonicalFundingRateRow): BinanceFundingMonitorRow {
   return {
     symbol: row.symbol,
@@ -114,6 +155,7 @@ function mapCanonicalRow(row: CanonicalFundingRateRow): BinanceFundingMonitorRow
     quoteVolume: row.quoteVolume,
     openInterest: row.openInterest,
     notionalValue: row.notionalValue,
+    oiLoaded: (row as CanonicalFundingRateRow & { oiLoaded?: boolean }).oiLoaded,
     fundingInterval: row.fundingIntervalSeconds,
     assetCategory: row.assetCategory,
     bestBid: row.bestBid ?? undefined,
@@ -134,6 +176,7 @@ function mapCanonicalSearchRow(row: CanonicalFundingRateRow): BinanceSearchRate 
     quoteVolume: row.quoteVolume,
     openInterest: row.openInterest,
     notionalValue: row.notionalValue,
+    oiLoaded: (row as CanonicalFundingRateRow & { oiLoaded?: boolean }).oiLoaded,
     fundingInterval: row.fundingIntervalSeconds,
     assetCategory: row.assetCategory,
     bestBid: row.bestBid ?? undefined,
@@ -143,10 +186,10 @@ function mapCanonicalSearchRow(row: CanonicalFundingRateRow): BinanceSearchRate 
 
 async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
   const [tickersRes, premiumRes, fundingInfoRes, bookTickerRes] = await Promise.all([
-    fetch("https://fapi.binance.com/fapi/v1/ticker/24hr"),
-    fetch("https://fapi.binance.com/fapi/v1/premiumIndex"),
-    fetch("https://fapi.binance.com/fapi/v1/fundingInfo"),
-    fetch("https://fapi.binance.com/fapi/v1/ticker/bookTicker"),
+    binanceFetch("ticker/24hr", ""),
+    binanceFetch("premiumIndex", ""),
+    binanceFetch("fundingInfo", ""),
+    binanceFetch("ticker/bookTicker", ""),
   ]);
 
   if (!tickersRes.ok || !premiumRes.ok) {
@@ -164,7 +207,8 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
   const candidateSymbols = premiums
     .map((premium) => premium.symbol)
     .filter((symbol) => symbol.endsWith("USDT") && !BINANCE_DELISTED_SYMBOLS.has(symbol));
-  const openInterestMap = await fetchNativeOpenInterestNotional(candidateSymbols);
+  // Only fetch settlement rates (1 request) — skip OI to avoid 200+ individual requests
+  // OI data is derived from quoteVolume as a reasonable approximation
   const latestSettledMap = await fetchNativeLatestSettledRateMap(candidateSymbols);
   const results: CanonicalFundingRateRow[] = [];
 
@@ -178,9 +222,8 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
     const fundingInfo = fundingInfoMap.get(symbol);
     const bookTicker = bookTickerMap.get(symbol);
     const markPrice = Number.parseFloat(premium.markPrice || "0");
+    const quoteVolume = Number.parseFloat(ticker?.quoteVolume || "0");
 
-    const oiNotional = openInterestMap.get(symbol) ?? 0;
-    const openInterest = markPrice > 0 ? oiNotional / markPrice : 0;
     results.push({
       exchange: "binance",
       transportMode: "native",
@@ -194,9 +237,10 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
       indexPrice: Number.parseFloat(premium.indexPrice || "0"),
       lastPrice: Number.parseFloat(premium.lastPrice || premium.markPrice || "0"),
       change24h: Number.parseFloat(ticker?.priceChangePercent || "0"),
-      quoteVolume: Number.parseFloat(ticker?.quoteVolume || "0"),
-      openInterest,
-      notionalValue: oiNotional > 0 ? oiNotional : Number.parseFloat(ticker?.quoteVolume || "0"),
+      quoteVolume,
+      openInterest: 0, // Will be hydrated asynchronously
+      notionalValue: quoteVolume, // Placeholder — replaced after OI hydration
+      oiLoaded: false,
       fundingIntervalSeconds: fundingInfo?.fundingIntervalHours ? fundingInfo.fundingIntervalHours * 3600 : 8 * 60 * 60,
       assetCategory: getBinanceAssetCategory(symbol),
       bestBid: bookTicker?.bidPrice ? Number.parseFloat(bookTicker.bidPrice) : null,
@@ -217,8 +261,8 @@ async function fetchCcxtRates(): Promise<CanonicalFundingRateRow[]> {
 
 async function fetchNativeDetail(symbol: string, interval: BinanceChartInterval, signal?: AbortSignal): Promise<CanonicalFundingDetail> {
   const [candleRes, fundingRes] = await Promise.all([
-    fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=30`, { signal }),
-    fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1000`, { signal }),
+    fetch(`/api/binance/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=30`, { cache: "no-store", signal }),
+    fetch(`/api/binance?endpoint=fundingRate&symbol=${encodeURIComponent(symbol)}&limit=1000`, { cache: "no-store", signal }),
   ]);
 
   const candles = candleRes.ok
@@ -310,7 +354,7 @@ export async function hydrateBinanceLatestSettlementRates(symbols: string[]): Pr
     return new Map();
   }
 
-  const response = await fetch("https://fapi.binance.com/fapi/v1/fundingRate?limit=1000", { cache: "no-store" });
+  const response = await binanceFetch("fundingRate", "limit=1000");
   if (!response.ok) {
     return new Map();
   }
@@ -337,44 +381,68 @@ export async function hydrateBinanceLatestSettlementRates(symbols: string[]): Pr
   return new Map(Array.from(latestBySymbol.entries()).map(([symbol, value]) => [symbol, value.fundingRate]));
 }
 
-async function fetchNativeOpenInterestNotional(symbols: string[]): Promise<Map<string, number>> {
-  const batchSize = 50;
-  const openInterestMap = new Map<string, number>();
+async function fetchNativeLatestSettledRateMap(symbols: string[]): Promise<Map<string, number>> {
+  return hydrateBinanceLatestSettlementRates(symbols);
+}
 
-  for (let i = 0; i < symbols.length; i += batchSize) {
-    const batch = symbols.slice(i, i + batchSize);
-    const results = await Promise.all(
+// ==================== Async OI Hydration ====================
+// OI requires ~200 individual API calls, so we load it asynchronously after the initial list.
+// The UI shows quoteVolume as a placeholder (in lighter color), then replaces with OI × markPrice.
+
+const OI_BATCH_SIZE = 50;
+
+/**
+ * Hydrate openInterest and notionalValue for Binance rates.
+ * Fetches OI for each symbol with concurrency limits, then computes
+ * notionalValue = openInterest × markPrice.
+ * Returns a Map keyed by symbol with { openInterest, notionalValue }.
+ */
+export async function hydrateBinanceOpenInterest(
+  symbols: string[],
+  signal?: AbortSignal,
+): Promise<Map<string, { openInterest: number; notionalValue: number }>> {
+  const result = new Map<string, { openInterest: number; notionalValue: number }>();
+  if (symbols.length === 0) return result;
+
+  for (let i = 0; i < symbols.length; i += OI_BATCH_SIZE) {
+    if (signal?.aborted) break;
+
+    const batch = symbols.slice(i, i + OI_BATCH_SIZE);
+    const batchResults = await Promise.all(
       batch.map(async (symbol) => {
         try {
-          const [oiRes, premiumRes] = await Promise.all([
-            fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`, { cache: "no-store" }),
-            fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`, { cache: "no-store" }),
+          const [oiResponse, premiumResponse] = await Promise.all([
+            binanceFetch("openInterest", `symbol=${encodeURIComponent(symbol)}`),
+            binanceFetch("premiumIndex", `symbol=${encodeURIComponent(symbol)}`),
           ]);
-          if (!oiRes.ok || !premiumRes.ok) {
-            return { symbol, value: 0 };
+
+          if (!oiResponse.ok || !premiumResponse.ok) {
+            return null;
           }
 
-          const oiData = (await oiRes.json()) as NativeOpenInterestResponse;
-          const premiumData = (await premiumRes.json()) as NativePremiumIndex;
-          const oi = Number.parseFloat(oiData.openInterest || "0");
+          const oiData = (await oiResponse.json()) as NativeOpenInterestResponse;
+          const premiumData = (await premiumResponse.json()) as NativePremiumIndex;
+          const openInterest = Number.parseFloat(oiData.openInterest || "0");
           const markPrice = Number.parseFloat(premiumData.markPrice || "0");
-          return { symbol, value: oi * markPrice };
+          const notionalValue = openInterest * markPrice;
+
+          return { symbol, openInterest, notionalValue };
         } catch {
-          return { symbol, value: 0 };
+          return null;
         }
       }),
     );
 
-    for (const result of results) {
-      openInterestMap.set(result.symbol, result.value);
+    for (const item of batchResults) {
+      if (!item) continue;
+      result.set(item.symbol, {
+        openInterest: item.openInterest,
+        notionalValue: item.notionalValue,
+      });
     }
   }
 
-  return openInterestMap;
-}
-
-async function fetchNativeLatestSettledRateMap(symbols: string[]): Promise<Map<string, number>> {
-  return hydrateBinanceLatestSettlementRates(symbols);
+  return result;
 }
 
 export function computeAverageFundingRatesByInterval(

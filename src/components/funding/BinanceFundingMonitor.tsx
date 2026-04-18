@@ -7,6 +7,7 @@ import {
   fetchBinanceCanonicalDetail,
   fetchBinanceFundingMonitorRates,
   hydrateBinanceLatestSettlementRates,
+  hydrateBinanceOpenInterest,
   mapDetailToMetrics as mapBinanceDetailToMetrics,
 } from "@/lib/adapters/binance";
 import ExchangeFundingMonitor, {
@@ -104,6 +105,30 @@ export default function BinanceFundingMonitor() {
     );
   }, []);
 
+  // Hydrate OI data asynchronously after initial load
+  const hydrateOI = useCallback(async (
+    rates: ExchangeFundingRate[],
+    updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
+  ): Promise<void> => {
+    const symbols = rates.map((r) => r.symbol);
+
+    const oiMap = await hydrateBinanceOpenInterest(symbols);
+    if (oiMap.size === 0) return;
+
+    updateRates((prev) =>
+      prev.map((item) => {
+        const oiData = oiMap.get(item.symbol);
+        if (!oiData) return item;
+        return {
+          ...item,
+          openInterest: oiData.openInterest,
+          notionalValue: oiData.notionalValue,
+          oiLoaded: true,
+        };
+      }),
+    );
+  }, []);
+
   // Fetch rates with Binance-specific logic
   const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
     return fetchBinanceFundingMonitorRates();
@@ -152,6 +177,7 @@ export default function BinanceFundingMonitor() {
       searchPlaceholder: "搜索交易对，例如 BTC、ETH",
       fetchRates,
       hydrateRates,
+      hydrateOI,
       hydrationPolicy: {
         initialCount: 50,
         enableScrollHydration: true,
@@ -178,7 +204,7 @@ export default function BinanceFundingMonitor() {
         </div>
       ),
     }),
-    [fetchRates, fetchDetailData, hydrateRates],
+    [fetchRates, fetchDetailData, hydrateRates, hydrateOI],
   );
 
   return <ExchangeFundingMonitor config={config} />;

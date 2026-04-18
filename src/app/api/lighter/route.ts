@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAbortLikeError } from "@/lib/utils/abort";
+import { proxyFetch } from "@/lib/utils/proxy";
 
 const LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai";
 
 /**
  * Lighter.xyz API 代理
- * 解决 CORS 问题
+ * 解决 CORS 问题，支持 HTTP 代理
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -26,13 +27,9 @@ export async function GET(request: NextRequest) {
       url += `?${params.toString()}`;
     }
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
-      cache: "no-store",
+    const response = await proxyFetch(url, {
+      timeout: 15_000,
+      signal: request.signal,
     });
 
     if (!response.ok) {

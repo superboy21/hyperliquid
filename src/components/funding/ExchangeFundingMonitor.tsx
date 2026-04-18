@@ -18,6 +18,7 @@ export interface ExchangeFundingRate {
   quoteVolume: number;
   openInterest: number;
   notionalValue: number;
+  oiLoaded?: boolean; // true when OI data has been hydrated (notionalValue is real, not placeholder)
   fundingInterval: number;
   assetCategory: string;
   bestBid?: number;
@@ -99,6 +100,10 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
     targetSymbols: string[],
     hydrationKey: number,
+  ) => Promise<void>;
+  hydrateOI?: (
+    rates: ExchangeFundingRate[],
+    updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
   fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
@@ -196,6 +201,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     ChartComponent,
     fetchRates,
     hydrateRates,
+    hydrateOI,
     fetchDetailData,
     renderExchangeBadge,
     renderInfoSection,
@@ -281,6 +287,19 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         return mergedRates;
       });
       setLastUpdate(new Date());
+
+      // Async OI hydration — update notionalValue after initial display
+      if (hydrateOI) {
+        hydrateOI(fundingRatesRef.current, (updater) => {
+          setFundingRates((prev) => {
+            const updated = updater(prev);
+            fundingRatesRef.current = updated;
+            return updated;
+          });
+        }).catch((err) => {
+          console.warn("OI hydration failed:", err);
+        });
+      }
     } catch (fetchError) {
       console.error("Error fetching data:", fetchError);
       setError("获取数据时发生错误。");
@@ -886,7 +905,9 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                       <span className="font-mono text-sm text-gray-400">{formatVolume(rate.quoteVolume)}</span>
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <span className="font-mono text-sm text-gray-400">{formatVolume(rate.notionalValue)}</span>
+                      <span className={`font-mono text-sm ${exchangeName === "Binance" && !rate.oiLoaded ? "text-gray-600" : "text-gray-400"}`}>
+                        {formatVolume(rate.notionalValue)}
+                      </span>
                     </td>
                   </tr>
                 ))}

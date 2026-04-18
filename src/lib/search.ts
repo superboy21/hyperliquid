@@ -29,6 +29,7 @@ import { isAbortLikeError } from "./utils/abort";
 import {
   fetchBinanceCanonicalDetail,
   fetchBinanceSearchRates,
+  hydrateBinanceOpenInterest,
   mapDetailToMetrics as mapBinanceDetailToMetrics,
 } from "@/lib/adapters/binance";
 import {
@@ -57,6 +58,7 @@ export interface SearchExchangeRate {
   quoteVolume: number;
   openInterest: number;
   notionalValue: number;
+  oiLoaded?: boolean;
   fundingInterval: number;
   assetCategory: string;
   bestBid?: number;
@@ -333,6 +335,19 @@ async function fetchGateioRates(): Promise<SearchExchangeRate[]> {
 
 async function fetchBinanceRates(): Promise<SearchExchangeRate[]> {
   return fetchBinanceSearchRates();
+}
+
+export async function hydrateSearchBinanceOpenInterest(
+  rates: SearchExchangeRate[],
+  signal?: AbortSignal,
+): Promise<Map<string, { openInterest: number; notionalValue: number }>> {
+  const binanceRates = rates.filter((rate) => rate.exchange === "Binance");
+  if (binanceRates.length === 0) {
+    return new Map();
+  }
+
+const symbols = binanceRates.map((rate) => rate.symbol);
+  return hydrateBinanceOpenInterest(symbols, signal);
 }
 
 // ==================== OKX Rates ====================
