@@ -104,6 +104,11 @@ The application monitors two types of assets:
    - ETFs: xyz:SPY, xyz:QQQ, etc.
    - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
 
+### v2026.04.20
+
+- Search page chart: 1w/1d x-axis now shows year prefix on every label for continuous year visibility (e.g., "26/04-20")
+- 4h chart: year shown only at year boundaries to keep labels concise
+
 ### v2026.04.19
 
 - Fixed Lighter weekly (1w) candles - now aggregates from daily candles due to backend placeholder data after 09/14

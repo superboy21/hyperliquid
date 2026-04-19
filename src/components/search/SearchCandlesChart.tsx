@@ -85,9 +85,30 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
   });
 }
 
-function formatAxisLabel(timestamp: number, interval: SearchChartInterval): string {
-  const formatted = formatLabel(timestamp, interval);
-  return interval !== "1d" && interval !== "1w" ? formatted.replace(" ", "\n") : formatted;
+/**
+ * Build axis labels with year info:
+ * - 1w, 1d: every label gets a 2-digit year prefix → "26/04-20" (always visible)
+ * - 4h: year shown only at year boundaries → "26/04-20 08" at Jan, else "04-20 08"
+ * - 1h, 5m: no year, just time split across lines
+ */
+function buildYearAwareCategories(candles: SearchCandlePoint[], interval: SearchChartInterval) {
+  return candles.map((c, i) => {
+    const base = formatLabel(c.openTime, interval); // "MM-DD" or "MM-DD HH"
+    const yy = String(new Date(c.openTime).getUTCFullYear()).slice(2);
+
+    if (interval === "1w" || interval === "1d") {
+      // Always show year on 1w/1d so user can continuously read it
+      return `${yy}/${base}`;
+    }
+    if (interval === "4h") {
+      // Year only at boundary — concise for dense charts
+      const prevYear = i > 0 ? new Date(candles[i - 1].openTime).getUTCFullYear() : null;
+      const currYear = new Date(c.openTime).getUTCFullYear();
+      return prevYear !== currYear ? `${yy}/${base}` : base;
+    }
+    // 1h, 5m: split date and time onto two lines
+    return base.replace(" ", "\n");
+  });
 }
 
 // ==================== Component ====================
@@ -108,7 +129,7 @@ export default function SearchCandlesChart({
     const themeColor = EXCHANGE_COLORS[exchange] || exchangeColor || "#3B82F6";
 
     const categories = candles.map((c) => formatLabel(c.openTime, interval));
-    const axisCategories = candles.map((c) => formatAxisLabel(c.openTime, interval));
+    const axisCategories = buildYearAwareCategories(candles, interval);
 
     const candleSeries: CandleDatum[] = candles.map((candle) => {
       const open = Number(candle.open);
