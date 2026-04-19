@@ -109,6 +109,7 @@ The application monitors two types of assets:
 - Fixed Lighter weekly (1w) candles - now aggregates from daily candles due to backend placeholder data after 09/14
 - Restriced faded/gray notional value display to Binance only on funding pages
 - Rewrote Binance OI hydration to use `openInterest × markPrice` formula with 50-symbol batch parallel requests
+- Fixed Cloudflare Workers deployment - moved undici to devDependencies, made proxy.ts edge-runtime safe
 
 ### Data Update Frequency
 
