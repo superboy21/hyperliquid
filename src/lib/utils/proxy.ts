@@ -1,12 +1,9 @@
-// ==================== Server-Side Proxy Helper ====================
-// Creates an undici ProxyAgent dispatcher for HTTP CONNECT proxy support.
-// Configure via PROXY_URL or HTTP_PROXY environment variables.
-// Example: PROXY_URL=http://127.0.0.1:10808
+// ==================== Server-Side Fetch Helper ====================
+// Wraps globalThis.fetch with timeout and header defaults for API routes.
+// Works in both Node.js (dev) and Cloudflare Workers (production).
 //
-// This module is only intended for use in Next.js API route handlers
-// (server-side Node.js runtime). Do NOT import in client components.
-
-import { ProxyAgent } from "undici";
+// HTTP CONNECT proxy support is available in Node.js development via
+// the PROXY_* environment variables. On edge runtimes, direct fetch is used.
 
 const PROXY_URL =
   process.env.PROXY_URL ||
@@ -16,41 +13,23 @@ const PROXY_URL =
   process.env.https_proxy ||
   "";
 
-let _dispatcher: ProxyAgent | undefined;
-
 /**
- * Returns an undici ProxyAgent dispatcher for use with undici fetch.
- * If no proxy is configured, returns undefined (direct connection).
+ * Server-side fetch with timeout and optional HTTP proxy support.
+ * Falls back to direct globalThis.fetch if no proxy is configured,
+ * or when running on edge runtimes where undici is unavailable.
  *
  * Usage in API routes:
- *   import { getProxyDispatcher, proxyFetch } from "@/lib/utils/proxy";
- *   const response = await proxyFetch("https://www.okx.com/api/v5/...");
- */
-export function getProxyDispatcher(): ProxyAgent | undefined {
-  if (!PROXY_URL) return undefined;
-
-  // Cache the dispatcher instance
-  if (!_dispatcher) {
-    _dispatcher = new ProxyAgent({
-      uri: PROXY_URL,
-    });
-  }
-  return _dispatcher;
-}
-
-/**
- * Proxied version of fetch that uses the configured HTTP proxy.
- * Falls back to regular globalThis.fetch if no proxy is configured.
+ *   import { proxyFetch } from "@/lib/utils/proxy";
+ *   const response = await proxyFetch("https://fapi.binance.com/...");
  */
 export async function proxyFetch(
   url: string | URL,
   init?: RequestInit & { timeout?: number },
 ): Promise<Response> {
-  const dispatcher = getProxyDispatcher();
   const timeout = init?.timeout ?? 10_000;
 
-  // If no proxy configured, use regular globalThis fetch with timeout
-  if (!dispatcher) {
+  // No proxy configured — use direct fetch
+  if (!PROXY_URL) {
     const { timeout: _, ...restInit } = init ?? {};
     return globalThis.fetch(url, {
       ...restInit,
@@ -58,27 +37,48 @@ export async function proxyFetch(
     });
   }
 
-  // Use undici fetch with proxy dispatcher
-  const { fetch: undiciFetch } = await import("undici");
-  const { timeout: _, headers: initHeaders, signal: initSignal, method, body, ...restInit } = init ?? {};
+  // Proxy configured — attempt undici (Node.js only, may fail on edge)
+  try {
+    // Dynamic import so bundlers can tree-shake the critical path.
+    // undici is a devDependency — in production (edge runtime) this
+    // import will fail and we gracefully fall back to direct fetch.
+    const undici = await import("undici");
+    const dispatcher = new undici.ProxyAgent({ uri: PROXY_URL });
 
-  // Merge headers
-  const headers: Record<string, string> = {};
-  if (initHeaders) {
-    const h = new Headers(initHeaders);
-    h.forEach((v, k) => { headers[k] = v; });
+    const {
+      timeout: _,
+      headers: initHeaders,
+      signal: initSignal,
+      method,
+      body,
+      ...restInit
+    } = init ?? {};
+
+    const headers: Record<string, string> = {};
+    if (initHeaders) {
+      const h = new Headers(initHeaders);
+      h.forEach((v, k) => {
+        headers[k] = v;
+      });
+    }
+    if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+    if (!headers["Accept"]) headers["Accept"] = "application/json";
+
+    const response = await undici.fetch(url.toString(), {
+      method: method ?? "GET",
+      headers,
+      body: body as string | undefined,
+      dispatcher,
+      signal: initSignal ?? AbortSignal.timeout(timeout),
+    });
+
+    return response as unknown as Response;
+  } catch {
+    // undici unavailable (edge runtime / Cloudflare Workers) — direct fetch
+    const { timeout: _, ...restInit } = init ?? {};
+    return globalThis.fetch(url, {
+      ...restInit,
+      signal: init?.signal ?? AbortSignal.timeout(timeout),
+    });
   }
-  if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  if (!headers["Accept"]) headers["Accept"] = "application/json";
-
-  const response = await undiciFetch(url, {
-    method: method ?? "GET",
-    headers,
-    body: body as string | undefined,
-    dispatcher,
-    signal: initSignal ?? AbortSignal.timeout(timeout),
-  });
-
-  // Convert undici Response to web Response
-  return response as unknown as Response;
 }
