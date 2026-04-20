@@ -18,6 +18,7 @@ export interface SearchCandlePoint {
   low: string;
   close: string;
   volume: string;
+  quoteVolume: string;
 }
 
 export interface SearchCandleResult {
@@ -172,6 +173,7 @@ function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCand
       const high = Math.max(...ordered.map((c) => Number(c.high)));
       const low = Math.min(...ordered.map((c) => Number(c.low)));
       const volume = ordered.reduce((sum, c) => sum + Number(c.volume), 0);
+      const quoteVolume = ordered.reduce((sum, c) => sum + Number(c.quoteVolume), 0);
 
       return {
         openTime: weekStart,
@@ -181,6 +183,7 @@ function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCand
         low: String(low),
         close: last.close,
         volume: String(volume),
+        quoteVolume: String(quoteVolume),
       } satisfies SearchCandlePoint;
     })
     .filter((candle) => Number.isFinite(Number(candle.open)) && Number.isFinite(Number(candle.close)));
@@ -205,6 +208,7 @@ async function fetchHyperliquidCandles(
       low: String(c.low),
       close: String(c.close),
       volume: String(c.volume ?? 0),
+      quoteVolume: String((Number(c.volume ?? 0)) * (Number(c.close) || 1)),
     }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -238,6 +242,7 @@ async function fetchBinanceCandles(
       low: String(item[3]),
       close: String(item[4]),
       volume: String(item[5]),
+      quoteVolume: String(item[7] ?? Number(item[5]) * Number(item[4])),
     }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -280,6 +285,7 @@ async function fetchGateCandles(
         low: item.l,
         close: item.c,
         volume: String(item.v),
+        quoteVolume: String(item.sum ?? Number(item.v) * Number(item.c)),
       };
     });
   } catch (error) {
@@ -315,7 +321,8 @@ async function fetchOkxCandles(
         high: String(item[2] ?? 0),
         low: String(item[3] ?? 0),
         close: String(item[4] ?? 0),
-        volume: String(item[7] ?? item[6] ?? item[5] ?? 0),
+        volume: String(item[5] ?? 0),
+        quoteVolume: String(item[7] ?? Number(item[5] ?? 0) * Number(item[4] ?? 0)),
       }))
       .filter((item: SearchCandlePoint) => item.openTime > 0)
       .sort((a: SearchCandlePoint, b: SearchCandlePoint) => a.openTime - b.openTime);
@@ -393,6 +400,7 @@ async function fetchLighterCandles(
           low: String(item.l ?? item.L ?? 0),
           close: String(item.c ?? item.C ?? 0),
           volume: String(item.v ?? item.V ?? 0),
+          quoteVolume: String(Number(item.v ?? item.V ?? 0) * Number(item.c ?? item.C ?? 0)),
         }))
         .filter((candle) => Number(candle.openTime) > 0);
 

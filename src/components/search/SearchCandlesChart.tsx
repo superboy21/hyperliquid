@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import {
   type SearchChartInterval,
   type SearchCandlePoint,
-  getSearchIntervalMs,
 } from "@/lib/search-candles";
 
 // ==================== Types ====================
+
+type SubChartMode = "turnover" | "volume";
 
 interface SearchCandlesChartProps {
   symbol: string;
@@ -121,6 +122,7 @@ export default function SearchCandlesChart({
   candles,
 }: SearchCandlesChartProps) {
   const chartRef = useRef<HTMLDivElement | null>(null);
+  const [subChartMode, setSubChartMode] = useState<SubChartMode>("turnover");
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -139,12 +141,14 @@ export default function SearchCandlesChart({
       return { value: [open, close, low, high], raw: { open, close, low, high } };
     });
 
-    const volumeSeries = candles.map((candle, idx) => {
-      const vol = Number(candle.volume);
+    const isTurnover = subChartMode === "turnover";
+    const subLabel = isTurnover ? "成交额" : "成交量";
+    const subData = candles.map((candle) => {
+      const val = isTurnover ? Number(candle.quoteVolume) : Number(candle.volume);
       const open = Number(candle.open);
       const close = Number(candle.close);
       return {
-        value: vol,
+        value: val,
         itemStyle: {
           color: close >= open ? "rgba(34, 197, 94, 0.5)" : "rgba(239, 68, 68, 0.5)",
         },
@@ -161,8 +165,19 @@ export default function SearchCandlesChart({
     chart.setOption({
       animation: false,
       backgroundColor: "transparent",
+      legend: {
+        data: [
+          { name: INTERVAL_LABELS[interval] },
+          { name: subLabel },
+        ],
+        top: 4,
+        right: 18,
+        textStyle: { color: "#9CA3AF", fontSize: 11 },
+        itemWidth: 14,
+        itemHeight: 10,
+      },
       grid: [
-        { left: 52, right: 18, top: 24, height: "58%" },
+        { left: 52, right: 18, top: 32, height: "54%" },
         { left: 52, right: 18, top: "74%", height: "18%" },
       ],
       axisPointer: {
@@ -179,8 +194,13 @@ export default function SearchCandlesChart({
           const candleItem = items.find((item: any) => item.seriesType === "candlestick");
           const volumeItem = items.find((item: any) => item.seriesType === "bar");
 
+          // Get day of week from the hovered candle's openTime
+          const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+          const hoveredIndex = items[0]?.dataIndex ?? 0;
+          const dayOfWeek = candles[hoveredIndex] ? dayNames[new Date(candles[hoveredIndex].openTime).getUTCDay()] : "";
+
           const lines = [
-            `<div style="font-weight:600;margin-bottom:6px;">${exchange} ${symbol} ${items[0]?.axisValueLabel ?? ""}</div>`,
+            `<div style="font-weight:600;margin-bottom:6px;">${exchange} ${symbol} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek}</div>`,
           ];
 
           const cd = candleItem?.data as CandleDatum | undefined;
@@ -192,7 +212,7 @@ export default function SearchCandlesChart({
           }
 
           if (volumeItem) {
-            lines.push(`成交量: ${formatVolume(volumeItem.value)}`);
+            lines.push(`${subLabel}: ${formatVolume(volumeItem.value)}`);
           }
 
           return lines.join("<br/>");
@@ -260,10 +280,10 @@ export default function SearchCandlesChart({
         },
         {
           type: "bar",
-          name: "成交量",
+          name: subLabel,
           xAxisIndex: 1,
           yAxisIndex: 1,
-          data: volumeSeries,
+          data: subData,
           barMaxWidth: 12,
         },
       ],
@@ -278,7 +298,19 @@ export default function SearchCandlesChart({
       resizeObserver.disconnect();
       chart.dispose();
     };
-  }, [symbol, exchange, exchangeColor, interval, candles]);
+  }, [symbol, exchange, exchangeColor, interval, candles, subChartMode]);
 
-  return <div ref={chartRef} className="h-[440px] w-full" />;
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setSubChartMode((m) => m === "turnover" ? "volume" : "turnover")}
+        className="absolute right-1 z-10 rounded border border-gray-600 bg-gray-800/80 px-2 py-0.5 text-xs text-gray-300 transition-colors hover:border-gray-400 hover:text-gray-100"
+        style={{ top: "64%" }}
+        title={subChartMode === "turnover" ? "切换到成交量" : "切换到成交额"}
+      >
+        {subChartMode === "turnover" ? "成交额" : "成交量"}
+      </button>
+      <div ref={chartRef} className="h-[440px] w-full" />
+    </div>
+  );
 }

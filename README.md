@@ -106,6 +106,8 @@ The application monitors two types of assets:
 
 ### v2026.04.20
 
+- Search page chart: sub-chart now defaults to turnover (成交额) instead of volume (成交量)
+- Added toggle button in sub-chart top-right corner to switch between volume and turnover
 - Search page chart: 1w/1d x-axis now shows year prefix on every label for continuous year visibility (e.g., "26/04-20")
 - 4h chart: year shown only at year boundaries to keep labels concise
 
