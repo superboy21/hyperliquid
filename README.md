@@ -104,6 +104,12 @@ The application monitors two types of assets:
    - ETFs: xyz:SPY, xyz:QQQ, etc.
    - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
 
+### v2026.04.21
+
+- Reverted Lighter 1w to client-side aggregation from 1d (was temporarily using native 1w API)
+- Native 1w API returns stale placeholder data after 2024-09-14 (volume/quoteVolume frozen at 0)
+- Client-side aggregation from 1d candles provides accurate turnover data
+
 ### v2026.04.20
 
 - Search page chart: sub-chart now defaults to turnover (成交额) instead of volume (成交量)
