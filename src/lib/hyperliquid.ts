@@ -481,7 +481,7 @@ export async function getCandleSnapshot(
     throwIfAborted(signal);
 
     const endTime = Date.now();
-    const startTime = endTime - days * 24 * 60 * 60 * 1000;
+    const startTime = Math.max(0, endTime - days * 24 * 60 * 60 * 1000);
 
     const response = await fetch("https://api.hyperliquid.xyz/info", {
       method: "POST",

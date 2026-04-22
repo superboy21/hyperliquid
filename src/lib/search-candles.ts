@@ -430,6 +430,8 @@ async function fetchLighterCandles(
     });
 
     if (interval === "1w") {
+      // Lighter backend returns stale placeholder data for 1w after 2024-09-14;
+      // aggregate from 1d candles client-side instead.
       return aggregateDailyCandlesToWeekly(deduped);
     }
 
