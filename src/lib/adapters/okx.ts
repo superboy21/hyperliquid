@@ -81,6 +81,7 @@ type OkxNativeOpenInterestEntry = {
 type OkxNativeHistoryEntry = {
   instId?: string;
   fundingRate?: string;
+  realizedRate?: string;
   fundingTime?: string;
 };
 
@@ -186,7 +187,7 @@ function getRequiredOkxFundingHistoryRows(fundingIntervalSeconds?: number): numb
   return Math.ceil((30 * 24 * 60 * 60) / interval) + 1;
 }
 
-async function fetchOkxFundingHistory(
+export async function fetchOkxFundingHistory(
   rawSymbol: string,
   fundingIntervalSeconds?: number,
   signal?: AbortSignal,
@@ -232,7 +233,8 @@ async function fetchOkxFundingHistory(
       }
 
       if (!collected.has(timestamp)) {
-        collected.set(timestamp, parseOptionalNumber(item.fundingRate) ?? 0);
+        const rate = parseOptionalNumber(item.realizedRate) ?? parseOptionalNumber(item.fundingRate) ?? 0;
+        collected.set(timestamp, rate);
       }
     }
 

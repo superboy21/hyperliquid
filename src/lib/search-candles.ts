@@ -2,7 +2,10 @@
 // Fetches candlestick data for all 5 exchanges with maximum history per interval.
 // Used by the search page chart component.
 
-import { getCandleSnapshot as hlGetCandleSnapshot } from "./hyperliquid";
+import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as hlGetFundingHistoryForDays } from "./hyperliquid";
+import { getFundingHistoryForDays as gateGetFundingHistoryForDays } from "./gateio";
+import { getFundingHistoryForDays as lighterGetFundingHistoryForDays } from "./lighter";
+import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical } from "./adapters/okx";
 import { isAbortLikeError } from "./utils/abort";
 import type { SearchExchangeRate } from "./search";
 
@@ -21,8 +24,15 @@ export interface SearchCandlePoint {
   quoteVolume: string;
 }
 
+export interface FundingRatePoint {
+  time: number;
+  rate: number;
+  annualizedRate: number;
+}
+
 export interface SearchCandleResult {
   candles: SearchCandlePoint[];
+  fundingRates: FundingRatePoint[];
   interval: SearchChartInterval;
   exchange: string;
   symbol: string;
@@ -189,6 +199,45 @@ function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCand
     .filter((candle) => Number.isFinite(Number(candle.open)) && Number.isFinite(Number(candle.close)));
 }
 
+// ==================== Funding Rate Helpers ====================
+
+function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): number {
+  const settlementsPerDay = (24 * 3600) / fundingIntervalSeconds;
+  return rate * settlementsPerDay * 365;
+}
+
+function calculateFundingHistoryDays(interval: SearchChartInterval, maxCandles: number): number {
+  const intervalMs = SEARCH_INTERVAL_MS[interval];
+  return Math.min(Math.ceil((maxCandles * intervalMs) / (24 * 60 * 60 * 1000)), 365);
+}
+
+function aggregateFundingRatesToCandles(
+  rawHistory: { time: number; rate: number }[],
+  candles: SearchCandlePoint[],
+  fundingIntervalSeconds: number,
+): FundingRatePoint[] {
+  if (rawHistory.length === 0 || candles.length === 0) return [];
+
+  const sortedHistory = [...rawHistory].sort((a, b) => a.time - b.time);
+
+  return candles.map((candle) => {
+    const ratesInRange = sortedHistory.filter(
+      (h) => h.time >= candle.openTime && h.time < candle.closeTime,
+    );
+
+    if (ratesInRange.length > 0) {
+      const avgRate = ratesInRange.reduce((sum, h) => sum + h.rate, 0) / ratesInRange.length;
+      return {
+        time: candle.openTime,
+        rate: avgRate,
+        annualizedRate: toAnnualizedRate(avgRate, fundingIntervalSeconds),
+      };
+    }
+
+    return { time: candle.openTime, rate: 0, annualizedRate: 0 };
+  });
+}
+
 // ==================== Fetch Functions Per Exchange ====================
 
 async function fetchHyperliquidCandles(
@@ -313,10 +362,11 @@ async function fetchOkxCandles(
     const payload = await response.json();
     const rows = Array.isArray(payload.data) ? payload.data : [];
 
+    const intervalMs = SEARCH_INTERVAL_MS[interval];
     return rows
       .map((item: any[]) => ({
         openTime: Number(item[0]),
-        closeTime: Number(item[0]),
+        closeTime: Number(item[0]) + intervalMs,
         open: String(item[1] ?? 0),
         high: String(item[2] ?? 0),
         low: String(item[3] ?? 0),
@@ -443,6 +493,108 @@ async function fetchLighterCandles(
   }
 }
 
+// ==================== Funding History Fetch Functions ====================
+
+async function fetchHyperliquidFundingHistory(
+  symbol: string,
+  interval: SearchChartInterval,
+  signal?: AbortSignal,
+): Promise<{ time: number; rate: number }[]> {
+  try {
+    const days = calculateFundingHistoryDays(interval, MAX_CANDLES.hyperliquid);
+    const history = await hlGetFundingHistoryForDays(symbol, days, signal);
+    return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) return [];
+    console.error("[SearchCandles] Hyperliquid funding history failed:", error);
+    return [];
+  }
+}
+
+async function fetchBinanceFundingHistory(
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<{ time: number; rate: number }[]> {
+  try {
+    const url = `/api/binance?endpoint=fundingRate&symbol=${encodeURIComponent(symbol)}&limit=1000`;
+    const response = await fetch(url, { signal });
+    if (!response.ok) return [];
+    const data = await response.json();
+    if (!Array.isArray(data)) return [];
+    return data.map((item: any) => ({ time: Number(item.fundingTime), rate: Number(item.fundingRate) }));
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) return [];
+    console.error("[SearchCandles] Binance funding history failed:", error);
+    return [];
+  }
+}
+
+async function fetchGateFundingHistory(
+  symbol: string,
+  interval: SearchChartInterval,
+  fundingIntervalSeconds: number,
+  signal?: AbortSignal,
+): Promise<{ time: number; rate: number }[]> {
+  try {
+    const days = calculateFundingHistoryDays(interval, MAX_CANDLES.gateio);
+    const history = await gateGetFundingHistoryForDays(symbol, days, fundingIntervalSeconds, signal);
+    return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) return [];
+    console.error("[SearchCandles] Gate.io funding history failed:", error);
+    return [];
+  }
+}
+
+async function fetchOkxFundingHistory(
+  rawSymbol: string,
+  fundingIntervalSeconds: number,
+  signal?: AbortSignal,
+): Promise<{ time: number; rate: number }[]> {
+  try {
+    const history = await fetchOkxFundingHistoryCanonical(rawSymbol, fundingIntervalSeconds, signal);
+    return history.map((h) => ({ time: h.timestamp, rate: h.fundingRate }));
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) return [];
+    console.error("[SearchCandles] OKX funding history failed:", error);
+    return [];
+  }
+}
+
+async function fetchLighterFundingHistory(
+  marketId: number | undefined,
+  symbol: string,
+  interval: SearchChartInterval,
+  signal?: AbortSignal,
+): Promise<{ time: number; rate: number }[]> {
+  try {
+    let resolvedMarketId = marketId ?? null;
+    if (resolvedMarketId === null) {
+      try {
+        const fundingRes = await fetch("/api/lighter?endpoint=funding-rates", { signal });
+        if (fundingRes.ok) {
+          const fundingData = await fundingRes.json();
+          const entry = (fundingData.funding_rates || []).find(
+            (e: { exchange: string; symbol: string; market_id: number }) => e.exchange === "lighter" && e.symbol === symbol,
+          );
+          if (entry) resolvedMarketId = entry.market_id;
+        }
+      } catch { /* ignore */ }
+    }
+    if (resolvedMarketId === null) return [];
+
+    const days = calculateFundingHistoryDays(interval, MAX_CANDLES.lighter);
+    const history = await lighterGetFundingHistoryForDays(resolvedMarketId, days, signal);
+    // Lighter fundingRate is in percentage points (e.g., 0.01 = 0.01%).
+    // Divide by 100 to convert to decimal for consistent annualization.
+    return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) / 100 }));
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) return [];
+    console.error("[SearchCandles] Lighter funding history failed:", error);
+    return [];
+  }
+}
+
 // ==================== Unified Fetch Dispatcher ====================
 
 export async function fetchSearchCandles(
@@ -452,6 +604,7 @@ export async function fetchSearchCandles(
 ): Promise<SearchCandleResult> {
   const empty: SearchCandleResult = {
     candles: [],
+    fundingRates: [],
     interval,
     exchange: rate.exchange,
     symbol: rate.symbol,
@@ -459,26 +612,46 @@ export async function fetchSearchCandles(
 
   switch (rate.exchange) {
     case "Hyperliquid": {
-      const candles = await fetchHyperliquidCandles(rate.symbol, interval, signal);
-      return { ...empty, candles };
+      const [candles, fundingHistory] = await Promise.all([
+        fetchHyperliquidCandles(rate.symbol, interval, signal),
+        fetchHyperliquidFundingHistory(rate.symbol, interval, signal),
+      ]);
+      const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
+      return { ...empty, candles, fundingRates };
     }
     case "Gate.io": {
-      const candles = await fetchGateCandles(rate.symbol, interval, signal);
-      return { ...empty, candles };
+      const [candles, fundingHistory] = await Promise.all([
+        fetchGateCandles(rate.symbol, interval, signal),
+        fetchGateFundingHistory(rate.symbol, interval, rate.fundingInterval, signal),
+      ]);
+      const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
+      return { ...empty, candles, fundingRates };
     }
     case "Binance": {
       const rawSymbol = rate.rawSymbol || `${rate.symbol}USDT`;
-      const candles = await fetchBinanceCandles(rawSymbol, interval, signal);
-      return { ...empty, candles };
+      const [candles, fundingHistory] = await Promise.all([
+        fetchBinanceCandles(rawSymbol, interval, signal),
+        fetchBinanceFundingHistory(rawSymbol, signal),
+      ]);
+      const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
+      return { ...empty, candles, fundingRates };
     }
     case "OKX": {
       const rawSymbol = rate.rawSymbol || `${rate.symbol}-USDT-SWAP`;
-      const candles = await fetchOkxCandles(rawSymbol, interval, signal);
-      return { ...empty, candles };
+      const [candles, fundingHistory] = await Promise.all([
+        fetchOkxCandles(rawSymbol, interval, signal),
+        fetchOkxFundingHistory(rawSymbol, rate.fundingInterval, signal),
+      ]);
+      const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
+      return { ...empty, candles, fundingRates };
     }
     case "Lighter": {
-      const candles = await fetchLighterCandles(rate.marketId, rate.symbol, interval, signal);
-      return { ...empty, candles };
+      const [candles, fundingHistory] = await Promise.all([
+        fetchLighterCandles(rate.marketId, rate.symbol, interval, signal),
+        fetchLighterFundingHistory(rate.marketId, rate.symbol, interval, signal),
+      ]);
+      const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
+      return { ...empty, candles, fundingRates };
     }
     default:
       return empty;

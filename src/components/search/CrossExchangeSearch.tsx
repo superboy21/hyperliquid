@@ -13,6 +13,7 @@ import {
   fetchSearchCandles,
   type SearchChartInterval,
   type SearchCandlePoint,
+  type FundingRatePoint,
 } from "@/lib/search-candles";
 import {
   formatPrice,
@@ -23,6 +24,17 @@ import {
 import SearchCandlesChart from "./SearchCandlesChart";
 
 // ==================== Types ====================
+
+type ChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d";
+
+const RANGE_MS: Record<ChartRange, number | null> = {
+  all: null,
+  "3y": 3 * 365 * 24 * 60 * 60 * 1000,
+  "1y": 365 * 24 * 60 * 60 * 1000,
+  "6m": 183 * 24 * 60 * 60 * 1000,
+  "1m": 30 * 24 * 60 * 60 * 1000,
+  "1d": 1 * 24 * 60 * 60 * 1000,
+};
 
 type SortField =
   | "symbol"
@@ -165,6 +177,8 @@ export default function CrossExchangeSearch() {
   const [selectedRate, setSelectedRate] = useState<SearchExchangeRate | null>(null);
   const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
   const [chartCandles, setChartCandles] = useState<SearchCandlePoint[]>([]);
+  const [chartFundingRates, setChartFundingRates] = useState<FundingRatePoint[]>([]);
+  const [chartRange, setChartRange] = useState<ChartRange>("all");
   const [chartLoading, setChartLoading] = useState(false);
   const chartAbortRef = useRef<AbortController | null>(null);
 
@@ -228,6 +242,23 @@ export default function CrossExchangeSearch() {
     });
     return sorted;
   }, [filteredRates, sortConfig, detailCache]);
+
+  // Filter chart data by selected time range
+  const filteredChartData = useMemo(() => {
+    if (chartRange === "all" || chartCandles.length === 0) {
+      return { candles: chartCandles, fundingRates: chartFundingRates };
+    }
+    const rangeMs = RANGE_MS[chartRange];
+    if (!rangeMs) return { candles: chartCandles, fundingRates: chartFundingRates };
+
+    const now = Date.now();
+    const cutoff = now - rangeMs;
+
+    const filteredCandles = chartCandles.filter((c) => c.openTime >= cutoff);
+    const filteredFunding = chartFundingRates.filter((f) => f.time >= cutoff);
+
+    return { candles: filteredCandles, fundingRates: filteredFunding };
+  }, [chartCandles, chartFundingRates, chartRange]);
 
   // Progressive detail fetching
   const startDetailFetching = useCallback(
@@ -377,13 +408,15 @@ export default function CrossExchangeSearch() {
       // Toggle off if same row clicked
       if (selectedRate?.exchange === rate.exchange && selectedRate?.symbol === rate.symbol) {
         setSelectedRate(null);
-        setChartCandles([]);
-        return;
-      }
-
-      setSelectedRate(rate);
       setChartCandles([]);
-      setChartLoading(true);
+      setChartFundingRates([]);
+      return;
+    }
+
+    setSelectedRate(rate);
+    setChartCandles([]);
+    setChartFundingRates([]);
+    setChartLoading(true);
 
       // Cancel previous chart request
       if (chartAbortRef.current) {
@@ -396,6 +429,7 @@ export default function CrossExchangeSearch() {
         .then((result) => {
           if (!signal.aborted) {
             setChartCandles(result.candles);
+            setChartFundingRates(result.fundingRates);
             setChartLoading(false);
           }
         })
@@ -403,6 +437,7 @@ export default function CrossExchangeSearch() {
           if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted) {
             console.error("[SearchChart] Fetch failed:", error);
             setChartCandles([]);
+            setChartFundingRates([]);
             setChartLoading(false);
           }
         });
@@ -421,12 +456,14 @@ export default function CrossExchangeSearch() {
     const signal = chartAbortRef.current.signal;
 
     setChartCandles([]);
+    setChartFundingRates([]);
     setChartLoading(true);
 
     fetchSearchCandles(selectedRate, chartInterval, signal)
       .then((result) => {
         if (!signal.aborted) {
           setChartCandles(result.candles);
+          setChartFundingRates(result.fundingRates);
           setChartLoading(false);
         }
       })
@@ -434,6 +471,7 @@ export default function CrossExchangeSearch() {
         if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted) {
           console.error("[SearchChart] Interval change fetch failed:", error);
           setChartCandles([]);
+          setChartFundingRates([]);
           setChartLoading(false);
         }
       });
@@ -869,6 +907,21 @@ export default function CrossExchangeSearch() {
               </span>
             </div>
             <div className="flex gap-1">
+              <div className="mr-2 flex gap-1">
+                {(["all", "3y", "1y", "6m", "1m", "1d"] as ChartRange[]).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setChartRange(r)}
+                    className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
+                      chartRange === r
+                        ? "bg-gray-600 text-white"
+                        : "bg-gray-800 text-gray-500 hover:bg-gray-700 hover:text-gray-300"
+                    }`}
+                  >
+                    {r === "all" ? "全部" : r}
+                  </button>
+                ))}
+              </div>
               {(["1w", "1d", "4h", "1h", "5m"] as SearchChartInterval[]).map((iv) => (
                 <button
                   key={iv}
@@ -886,6 +939,7 @@ export default function CrossExchangeSearch() {
                 onClick={() => {
                   setSelectedRate(null);
                   setChartCandles([]);
+                  setChartFundingRates([]);
                   if (chartAbortRef.current) chartAbortRef.current.abort();
                 }}
                 className="ml-2 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200"
@@ -895,7 +949,7 @@ export default function CrossExchangeSearch() {
             </div>
           </div>
           {chartLoading ? (
-            <div className="flex h-[440px] items-center justify-center">
+            <div className="flex h-[520px] items-center justify-center">
               <div className="text-center">
                 <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-b-2 border-blue-500" />
                 <p className="text-gray-400">正在加载K线数据...</p>
@@ -907,10 +961,11 @@ export default function CrossExchangeSearch() {
               exchange={selectedRate.exchange}
               exchangeColor={selectedRate.exchangeColor}
               interval={chartInterval}
-              candles={chartCandles}
+              candles={filteredChartData.candles}
+              fundingRates={filteredChartData.fundingRates}
             />
           ) : (
-            <div className="flex h-[440px] items-center justify-center">
+            <div className="flex h-[520px] items-center justify-center">
               <p className="text-gray-500">暂无K线数据</p>
             </div>
           )}

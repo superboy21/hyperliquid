@@ -104,11 +104,16 @@ The application monitors two types of assets:
    - ETFs: xyz:SPY, xyz:QQQ, etc.
    - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
 
-### v2026.04.21
+### v2026.04.22
 
-- Reverted Lighter 1w to client-side aggregation from 1d (was temporarily using native 1w API)
-- Native 1w API returns stale placeholder data after 2024-09-14 (volume/quoteVolume frozen at 0)
-- Client-side aggregation from 1d candles provides accurate turnover data
+- Search page chart: added third subplot showing historical average settlement funding rate (annualized) aligned to candle intervals for all 5 exchanges
+- Search page chart: tooltip now shows both annualized funding rate (primary, e.g., "+36.50%") and raw hourly rate (secondary, e.g., "0.0042%")
+- Search page chart: annualized rate displayed as line chart with exchange-themed color area fill and 0-axis reference line
+- Search page chart: time range filter buttons added (All, 3y, 1y, 6m, 1m, 1d) to filter visible chart data client-side without re-fetching
+- Search page chart: fixed OKX closeTime being set equal to openTime (causing all OKX funding rates to show as 0)
+- Search page chart: fixed OKX realizedRate parsing (now uses realizedRate first, falls back to fundingRate for backward compatibility)
+- Search page chart: Lighter funding rate now correctly divided by 100 to convert percentage points to decimal for consistent annualization across all exchanges
+- Search page chart: Lighter getFundingHistory now returns raw percentage values (not normalized) matching the funding page
 
 ### v2026.04.20
 

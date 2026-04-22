@@ -5,6 +5,7 @@ import * as echarts from "echarts";
 import {
   type SearchChartInterval,
   type SearchCandlePoint,
+  type FundingRatePoint,
 } from "@/lib/search-candles";
 
 // ==================== Types ====================
@@ -17,6 +18,7 @@ interface SearchCandlesChartProps {
   exchangeColor: string;
   interval: SearchChartInterval;
   candles: SearchCandlePoint[];
+  fundingRates: FundingRatePoint[];
 }
 
 interface CandleDatum {
@@ -120,6 +122,7 @@ export default function SearchCandlesChart({
   exchangeColor,
   interval,
   candles,
+  fundingRates,
 }: SearchCandlesChartProps) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const [subChartMode, setSubChartMode] = useState<SubChartMode>("turnover");
@@ -155,6 +158,12 @@ export default function SearchCandlesChart({
       };
     });
 
+    // Funding rate data
+    const fundingData = fundingRates.map((f) => ({
+      value: f.annualizedRate * 100, // Convert to percentage
+      rawRate: f.rate,
+    }));
+
     // Determine axis label interval based on data density
     const axisInterval = candles.length > 200
       ? Math.floor(candles.length / 8)
@@ -169,6 +178,7 @@ export default function SearchCandlesChart({
         data: [
           { name: INTERVAL_LABELS[interval] },
           { name: subLabel },
+          { name: "资金费率" },
         ],
         top: 4,
         right: 18,
@@ -177,11 +187,12 @@ export default function SearchCandlesChart({
         itemHeight: 10,
       },
       grid: [
-        { left: 52, right: 18, top: 32, height: "54%" },
-        { left: 52, right: 18, top: "74%", height: "18%" },
+        { left: 52, right: 18, top: 32, height: "48%" },
+        { left: 52, right: 18, top: "66%", height: "16%" },
+        { left: 52, right: 18, top: "84%", height: "12%" },
       ],
       axisPointer: {
-        link: [{ xAxisIndex: [0, 1] }],
+        link: [{ xAxisIndex: [0, 1, 2] }],
       },
       tooltip: {
         trigger: "axis",
@@ -192,7 +203,8 @@ export default function SearchCandlesChart({
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params];
           const candleItem = items.find((item: any) => item.seriesType === "candlestick");
-          const volumeItem = items.find((item: any) => item.seriesType === "bar");
+          const volumeItem = items.find((item: any) => item.seriesType === "bar" && item.seriesName === subLabel);
+          const fundingItem = items.find((item: any) => item.seriesType === "line");
 
           // Get day of week from the hovered candle's openTime
           const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -215,6 +227,15 @@ export default function SearchCandlesChart({
             lines.push(`${subLabel}: ${formatVolume(volumeItem.value)}`);
           }
 
+          if (fundingItem) {
+            const annualized = fundingItem.value as number;
+            const rawRate = fundingItem.data?.rawRate as number | undefined;
+            const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
+            const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
+            lines.push(`年化资金费率: ${annualizedStr}`);
+            lines.push(`原始小时费率: ${rawStr}`);
+          }
+
           return lines.join("<br/>");
         },
       },
@@ -231,6 +252,16 @@ export default function SearchCandlesChart({
         {
           type: "category",
           gridIndex: 1,
+          data: axisCategories,
+          boundaryGap: true,
+          axisLine: { lineStyle: { color: "#4B5563" } },
+          axisLabel: { color: "#9CA3AF", show: false },
+          min: "dataMin",
+          max: "dataMax",
+        },
+        {
+          type: "category",
+          gridIndex: 2,
           data: axisCategories,
           boundaryGap: true,
           axisLine: { lineStyle: { color: "#4B5563" } },
@@ -265,6 +296,16 @@ export default function SearchCandlesChart({
             formatter: (value: number) => formatVolume(value),
           },
         },
+        {
+          gridIndex: 2,
+          position: "right",
+          axisLine: { show: false },
+          splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.15)" } },
+          axisLabel: {
+            color: "#9CA3AF",
+            formatter: (value: number) => `${value.toFixed(1)}%`,
+          },
+        },
       ],
       series: [
         {
@@ -286,6 +327,36 @@ export default function SearchCandlesChart({
           data: subData,
           barMaxWidth: 12,
         },
+        {
+          type: "line",
+          name: "资金费率",
+          xAxisIndex: 2,
+          yAxisIndex: 2,
+          data: fundingData,
+          smooth: false,
+          symbol: "none",
+          lineStyle: {
+            color: themeColor,
+            width: 1.5,
+          },
+          areaStyle: {
+            color: {
+              type: "linear",
+              x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: `${themeColor}33` },
+                { offset: 1, color: `${themeColor}05` },
+              ],
+            },
+          },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            data: [{ yAxis: 0 }],
+            lineStyle: { color: "#6B7280", type: "dashed", width: 1 },
+            label: { show: false },
+          },
+        },
       ],
     });
 
@@ -298,7 +369,7 @@ export default function SearchCandlesChart({
       resizeObserver.disconnect();
       chart.dispose();
     };
-  }, [symbol, exchange, exchangeColor, interval, candles, subChartMode]);
+  }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, subChartMode]);
 
   return (
     <div className="relative">
@@ -310,7 +381,7 @@ export default function SearchCandlesChart({
       >
         {subChartMode === "turnover" ? "成交额" : "成交量"}
       </button>
-      <div ref={chartRef} className="h-[440px] w-full" />
+      <div ref={chartRef} className="h-[520px] w-full" />
     </div>
   );
 }
