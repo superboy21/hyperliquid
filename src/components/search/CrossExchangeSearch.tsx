@@ -25,7 +25,7 @@ import SearchCandlesChart from "./SearchCandlesChart";
 
 // ==================== Types ====================
 
-type ChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d";
+type ChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
 
 const RANGE_MS: Record<ChartRange, number | null> = {
   all: null,
@@ -34,6 +34,7 @@ const RANGE_MS: Record<ChartRange, number | null> = {
   "6m": 183 * 24 * 60 * 60 * 1000,
   "1m": 30 * 24 * 60 * 60 * 1000,
   "1d": 1 * 24 * 60 * 60 * 1000,
+  "4h": 4 * 60 * 60 * 1000,
 };
 
 type SortField =
@@ -908,7 +909,10 @@ export default function CrossExchangeSearch() {
             </div>
             <div className="flex gap-1">
               <div className="mr-2 flex gap-1">
-                {(["all", "3y", "1y", "6m", "1m", "1d"] as ChartRange[]).map((r) => (
+                {(chartInterval === "1m"
+                  ? (["1d", "4h"] as ChartRange[])
+                  : (["all", "3y", "1y", "6m", "1m", "1d"] as ChartRange[])
+                ).map((r) => (
                   <button
                     key={r}
                     onClick={() => setChartRange(r)}
@@ -922,17 +926,23 @@ export default function CrossExchangeSearch() {
                   </button>
                 ))}
               </div>
-              {(["1w", "1d", "4h", "1h", "5m"] as SearchChartInterval[]).map((iv) => (
+              {(["1w", "1d", "4h", "1h", "5m", "1m"] as SearchChartInterval[]).map((iv) => (
                 <button
                   key={iv}
-                  onClick={() => setChartInterval(iv)}
+                  onClick={() => {
+                    setChartInterval(iv);
+                    // When switching to 1m, force time range to 1d if it's not 1d or 4h
+                    if (iv === "1m" && chartRange !== "1d" && chartRange !== "4h") {
+                      setChartRange("1d");
+                    }
+                  }}
                   className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                     chartInterval === iv
                       ? "bg-blue-600 text-white"
                       : "bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200"
                   }`}
                 >
-                  {iv === "1w" ? "1周" : iv === "1d" ? "1日" : iv}
+                  {iv === "1w" ? "1w" : iv === "1d" ? "1d" : iv === "1m" ? "1m" : iv}
                 </button>
               ))}
               <button

@@ -11,7 +11,7 @@ import type { SearchExchangeRate } from "./search";
 
 // ==================== Types ====================
 
-export type SearchChartInterval = "1d" | "1w" | "4h" | "1h" | "5m";
+export type SearchChartInterval = "1d" | "1w" | "4h" | "1h" | "5m" | "1m";
 
 export interface SearchCandlePoint {
   openTime: number;
@@ -46,6 +46,7 @@ const SEARCH_INTERVAL_MS: Record<SearchChartInterval, number> = {
   "4h": 4 * 60 * 60 * 1000,
   "1h": 60 * 60 * 1000,
   "5m": 5 * 60 * 1000,
+  "1m": 60 * 1000,
 };
 
 export function getSearchIntervalMs(interval: SearchChartInterval): number {
@@ -81,6 +82,7 @@ function toBinanceInterval(interval: SearchChartInterval): string {
     case "4h": return "4h";
     case "1h": return "1h";
     case "5m": return "5m";
+    case "1m": return "1m";
     default: return "1d";
   }
 }
@@ -92,6 +94,7 @@ function toGateInterval(interval: SearchChartInterval): string {
     case "4h": return "4h";
     case "1h": return "1h";
     case "5m": return "5m";
+    case "1m": return "1m";
     default: return "1d";
   }
 }
@@ -103,6 +106,7 @@ function toOkxBar(interval: SearchChartInterval): string {
     case "4h": return "4H";
     case "1h": return "1H";
     case "5m": return "5m";
+    case "1m": return "1m";
     default: return "1Dutc";
   }
 }
@@ -114,6 +118,7 @@ function toLighterResolution(interval: SearchChartInterval): string {
     case "4h": return "4h";
     case "1h": return "1h";
     case "5m": return "5m";
+    case "1m": return "1m";
     default: return "1d";
   }
 }
@@ -126,6 +131,7 @@ function toHyperliquidInterval(interval: SearchChartInterval): string {
     case "4h": return "4h";
     case "1h": return "1h";
     case "5m": return "5m";
+    case "1m": return "1m";
     default: return "1d";
   }
 }
@@ -346,9 +352,61 @@ async function fetchOkxCandles(
 ): Promise<SearchCandlePoint[]> {
   try {
     const bar = toOkxBar(interval);
-    // OKX live candles endpoint returns up to 300 per request
-    // For maximum history we use limit=300
     const limit = MAX_CANDLES.okx;
+    const intervalMs = SEARCH_INTERVAL_MS[interval];
+
+    // For 1m interval, we need pagination because OKX returns max 300 candles per request
+    // 1d = 1440 candles, 4h = 240 candles
+    if (interval === "1m") {
+      const allCandles: SearchCandlePoint[] = [];
+      const seen = new Set<number>();
+      let after: number | null = null;
+      const maxLoops = 10; // Max 3000 candles for 1m
+
+      for (let i = 0; i < maxLoops; i++) {
+        throwIfAborted(signal);
+
+        let url = `/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(bar)}&limit=${limit}`;
+        if (after !== null) {
+          url += `&after=${after}`;
+        }
+
+        const response = await fetch(url, { cache: "no-store", signal });
+        if (!response.ok) break;
+
+        const payload = await response.json();
+        const rows = Array.isArray(payload.data) ? payload.data : [];
+        if (rows.length === 0) break;
+
+        for (const item of rows) {
+          const openTime = Number(item[0]);
+          if (!seen.has(openTime) && openTime > 0) {
+            seen.add(openTime);
+            allCandles.push({
+              openTime,
+              closeTime: openTime + intervalMs,
+              open: String(item[1] ?? 0),
+              high: String(item[2] ?? 0),
+              low: String(item[3] ?? 0),
+              close: String(item[4] ?? 0),
+              volume: String(item[5] ?? 0),
+              quoteVolume: String(item[7] ?? Number(item[5] ?? 0) * Number(item[4] ?? 0)),
+            });
+          }
+        }
+
+        // Use the earliest timestamp as the next 'after' parameter
+        const earliestTime = Math.min(...rows.map((r: any[]) => Number(r[0])));
+        if (after !== null && earliestTime >= after) break; // No new data
+        after = earliestTime;
+
+        if (rows.length < limit) break; // Last page
+      }
+
+      return allCandles.sort((a, b) => a.openTime - b.openTime);
+    }
+
+    // Non-1m intervals: single request (existing behavior)
     const url = `/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(bar)}&limit=${limit}`;
     const response = await fetch(url, { cache: "no-store", signal });
 
@@ -357,7 +415,6 @@ async function fetchOkxCandles(
     const payload = await response.json();
     const rows = Array.isArray(payload.data) ? payload.data : [];
 
-    const intervalMs = SEARCH_INTERVAL_MS[interval];
     return rows
       .map((item: any[]) => ({
         openTime: Number(item[0]),

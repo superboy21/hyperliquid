@@ -176,12 +176,13 @@ export interface CanonicalFundingDetail {
 
 // ==================== 图表周期 ====================
 
-export type ChartInterval = "1d" | "4h" | "1h";
+export type ChartInterval = "1d" | "4h" | "1h" | "1m";
 
 export const INTERVAL_MS: Record<ChartInterval, number> = {
   "1d": 24 * 60 * 60 * 1000,
   "4h": 4 * 60 * 60 * 1000,
   "1h": 60 * 60 * 1000,
+  "1m": 60 * 1000,
 };
 
 // ==================== 资产分类 ====================

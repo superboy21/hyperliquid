@@ -96,7 +96,7 @@ export interface FundingStats {
   average: number;
 }
 
-export type ChartInterval = "1d" | "4h" | "1h";
+export type ChartInterval = "1d" | "4h" | "1h" | "1m";
 
 // ==================== 常量 ====================
 
@@ -106,6 +106,7 @@ export const intervalMap: Record<ChartInterval, string> = {
   "1d": "1d",
   "4h": "4h",
   "1h": "1h",
+  "1m": "1m",
 };
 
 // ==================== 市场映射 ====================

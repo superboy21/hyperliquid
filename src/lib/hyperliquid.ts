@@ -45,7 +45,7 @@ export interface DailyFundingRateItem {
   sampleCount: number;
 }
 
-export type ChartInterval = "1d" | "4h" | "1h";
+export type ChartInterval = "1d" | "4h" | "1h" | "1m";
 
 export interface IntervalFundingRateItem {
   bucketStartTime: number;
@@ -186,6 +186,7 @@ const INTERVAL_MS: Record<ChartInterval, number> = {
   "1d": 24 * 60 * 60 * 1000,
   "4h": 4 * 60 * 60 * 1000,
   "1h": 60 * 60 * 1000,
+  "1m": 60 * 1000,
 };
 
 export async function getAllFundingRates(): Promise<FundingRate[]> {

@@ -87,7 +87,7 @@ export interface CandleSnapshotItem {
   volume: string;                      // 成交量
 }
 
-export type ChartInterval = "1d" | "4h" | "1h";
+export type ChartInterval = "1d" | "4h" | "1h" | "1m";
 
 export interface IntervalFundingRateItem {
   bucketStartTime: number;
@@ -623,6 +623,8 @@ function convertInterval(interval: ChartInterval): string {
       return "4h";
     case "1h":
       return "1h";
+    case "1m":
+      return "1m";
     default:
       return "1d";
   }
@@ -639,6 +641,8 @@ function getIntervalMs(interval: ChartInterval): number {
       return 4 * 60 * 60 * 1000;
     case "1h":
       return 60 * 60 * 1000;
+    case "1m":
+      return 60 * 1000;
     default:
       return 24 * 60 * 60 * 1000;
   }

@@ -144,13 +144,14 @@ function getLighterAssetCategory(symbol: string): string {
 
 // ==================== Interval Helpers ====================
 
-type ChartInterval = "1d" | "4h" | "1h";
+type ChartInterval = "1d" | "4h" | "1h" | "1m";
 
 function getIntervalMs(interval: ChartInterval): number {
   switch (interval) {
     case "1d": return 24 * 60 * 60 * 1000;
     case "4h": return 4 * 60 * 60 * 1000;
     case "1h": return 60 * 60 * 1000;
+    case "1m": return 60 * 1000;
   }
 }
 

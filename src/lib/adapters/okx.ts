@@ -4,7 +4,7 @@ import type {
   CanonicalFundingRateRow,
 } from "@/lib/types";
 
-export type OkxChartInterval = "1d" | "4h" | "1h";
+export type OkxChartInterval = "1d" | "4h" | "1h" | "1m";
 
 export interface OkxFundingMonitorRow {
   symbol: string;
@@ -179,6 +179,7 @@ function computeOkxQuoteAmount(
 function toOkxBar(interval: OkxChartInterval): string {
   if (interval === "4h") return "4H";
   if (interval === "1h") return "1H";
+  if (interval === "1m") return "1m";
   return "1Dutc";
 }
 

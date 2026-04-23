@@ -104,6 +104,16 @@ The application monitors two types of assets:
    - ETFs: xyz:SPY, xyz:QQQ, etc.
    - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
 
+### v2026.04.24
+
+- Search page chart: added 1m (1-minute) interval support for all 5 exchanges
+- Search page chart: 1m interval uses pagination for OKX (3,000+ candles with `after` parameter) to ensure sufficient data depth
+- Search page chart: funding rate subplot is hidden when 1m interval is selected (funding rates only settle hourly/8-hourly, meaningless at 1m granularity)
+- Search page chart: when switching to 1m, time range auto-adjusts to 1d (or 4h) for optimal data density
+- Search page chart: 1m interval only shows time range options of "1d" and "4h" (daily/weekly ranges excluded)
+- Search page chart: interval button labels unified to use interval codes (1w, 1d, 4h, 1h, 5m, 1m) instead of Chinese text
+- Search page chart: ECharts axis label formatting now supports 1m interval with proper date/time display
+
 ### v2026.04.23
 
 - Search page chart: default time range changed to "1y" (was "All") with 1d interval

@@ -34,6 +34,7 @@ const INTERVAL_LABELS: Record<SearchChartInterval, string> = {
   "4h": "4小时线",
   "1h": "1小时线",
   "5m": "5分钟线",
+  "1m": "1分钟线",
 };
 
 const EXCHANGE_COLORS: Record<string, string> = {
@@ -77,7 +78,7 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
       timeZone: "UTC",
     });
   }
-  // 1h, 5m
+  // 1h, 5m, 1m
   return new Date(timestamp).toLocaleString("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -109,7 +110,7 @@ function buildYearAwareCategories(candles: SearchCandlePoint[], interval: Search
       const currYear = new Date(c.openTime).getUTCFullYear();
       return prevYear !== currYear ? `${yy}/${base}` : base;
     }
-    // 1h, 5m: split date and time onto two lines
+    // 1h, 5m, 1m: split date and time onto two lines
     return base.replace(" ", "\n");
   });
 }
@@ -132,6 +133,7 @@ export default function SearchCandlesChart({
 
     const chart = echarts.init(chartRef.current);
     const themeColor = EXCHANGE_COLORS[exchange] || exchangeColor || "#3B82F6";
+    const is1m = interval === "1m";
 
     const categories = candles.map((c) => formatLabel(c.openTime, interval));
     const axisCategories = buildYearAwareCategories(candles, interval);
@@ -158,11 +160,13 @@ export default function SearchCandlesChart({
       };
     });
 
-    // Funding rate data
-    const fundingData = fundingRates.map((f) => ({
-      value: f.annualizedRate * 100, // Convert to percentage
-      rawRate: f.rate,
-    }));
+    // Funding rate data (only for non-1m intervals)
+    const fundingData = is1m
+      ? []
+      : fundingRates.map((f) => ({
+          value: f.annualizedRate * 100,
+          rawRate: f.rate,
+        }));
 
     // Determine axis label interval based on data density
     const axisInterval = candles.length > 200
@@ -171,28 +175,265 @@ export default function SearchCandlesChart({
         ? Math.floor(candles.length / 6)
         : Math.max(0, Math.floor(candles.length / 8));
 
+    // Build legend data
+    const legendData: any[] = [
+      { name: INTERVAL_LABELS[interval] },
+      { name: subLabel },
+    ];
+    if (!is1m) {
+      legendData.push({ name: "资金费率" });
+    }
+
+    // Build grid config
+    const gridConfig = is1m
+      ? [
+          { left: 52, right: 18, top: 32, height: "62%" },
+          { left: 52, right: 18, top: "78%", height: "18%" },
+        ]
+      : [
+          { left: 52, right: 18, top: 32, height: "48%" },
+          { left: 52, right: 18, top: "66%", height: "16%" },
+          { left: 52, right: 18, top: "84%", height: "12%" },
+        ];
+
+    // Build axisPointer link
+    const axisPointerLink = is1m
+      ? [{ xAxisIndex: [0, 1] }]
+      : [{ xAxisIndex: [0, 1, 2] }];
+
+    // Build tooltip formatter
+    const tooltipFormatter = (params: any) => {
+      const items = Array.isArray(params) ? params : [params];
+      const candleItem = items.find((item: any) => item.seriesType === "candlestick");
+      const volumeItem = items.find((item: any) => item.seriesType === "bar" && item.seriesName === subLabel);
+      const fundingItem = is1m
+        ? null
+        : items.find((item: any) => item.seriesType === "line");
+
+      const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+      const hoveredIndex = items[0]?.dataIndex ?? 0;
+      const dayOfWeek = candles[hoveredIndex] ? dayNames[new Date(candles[hoveredIndex].openTime).getUTCDay()] : "";
+
+      const lines = [
+        `<div style="font-weight:600;margin-bottom:6px;">${exchange} ${symbol} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek}</div>`,
+      ];
+
+      const cd = candleItem?.data as CandleDatum | undefined;
+      if (cd?.raw) {
+        lines.push(`开盘: ${formatPrice(cd.raw.open)}`);
+        lines.push(`收盘: ${formatPrice(cd.raw.close)}`);
+        lines.push(`最高: ${formatPrice(cd.raw.high)}`);
+        lines.push(`最低: ${formatPrice(cd.raw.low)}`);
+      }
+
+      if (volumeItem) {
+        lines.push(`${subLabel}: ${formatVolume(volumeItem.value)}`);
+      }
+
+      if (fundingItem) {
+        const annualized = fundingItem.value as number;
+        const rawRate = fundingItem.data?.rawRate as number | undefined;
+        const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
+        const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
+        lines.push(`年化资金费率: ${annualizedStr}`);
+        lines.push(`原始小时费率: ${rawStr}`);
+      }
+
+      return lines.join("<br/>");
+    };
+
+    // Build xAxis config
+    const xAxisConfig = is1m
+      ? [
+          {
+            type: "category",
+            data: categories,
+            boundaryGap: true,
+            axisLine: { lineStyle: { color: "#4B5563" } },
+            axisLabel: { color: "#9CA3AF", show: false },
+            min: "dataMin",
+            max: "dataMax",
+          },
+          {
+            type: "category",
+            gridIndex: 1,
+            data: axisCategories,
+            boundaryGap: true,
+            axisLine: { lineStyle: { color: "#4B5563" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              interval: axisInterval,
+              lineHeight: 14,
+              margin: 10,
+            },
+            min: "dataMin",
+            max: "dataMax",
+          },
+        ]
+      : [
+          {
+            type: "category",
+            data: categories,
+            boundaryGap: true,
+            axisLine: { lineStyle: { color: "#4B5563" } },
+            axisLabel: { color: "#9CA3AF", show: false },
+            min: "dataMin",
+            max: "dataMax",
+          },
+          {
+            type: "category",
+            gridIndex: 1,
+            data: axisCategories,
+            boundaryGap: true,
+            axisLine: { lineStyle: { color: "#4B5563" } },
+            axisLabel: { color: "#9CA3AF", show: false },
+            min: "dataMin",
+            max: "dataMax",
+          },
+          {
+            type: "category",
+            gridIndex: 2,
+            data: axisCategories,
+            boundaryGap: true,
+            axisLine: { lineStyle: { color: "#4B5563" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              interval: axisInterval,
+              lineHeight: interval === "1d" || interval === "1w" ? 16 : 14,
+              margin: 10,
+            },
+            min: "dataMin",
+            max: "dataMax",
+          },
+        ];
+
+    // Build yAxis config
+    const yAxisConfig = is1m
+      ? [
+          {
+            scale: true,
+            position: "right",
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.35)" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              formatter: (value: number) => formatPrice(value),
+            },
+          },
+          {
+            gridIndex: 1,
+            position: "right",
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.25)" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              formatter: (value: number) => formatVolume(value),
+            },
+          },
+        ]
+      : [
+          {
+            scale: true,
+            position: "right",
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.35)" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              formatter: (value: number) => formatPrice(value),
+            },
+          },
+          {
+            gridIndex: 1,
+            position: "right",
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.25)" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              formatter: (value: number) => formatVolume(value),
+            },
+          },
+          {
+            gridIndex: 2,
+            position: "right",
+            axisLine: { show: false },
+            splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.15)" } },
+            axisLabel: {
+              color: "#9CA3AF",
+              formatter: (value: number) => `${value.toFixed(1)}%`,
+            },
+          },
+        ];
+
+    // Build series config
+    const seriesConfig: any[] = [
+      {
+        type: "candlestick",
+        name: INTERVAL_LABELS[interval],
+        data: candleSeries,
+        itemStyle: {
+          color: "#22C55E",
+          color0: "#EF4444",
+          borderColor: "#22C55E",
+          borderColor0: "#EF4444",
+        },
+      },
+      {
+        type: "bar",
+        name: subLabel,
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: subData,
+        barMaxWidth: 12,
+      },
+    ];
+
+    if (!is1m) {
+      seriesConfig.push({
+        type: "line",
+        name: "资金费率",
+        xAxisIndex: 2,
+        yAxisIndex: 2,
+        data: fundingData,
+        smooth: false,
+        symbol: "none",
+        lineStyle: {
+          color: themeColor,
+          width: 1.5,
+        },
+        areaStyle: {
+          color: {
+            type: "linear",
+            x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: `${themeColor}33` },
+              { offset: 1, color: `${themeColor}05` },
+            ],
+          },
+        },
+        markLine: {
+          silent: true,
+          symbol: "none",
+          data: [{ yAxis: 0 }],
+          lineStyle: { color: "#6B7280", type: "dashed", width: 1 },
+          label: { show: false },
+        },
+      });
+    }
+
     chart.setOption({
       animation: false,
       backgroundColor: "transparent",
       legend: {
-        data: [
-          { name: INTERVAL_LABELS[interval] },
-          { name: subLabel },
-          { name: "资金费率" },
-        ],
+        data: legendData,
         top: 4,
         right: 18,
         textStyle: { color: "#9CA3AF", fontSize: 11 },
         itemWidth: 14,
         itemHeight: 10,
       },
-      grid: [
-        { left: 52, right: 18, top: 32, height: "48%" },
-        { left: 52, right: 18, top: "66%", height: "16%" },
-        { left: 52, right: 18, top: "84%", height: "12%" },
-      ],
+      grid: gridConfig,
       axisPointer: {
-        link: [{ xAxisIndex: [0, 1, 2] }],
+        link: axisPointerLink,
       },
       tooltip: {
         trigger: "axis",
@@ -200,164 +441,11 @@ export default function SearchCandlesChart({
         backgroundColor: "rgba(17, 24, 39, 0.95)",
         borderColor: "#374151",
         textStyle: { color: "#E5E7EB" },
-        formatter: (params: any) => {
-          const items = Array.isArray(params) ? params : [params];
-          const candleItem = items.find((item: any) => item.seriesType === "candlestick");
-          const volumeItem = items.find((item: any) => item.seriesType === "bar" && item.seriesName === subLabel);
-          const fundingItem = items.find((item: any) => item.seriesType === "line");
-
-          // Get day of week from the hovered candle's openTime
-          const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-          const hoveredIndex = items[0]?.dataIndex ?? 0;
-          const dayOfWeek = candles[hoveredIndex] ? dayNames[new Date(candles[hoveredIndex].openTime).getUTCDay()] : "";
-
-          const lines = [
-            `<div style="font-weight:600;margin-bottom:6px;">${exchange} ${symbol} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek}</div>`,
-          ];
-
-          const cd = candleItem?.data as CandleDatum | undefined;
-          if (cd?.raw) {
-            lines.push(`开盘: ${formatPrice(cd.raw.open)}`);
-            lines.push(`收盘: ${formatPrice(cd.raw.close)}`);
-            lines.push(`最高: ${formatPrice(cd.raw.high)}`);
-            lines.push(`最低: ${formatPrice(cd.raw.low)}`);
-          }
-
-          if (volumeItem) {
-            lines.push(`${subLabel}: ${formatVolume(volumeItem.value)}`);
-          }
-
-          if (fundingItem) {
-            const annualized = fundingItem.value as number;
-            const rawRate = fundingItem.data?.rawRate as number | undefined;
-            const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
-            const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
-            lines.push(`年化资金费率: ${annualizedStr}`);
-            lines.push(`原始小时费率: ${rawStr}`);
-          }
-
-          return lines.join("<br/>");
-        },
+        formatter: tooltipFormatter,
       },
-      xAxis: [
-        {
-          type: "category",
-          data: categories,
-          boundaryGap: true,
-          axisLine: { lineStyle: { color: "#4B5563" } },
-          axisLabel: { color: "#9CA3AF", show: false },
-          min: "dataMin",
-          max: "dataMax",
-        },
-        {
-          type: "category",
-          gridIndex: 1,
-          data: axisCategories,
-          boundaryGap: true,
-          axisLine: { lineStyle: { color: "#4B5563" } },
-          axisLabel: { color: "#9CA3AF", show: false },
-          min: "dataMin",
-          max: "dataMax",
-        },
-        {
-          type: "category",
-          gridIndex: 2,
-          data: axisCategories,
-          boundaryGap: true,
-          axisLine: { lineStyle: { color: "#4B5563" } },
-          axisLabel: {
-            color: "#9CA3AF",
-            interval: axisInterval,
-            lineHeight: interval === "1d" || interval === "1w" ? 16 : 14,
-            margin: 10,
-          },
-          min: "dataMin",
-          max: "dataMax",
-        },
-      ],
-      yAxis: [
-        {
-          scale: true,
-          position: "right",
-          axisLine: { show: false },
-          splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.35)" } },
-          axisLabel: {
-            color: "#9CA3AF",
-            formatter: (value: number) => formatPrice(value),
-          },
-        },
-        {
-          gridIndex: 1,
-          position: "right",
-          axisLine: { show: false },
-          splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.25)" } },
-          axisLabel: {
-            color: "#9CA3AF",
-            formatter: (value: number) => formatVolume(value),
-          },
-        },
-        {
-          gridIndex: 2,
-          position: "right",
-          axisLine: { show: false },
-          splitLine: { lineStyle: { color: "rgba(75, 85, 99, 0.15)" } },
-          axisLabel: {
-            color: "#9CA3AF",
-            formatter: (value: number) => `${value.toFixed(1)}%`,
-          },
-        },
-      ],
-      series: [
-        {
-          type: "candlestick",
-          name: INTERVAL_LABELS[interval],
-          data: candleSeries,
-          itemStyle: {
-            color: "#22C55E",
-            color0: "#EF4444",
-            borderColor: "#22C55E",
-            borderColor0: "#EF4444",
-          },
-        },
-        {
-          type: "bar",
-          name: subLabel,
-          xAxisIndex: 1,
-          yAxisIndex: 1,
-          data: subData,
-          barMaxWidth: 12,
-        },
-        {
-          type: "line",
-          name: "资金费率",
-          xAxisIndex: 2,
-          yAxisIndex: 2,
-          data: fundingData,
-          smooth: false,
-          symbol: "none",
-          lineStyle: {
-            color: themeColor,
-            width: 1.5,
-          },
-          areaStyle: {
-            color: {
-              type: "linear",
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: `${themeColor}33` },
-                { offset: 1, color: `${themeColor}05` },
-              ],
-            },
-          },
-          markLine: {
-            silent: true,
-            symbol: "none",
-            data: [{ yAxis: 0 }],
-            lineStyle: { color: "#6B7280", type: "dashed", width: 1 },
-            label: { show: false },
-          },
-        },
-      ],
+      xAxis: xAxisConfig,
+      yAxis: yAxisConfig,
+      series: seriesConfig,
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -376,7 +464,7 @@ export default function SearchCandlesChart({
       <button
         onClick={() => setSubChartMode((m) => m === "turnover" ? "volume" : "turnover")}
         className="absolute right-1 z-10 rounded border border-gray-600 bg-gray-800/80 px-2 py-0.5 text-xs text-gray-300 transition-colors hover:border-gray-400 hover:text-gray-100"
-        style={{ top: "64%" }}
+        style={{ top: interval === "1m" ? "76%" : "64%" }}
         title={subChartMode === "turnover" ? "切换到成交量" : "切换到成交额"}
       >
         {subChartMode === "turnover" ? "成交额" : "成交量"}

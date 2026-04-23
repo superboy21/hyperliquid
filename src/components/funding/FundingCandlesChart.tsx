@@ -40,12 +40,14 @@ const intervalNameMap: Record<ChartInterval, string> = {
   "1d": "日线",
   "4h": "4小时线",
   "1h": "1小时线",
+  "1m": "1分钟线",
 };
 
 const fundingNameMap: Record<ChartInterval, string> = {
   "1d": "当日平均小时资金费率",
   "4h": "4小时平均资金费率",
   "1h": "1小时资金费率",
+  "1m": "1分钟资金费率",
 };
 
 export default function FundingCandlesChart({
