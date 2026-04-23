@@ -114,6 +114,24 @@ The application monitors two types of assets:
 - Search page chart: interval button labels unified to use interval codes (1w, 1d, 4h, 1h, 5m, 1m) instead of Chinese text
 - Search page chart: ECharts axis label formatting now supports 1m interval with proper date/time display
 
+### v2026.04.24 (Combo Chart Update)
+
+- Search page: added combo chart support with spread and ratio modes
+- Search syntax: type "ETH-BTC" to create spread chart (price difference), type "ETH/BTC" to create ratio chart (price ratio)
+- Multi-select UX: first click highlights in blue, second click highlights in purple and renders combo chart
+- Combo chart calculation: spread uses `open=first.second`, ratio uses `open=first/second` (both aligned by timestamp intersection)
+- Turnover sub-chart: displays `min(first.quoteVolume, second.quoteVolume)` per timestamp
+- Funding rate sub-chart: displays `first.annualizedRate - second.annualizedRate` difference
+- Grid layout adjusted: funding rate sub-chart enlarged to ~28% (was 12-16%), turnover sub-chart at ~14-18%
+- Volume/turnover toggle buttons moved to top-left (above charts),成交额→"较小成交额",成交量→"较小成交量" in tooltip
+- DataZoom slider position adjusted to `bottom: 28` to avoid overlapping x-axis labels
+- X-axis label margin increased to 22px for better readability
+- Search filtering: combo syntax triggers OR-filter on both keywords (e.g., "ETH-BTC" shows both ETH and BTC results)
+- State management: auto-clears all selections when search term changes
+- 1m interval combo mode explicitly blocked (clears selections)
+- Unit tests: 8 test cases for `alignComboData` function (spread, ratio, intersection, edge cases)
+- Code quality: all changes pass TypeScript type check and build successfully
+
 ### v2026.04.23
 
 - Search page chart: default time range changed to "1y" (was "All") with 1d interval

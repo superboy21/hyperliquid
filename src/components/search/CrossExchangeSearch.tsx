@@ -22,6 +22,8 @@ import {
   formatFundingRate,
 } from "@/lib/types";
 import SearchCandlesChart from "./SearchCandlesChart";
+import ComboSearchCandlesChart from "./ComboSearchCandlesChart";
+import { parseComboSearch, isComboSearch, alignComboData, type ComboSelection, type ComboCandleResult } from "@/lib/combo";
 
 // ==================== Types ====================
 
@@ -176,12 +178,25 @@ export default function CrossExchangeSearch() {
 
   // Chart state
   const [selectedRate, setSelectedRate] = useState<SearchExchangeRate | null>(null);
+  const [comboSelection, setComboSelection] = useState<ComboSelection>({
+    first: null,
+    second: null,
+    mode: null,
+  });
   const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
   const [chartCandles, setChartCandles] = useState<SearchCandlePoint[]>([]);
   const [chartFundingRates, setChartFundingRates] = useState<FundingRatePoint[]>([]);
+  const [comboChartData, setComboChartData] = useState<ComboCandleResult | null>(null);
+  const [comboError, setComboError] = useState<string | null>(null);
   const [chartRange, setChartRange] = useState<ChartRange>("1y");
   const [chartLoading, setChartLoading] = useState(false);
+  const [showVolume, setShowVolume] = useState(false);
   const chartAbortRef = useRef<AbortController | null>(null);
+
+  const isComboMode = useMemo(() =>
+    comboSelection.mode !== null && comboSelection.first !== null && comboSelection.second !== null,
+    [comboSelection]
+  );
 
   const abortRef = useRef<AbortController | null>(null);
   const ratesRef = useRef<SearchExchangeRate[]>([]);
@@ -218,6 +233,13 @@ export default function CrossExchangeSearch() {
 
   // Filter by keyword
   const filteredRates = useMemo(() => {
+    const { keyword1, keyword2, mode } = parseComboSearch(searchTerm);
+    if (mode && keyword1 && keyword2) {
+      return allRates.filter(rate =>
+        rate.symbol.toLowerCase().includes(keyword1) ||
+        rate.symbol.toLowerCase().includes(keyword2)
+      );
+    }
     return filterByKeyword(allRates, searchTerm);
   }, [allRates, searchTerm]);
 
@@ -260,6 +282,23 @@ export default function CrossExchangeSearch() {
 
     return { candles: filteredCandles, fundingRates: filteredFunding };
   }, [chartCandles, chartFundingRates, chartRange]);
+
+  // Filter combo chart data by selected time range
+  const filteredComboChartData = useMemo(() => {
+    if (!comboChartData) return null;
+    if (chartRange === "all") return comboChartData;
+    const rangeMs = RANGE_MS[chartRange];
+    if (!rangeMs) return comboChartData;
+
+    const now = Date.now();
+    const cutoff = now - rangeMs;
+
+    return {
+      ...comboChartData,
+      candles: comboChartData.candles.filter((c) => c.openTime >= cutoff),
+      fundingRates: comboChartData.fundingRates.filter((f) => f.time >= cutoff),
+    };
+  }, [comboChartData, chartRange]);
 
   // Progressive detail fetching
   const startDetailFetching = useCallback(
@@ -403,21 +442,63 @@ export default function CrossExchangeSearch() {
     }));
   };
 
+  const isSameRate = (a: SearchExchangeRate | null, b: SearchExchangeRate) =>
+    a !== null && a.exchange === b.exchange && a.symbol === b.symbol;
+
   // Chart: handle row click to show candlestick chart
   const handleRowClick = useCallback(
     (rate: SearchExchangeRate) => {
+      // Combo mode: multi-select logic
+      if (isComboSearch(searchTerm)) {
+        const isFirst = isSameRate(comboSelection.first, rate);
+        const isSecond = isSameRate(comboSelection.second, rate);
+
+        if (isFirst) {
+          // Case A: deselect first
+          if (comboSelection.second) {
+            setComboSelection({ first: comboSelection.second, second: null, mode: comboSelection.mode });
+          } else {
+            setComboSelection({ first: null, second: null, mode: null });
+          }
+          return;
+        }
+
+        if (isSecond) {
+          // Case B: deselect second
+          setComboSelection({ ...comboSelection, second: null });
+          return;
+        }
+
+        if (!comboSelection.first) {
+          // Case C: set as first
+          const { mode } = parseComboSearch(searchTerm);
+          setComboSelection({ first: rate, second: null, mode });
+          return;
+        }
+
+        if (!comboSelection.second) {
+          // Case D: set as second
+          setComboSelection({ ...comboSelection, second: rate });
+          return;
+        }
+
+        // Case E: both selected, ignore
+        return;
+      }
+
+      // Normal single-select logic
       // Toggle off if same row clicked
       if (selectedRate?.exchange === rate.exchange && selectedRate?.symbol === rate.symbol) {
         setSelectedRate(null);
+        setChartCandles([]);
+        setChartFundingRates([]);
+        return;
+      }
+
+      setSelectedRate(rate);
       setChartCandles([]);
       setChartFundingRates([]);
-      return;
-    }
-
-    setSelectedRate(rate);
-    setChartCandles([]);
-    setChartFundingRates([]);
-    setChartLoading(true);
+      setChartLoading(true);
 
       // Cancel previous chart request
       if (chartAbortRef.current) {
@@ -443,11 +524,63 @@ export default function CrossExchangeSearch() {
           }
         });
     },
-    [selectedRate, chartInterval],
+    [selectedRate, chartInterval, searchTerm, comboSelection],
   );
+
+  const fetchComboCandles = useCallback(async (
+    first: SearchExchangeRate,
+    second: SearchExchangeRate,
+    interval: SearchChartInterval,
+    signal: AbortSignal
+  ) => {
+    setChartLoading(true);
+    try {
+      const [firstResult, secondResult] = await Promise.all([
+        fetchSearchCandles(first, interval, signal),
+        fetchSearchCandles(second, interval, signal),
+      ]);
+
+      if (signal.aborted) return;
+
+      const mode = parseComboSearch(searchTerm).mode;
+      if (!mode) return;
+
+      const comboResult = alignComboData(firstResult, secondResult, mode);
+      setComboChartData(comboResult);
+      setComboError(null);
+      setChartLoading(false);
+    } catch (error) {
+      if (!signal.aborted) {
+        console.error("[ComboChart] Fetch failed:", error);
+        setComboChartData(null);
+        setComboError("数据获取失败，无法生成组合图");
+        setChartLoading(false);
+      }
+    }
+  }, [searchTerm]);
 
   // Re-fetch candles when interval changes (if a row is selected)
   useEffect(() => {
+    if (isComboMode && comboSelection.first && comboSelection.second) {
+      if (chartAbortRef.current) {
+        chartAbortRef.current.abort();
+      }
+      chartAbortRef.current = new AbortController();
+      const signal = chartAbortRef.current.signal;
+
+      setChartCandles([]);
+      setChartFundingRates([]);
+      setChartLoading(true);
+
+      fetchComboCandles(comboSelection.first, comboSelection.second, chartInterval, signal);
+
+      return () => {
+        if (chartAbortRef.current) {
+          chartAbortRef.current.abort();
+        }
+      };
+    }
+
     if (!selectedRate) return;
 
     if (chartAbortRef.current) {
@@ -482,7 +615,38 @@ export default function CrossExchangeSearch() {
         chartAbortRef.current.abort();
       }
     };
-  }, [selectedRate, chartInterval]);
+  }, [selectedRate, chartInterval, comboSelection, isComboMode, fetchComboCandles]);
+
+  // Fetch combo candles when second selection is set
+  useEffect(() => {
+    if (!comboSelection.first || !comboSelection.second || !comboSelection.mode) return;
+
+    if (chartAbortRef.current) chartAbortRef.current.abort();
+    chartAbortRef.current = new AbortController();
+    const signal = chartAbortRef.current.signal;
+
+    fetchComboCandles(comboSelection.first, comboSelection.second, chartInterval, signal);
+  }, [comboSelection.second, comboSelection.mode, chartInterval]);
+
+  // Clear combo chart data when second selection is removed
+  useEffect(() => {
+    if (!comboSelection.second) {
+      setComboChartData(null);
+    }
+  }, [comboSelection.second]);
+
+  // Clear all selections when search term changes
+  useEffect(() => {
+    setComboSelection({ first: null, second: null, mode: null });
+    setComboChartData(null);
+    setSelectedRate(null);
+    setChartCandles([]);
+    setChartFundingRates([]);
+    if (chartAbortRef.current) {
+      chartAbortRef.current.abort();
+      chartAbortRef.current = null;
+    }
+  }, [searchTerm]);
 
   // Cleanup chart abort on unmount
   useEffect(() => {
@@ -700,14 +864,19 @@ export default function CrossExchangeSearch() {
               const detail = detailCache.get(detailKey);
               const isLoading = detailLoading.has(detailKey);
               const dotColor = EXCHANGE_DOT_COLORS[rate.exchange] || "bg-gray-400";
+              const isFirstSelected = isSameRate(comboSelection.first, rate);
+              const isSecondSelected = isSameRate(comboSelection.second, rate);
+              const isNormalSelected = isSameRate(selectedRate, rate);
 
               return (
                 <tr
                   key={`${rate.exchange}-${rate.symbol}`}
                   className={`transition-colors cursor-pointer ${
-                    selectedRate?.exchange === rate.exchange && selectedRate?.symbol === rate.symbol
+                    isNormalSelected || isFirstSelected
                       ? "bg-blue-900/40 hover:bg-blue-900/50"
-                      : "hover:bg-gray-700/50"
+                      : isSecondSelected
+                        ? "bg-purple-900/40 hover:bg-purple-900/50 ring-1 ring-purple-500/50"
+                        : "hover:bg-gray-700/50"
                   }`}
                   onClick={() => handleRowClick(rate)}
                 >
@@ -895,19 +1064,55 @@ export default function CrossExchangeSearch() {
       </div>
 
       {/* Candlestick Chart */}
-      {selectedRate && (
+      {(selectedRate || isComboMode) && (
         <div className="mt-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className={`h-2.5 w-2.5 rounded-full ${EXCHANGE_DOT_COLORS[selectedRate.exchange] || "bg-gray-400"}`} />
-              <span className="text-sm font-medium text-white">
-                {selectedRate.exchange} {selectedRate.symbol}
-              </span>
-              <span className="text-xs text-gray-500">
-                {chartCandles.length > 0 ? `${chartCandles.length} 根K线` : ""}
-              </span>
+              {isComboMode ? (
+                <>
+                  <span className="h-2.5 w-2.5 rounded-full bg-purple-400" />
+                  <span className="text-sm font-medium text-white">
+                    {comboSelection.first?.exchange} {comboSelection.first?.symbol} {comboSelection.mode === "spread" ? "-" : "/"} {comboSelection.second?.exchange} {comboSelection.second?.symbol}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {filteredComboChartData?.candles.length ? `${filteredComboChartData.candles.length} 根K线` : ""}
+                  </span>
+                </>
+              ) : selectedRate ? (
+                <>
+                  <span className={`h-2.5 w-2.5 rounded-full ${EXCHANGE_DOT_COLORS[selectedRate.exchange] || "bg-gray-400"}`} />
+                  <span className="text-sm font-medium text-white">
+                    {selectedRate.exchange} {selectedRate.symbol}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {chartCandles.length > 0 ? `${chartCandles.length} 根K线` : ""}
+                  </span>
+                </>
+              ) : null}
             </div>
             <div className="flex gap-1">
+              <div className="mr-2 flex gap-1">
+                <button
+                  onClick={() => setShowVolume(false)}
+                  className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
+                    !showVolume
+                      ? "bg-emerald-600 text-white"
+                      : "bg-gray-800 text-gray-500 hover:bg-gray-700 hover:text-gray-300"
+                  }`}
+                >
+                  成交额
+                </button>
+                <button
+                  onClick={() => setShowVolume(true)}
+                  className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
+                    showVolume
+                      ? "bg-emerald-600 text-white"
+                      : "bg-gray-800 text-gray-500 hover:bg-gray-700 hover:text-gray-300"
+                  }`}
+                >
+                  成交量
+                </button>
+              </div>
               <div className="mr-2 flex gap-1">
                 {(chartInterval === "1m"
                   ? (["1d", "4h"] as ChartRange[])
@@ -930,6 +1135,11 @@ export default function CrossExchangeSearch() {
                 <button
                   key={iv}
                   onClick={() => {
+                    if (isComboMode && iv === "1m") {
+                      setComboSelection({ first: null, second: null, mode: null });
+                      setComboChartData(null);
+                      return;
+                    }
                     setChartInterval(iv);
                     // When switching to 1m, force time range to 1d if it's not 1d or 4h
                     if (iv === "1m" && chartRange !== "1d" && chartRange !== "4h") {
@@ -950,6 +1160,8 @@ export default function CrossExchangeSearch() {
                   setSelectedRate(null);
                   setChartCandles([]);
                   setChartFundingRates([]);
+                  setComboSelection({ first: null, second: null, mode: null });
+                  setComboChartData(null);
                   if (chartAbortRef.current) chartAbortRef.current.abort();
                 }}
                 className="ml-2 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200"
@@ -965,7 +1177,30 @@ export default function CrossExchangeSearch() {
                 <p className="text-gray-400">正在加载K线数据...</p>
               </div>
             </div>
-          ) : chartCandles.length > 0 ? (
+          ) : isComboMode ? (
+            comboError ? (
+              <div className="flex h-[520px] items-center justify-center">
+                <p className="text-red-400">{comboError}</p>
+              </div>
+            ) : !comboChartData || comboChartData.candles.length === 0 ? (
+              <div className="flex h-[520px] items-center justify-center">
+                <p className="text-gray-500">两个交易对无重叠数据</p>
+              </div>
+            ) : comboChartData.candles.length === 1 ? (
+              <div className="flex h-[520px] items-center justify-center">
+                <p className="text-gray-500">数据点不足，无法绘制蜡烛图</p>
+              </div>
+            ) : (
+              <ComboSearchCandlesChart
+                data={filteredComboChartData ?? comboChartData}
+                interval={chartInterval}
+                timeRange={chartRange}
+                onTimeRangeChange={setChartRange}
+                showVolume={showVolume}
+                onToggleVolume={() => setShowVolume((v) => !v)}
+              />
+            )
+          ) : selectedRate && chartCandles.length > 0 ? (
             <SearchCandlesChart
               symbol={selectedRate.symbol}
               exchange={selectedRate.exchange}
@@ -973,6 +1208,7 @@ export default function CrossExchangeSearch() {
               interval={chartInterval}
               candles={filteredChartData.candles}
               fundingRates={filteredChartData.fundingRates}
+              showVolume={showVolume}
             />
           ) : (
             <div className="flex h-[520px] items-center justify-center">
