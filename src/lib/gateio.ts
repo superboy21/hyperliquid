@@ -282,6 +282,65 @@ export async function getFundingHistoryForDays(
 }
 
 /**
+ * 获取指定合约的全部历史资金费率（自动分页直到获取完所有可用数据）
+ * Gate.io API 每次最多返回 1000 条，通过 from/to 时间戳分页
+ */
+export async function getFundingHistoryAll(
+  coin: string,
+  signal?: AbortSignal,
+): Promise<FundingHistoryItem[]> {
+  const contract = toContractName(coin);
+  const allHistory: FundingHistoryItem[] = [];
+  const seen = new Set<number>();
+  let currentTo = Math.floor(Date.now() / 1000);
+  const pageSize = 1000;
+  const maxLoops = 20;
+
+  for (let i = 0; i < maxLoops; i++) {
+    throwIfAborted(signal);
+
+    // 每次请求一个固定时间窗口的数据，确保能往前翻页
+    // 用 from/to 双参数定义时间窗口
+    const windowSeconds = pageSize * 8 * 3600; // 假设 8h interval，1000 条约 333 天
+    const currentFrom = Math.max(0, currentTo - windowSeconds);
+
+    const url = `${API_PROXY_BASE}/futures/${SETTLE}/funding_rate?contract=${encodeURIComponent(contract)}&limit=${pageSize}&from=${currentFrom}&to=${currentTo}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      signal,
+    });
+
+    if (!response.ok) break;
+
+    const data = await response.json();
+    if (!Array.isArray(data) || data.length === 0) break;
+
+    let newCount = 0;
+    for (const item of data as GateFundingHistoryItem[]) {
+      const time = item.t * 1000;
+      if (!seen.has(time)) {
+        seen.add(time);
+        allHistory.push({ time, fundingRate: item.r });
+        newCount++;
+      }
+    }
+
+    if (newCount === 0) break;
+
+    // 继续往前获取：用最早的时间戳作为下一次的 to
+    const earliestTime = Math.min(...(data as GateFundingHistoryItem[]).map((h: GateFundingHistoryItem) => h.t));
+    currentTo = earliestTime - 1;
+
+    if (currentTo <= 0) break;
+  }
+
+  return allHistory.sort((a, b) => a.time - b.time);
+}
+
+/**
  * 获取 K 线数据
  * @param contract 合约名称，如 "BTC_USDT"
  * @param interval K 线周期

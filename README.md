@@ -104,6 +104,16 @@ The application monitors two types of assets:
    - ETFs: xyz:SPY, xyz:QQQ, etc.
    - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
 
+### v2026.04.23
+
+- Search page chart: default time range changed to "1y" (was "All") with 1d interval
+- Search page chart: fixed Hyperliquid funding history returning no data (restored getFundingHistoryAll pagination)
+- Search page chart: fixed Lighter funding history showing only 30 days (restored getFundingHistoryAll with 500+ days available)
+- Search page chart: fixed Gate.io funding history showing only 30 days (added from+to dual-parameter pagination for 1000+ days)
+- Search page chart: fixed Gate.io API proxy now correctly forwards `from` and `to` parameters
+- Search page chart: documented OKX funding history limitation (~90-100 days due to API retention policy)
+- Search page chart: documented Hyperliquid API hard limit (500 records/request, ~20-166 days depending on interval)
+
 ### v2026.04.22
 
 - Search page chart: added third subplot showing historical average settlement funding rate (annualized) aligned to candle intervals for all 5 exchanges

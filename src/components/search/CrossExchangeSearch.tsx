@@ -178,7 +178,7 @@ export default function CrossExchangeSearch() {
   const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
   const [chartCandles, setChartCandles] = useState<SearchCandlePoint[]>([]);
   const [chartFundingRates, setChartFundingRates] = useState<FundingRatePoint[]>([]);
-  const [chartRange, setChartRange] = useState<ChartRange>("all");
+  const [chartRange, setChartRange] = useState<ChartRange>("1y");
   const [chartLoading, setChartLoading] = useState(false);
   const chartAbortRef = useRef<AbortController | null>(null);
 

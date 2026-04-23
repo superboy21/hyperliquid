@@ -11,6 +11,8 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const contract = searchParams.get("contract");
   const limit = searchParams.get("limit") || "100";
+  const from = searchParams.get("from");
+  const to = searchParams.get("to");
 
   if (!contract) {
     return NextResponse.json(
@@ -22,7 +24,9 @@ export async function GET(request: NextRequest) {
   try {
     const data = await Promise.any(
       GATE_API_URLS.map(async (baseUrl) => {
-        const url = `${baseUrl}/futures/usdt/funding_rate?contract=${contract}&limit=${limit}`;
+        let url = `${baseUrl}/futures/usdt/funding_rate?contract=${contract}&limit=${limit}`;
+        if (from) url += `&from=${from}`;
+        if (to) url += `&to=${to}`;
         const response = await fetch(url, {
           method: "GET",
           headers: {

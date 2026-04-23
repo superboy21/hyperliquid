@@ -399,6 +399,67 @@ export async function getFundingHistoryForDays(
 }
 
 /**
+ * 获取指定市场的全部历史资金费率（自动分页直到获取完所有可用数据）
+ * Lighter API 每次最多返回 500 条，通过减小 end_timestamp 来分页
+ */
+export async function getFundingHistoryAll(
+  marketId: number,
+  signal?: AbortSignal,
+): Promise<FundingHistoryItem[]> {
+  const allHistory: FundingHistoryItem[] = [];
+  const seen = new Set<number>();
+  let currentEndTime = Math.floor(Date.now() / 1000);
+  const batchSize = 500;
+  const maxLoops = 20;
+  const lighterLaunchSec = Math.floor(new Date("2024-01-01T00:00:00Z").getTime() / 1000);
+
+  for (let i = 0; i < maxLoops; i++) {
+    throwIfAborted(signal);
+
+    const startTime = Math.max(lighterLaunchSec, currentEndTime - batchSize * LIGHTER_FUNDING_INTERVAL_SECONDS);
+
+    const response = await fetch(
+      `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${currentEndTime}&count_back=${batchSize}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        signal,
+      },
+    );
+
+    if (!response.ok) break;
+
+    const data = await response.json();
+    const fundingArray = data?.fundings ?? data;
+    if (!Array.isArray(fundingArray) || fundingArray.length === 0) break;
+
+    let newCount = 0;
+    for (const item of fundingArray as LighterFundingItem[]) {
+      const time = item.timestamp * 1000;
+      if (!seen.has(time)) {
+        seen.add(time);
+        const rate = parseFloat(item.rate || item.value || "0");
+        const direction = item.direction || "long";
+        const signedRate = direction === "short" ? -rate : rate;
+        allHistory.push({ time, fundingRate: signedRate.toString() });
+        newCount++;
+      }
+    }
+
+    if (newCount === 0) break;
+
+    // 用最早的时间戳继续往前获取
+    const earliestTime = Math.min(...allHistory.map((h) => h.time));
+    currentEndTime = Math.floor(earliestTime / 1000) - 1;
+
+    if (currentEndTime <= lighterLaunchSec) break;
+  }
+
+  return allHistory.sort((a, b) => a.time - b.time);
+}
+
+/**
  * 获取 K 线数据
  */
 export async function getCandleSnapshot(

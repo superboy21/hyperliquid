@@ -3,10 +3,10 @@
 // Used by the search page chart component.
 
 import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as hlGetFundingHistoryForDays } from "./hyperliquid";
-import { getFundingHistoryForDays as gateGetFundingHistoryForDays } from "./gateio";
-import { getFundingHistoryForDays as lighterGetFundingHistoryForDays } from "./lighter";
+import { getFundingHistoryAll as gateGetFundingHistoryAll } from "./gateio";
+import { getFundingHistoryAll as lighterGetFundingHistoryAll } from "./lighter";
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical } from "./adapters/okx";
-import { isAbortLikeError } from "./utils/abort";
+import { isAbortLikeError, throwIfAborted } from "./utils/abort";
 import type { SearchExchangeRate } from "./search";
 
 // ==================== Types ====================
@@ -204,11 +204,6 @@ function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCand
 function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): number {
   const settlementsPerDay = (24 * 3600) / fundingIntervalSeconds;
   return rate * settlementsPerDay * 365;
-}
-
-function calculateFundingHistoryDays(interval: SearchChartInterval, maxCandles: number): number {
-  const intervalMs = SEARCH_INTERVAL_MS[interval];
-  return Math.min(Math.ceil((maxCandles * intervalMs) / (24 * 60 * 60 * 1000)), 365);
 }
 
 function aggregateFundingRatesToCandles(
@@ -497,12 +492,10 @@ async function fetchLighterCandles(
 
 async function fetchHyperliquidFundingHistory(
   symbol: string,
-  interval: SearchChartInterval,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const days = calculateFundingHistoryDays(interval, MAX_CANDLES.hyperliquid);
-    const history = await hlGetFundingHistoryForDays(symbol, days, signal);
+    const history = await hlGetFundingHistoryForDays(symbol, 365, signal);
     return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -516,12 +509,43 @@ async function fetchBinanceFundingHistory(
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const url = `/api/binance?endpoint=fundingRate&symbol=${encodeURIComponent(symbol)}&limit=1000`;
-    const response = await fetch(url, { signal });
-    if (!response.ok) return [];
-    const data = await response.json();
-    if (!Array.isArray(data)) return [];
-    return data.map((item: any) => ({ time: Number(item.fundingTime), rate: Number(item.fundingRate) }));
+    const allData: { time: number; rate: number }[] = [];
+    const seen = new Set<number>();
+    let currentEndTime = Date.now();
+    const maxLoops = 20;
+    const batchMs = 90 * 24 * 60 * 60 * 1000; // 每次请求最多 90 天的数据，避免超过 1000 条限制
+
+    for (let i = 0; i < maxLoops; i++) {
+      throwIfAborted(signal);
+
+      const startTime = Math.max(0, currentEndTime - batchMs);
+      const url = `/api/binance?endpoint=fundingRate&symbol=${encodeURIComponent(symbol)}&limit=1000&startTime=${startTime}&endTime=${currentEndTime}`;
+      const response = await fetch(url, { signal });
+      if (!response.ok) break;
+
+      const data = await response.json();
+      if (!Array.isArray(data) || data.length === 0) break;
+
+      let newCount = 0;
+      for (const item of data) {
+        const time = Number(item.fundingTime);
+        if (!seen.has(time)) {
+          seen.add(time);
+          allData.push({ time, rate: Number(item.fundingRate) });
+          newCount++;
+        }
+      }
+
+      if (newCount === 0) break;
+
+      // 继续获取更早的数据
+      const earliestTime = Math.min(...data.map((d: any) => Number(d.fundingTime)));
+      currentEndTime = earliestTime - 1;
+
+      if (currentEndTime <= 0) break;
+    }
+
+    return allData.sort((a, b) => a.time - b.time);
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] Binance funding history failed:", error);
@@ -531,13 +555,10 @@ async function fetchBinanceFundingHistory(
 
 async function fetchGateFundingHistory(
   symbol: string,
-  interval: SearchChartInterval,
-  fundingIntervalSeconds: number,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const days = calculateFundingHistoryDays(interval, MAX_CANDLES.gateio);
-    const history = await gateGetFundingHistoryForDays(symbol, days, fundingIntervalSeconds, signal);
+    const history = await gateGetFundingHistoryAll(symbol, signal);
     return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -552,7 +573,7 @@ async function fetchOkxFundingHistory(
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const history = await fetchOkxFundingHistoryCanonical(rawSymbol, fundingIntervalSeconds, signal);
+    const history = await fetchOkxFundingHistoryCanonical(rawSymbol, fundingIntervalSeconds, signal, 365);
     return history.map((h) => ({ time: h.timestamp, rate: h.fundingRate }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -564,7 +585,6 @@ async function fetchOkxFundingHistory(
 async function fetchLighterFundingHistory(
   marketId: number | undefined,
   symbol: string,
-  interval: SearchChartInterval,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
@@ -583,8 +603,7 @@ async function fetchLighterFundingHistory(
     }
     if (resolvedMarketId === null) return [];
 
-    const days = calculateFundingHistoryDays(interval, MAX_CANDLES.lighter);
-    const history = await lighterGetFundingHistoryForDays(resolvedMarketId, days, signal);
+    const history = await lighterGetFundingHistoryAll(resolvedMarketId, signal);
     // Lighter fundingRate is in percentage points (e.g., 0.01 = 0.01%).
     // Divide by 100 to convert to decimal for consistent annualization.
     return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) / 100 }));
@@ -614,7 +633,7 @@ export async function fetchSearchCandles(
     case "Hyperliquid": {
       const [candles, fundingHistory] = await Promise.all([
         fetchHyperliquidCandles(rate.symbol, interval, signal),
-        fetchHyperliquidFundingHistory(rate.symbol, interval, signal),
+        fetchHyperliquidFundingHistory(rate.symbol, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
@@ -622,7 +641,7 @@ export async function fetchSearchCandles(
     case "Gate.io": {
       const [candles, fundingHistory] = await Promise.all([
         fetchGateCandles(rate.symbol, interval, signal),
-        fetchGateFundingHistory(rate.symbol, interval, rate.fundingInterval, signal),
+        fetchGateFundingHistory(rate.symbol, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
@@ -648,7 +667,7 @@ export async function fetchSearchCandles(
     case "Lighter": {
       const [candles, fundingHistory] = await Promise.all([
         fetchLighterCandles(rate.marketId, rate.symbol, interval, signal),
-        fetchLighterFundingHistory(rate.marketId, rate.symbol, interval, signal),
+        fetchLighterFundingHistory(rate.marketId, rate.symbol, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };

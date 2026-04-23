@@ -471,6 +471,53 @@ export async function getFundingHistoryForDays(
   return uniqueHistory.filter((item) => item.time >= startTimeMs);
 }
 
+/**
+ * 获取指定币种的全部历史资金费率（自动分页直到获取完所有可用数据）
+ * Hyperliquid API 每次最多返回 500 条，通过循环使用最后一条时间戳作为 startTime 来分页
+ */
+export async function getFundingHistoryAll(
+  coin: string,
+  signal?: AbortSignal,
+): Promise<FundingHistoryItem[]> {
+  const allHistory: FundingHistoryItem[] = [];
+  const seen = new Set<number>();
+  let currentStartTime: number | undefined = undefined;
+  const maxLoops = 20; // 安全限制，防止无限循环
+  // Hyperliquid 上线时间约为 2023-06-01
+  const hyperliquidGenesisSec = Math.floor(new Date("2023-06-01T00:00:00Z").getTime() / 1000);
+
+  for (let i = 0; i < maxLoops; i++) {
+    throwIfAborted(signal);
+
+    const history = await getFundingHistory(coin, currentStartTime, signal);
+    if (history.length === 0) break;
+
+    // 去重并添加新数据
+    let newCount = 0;
+    for (const item of history) {
+      if (!seen.has(item.time)) {
+        seen.add(item.time);
+        allHistory.push(item);
+        newCount++;
+      }
+    }
+
+    if (newCount === 0) break; // 没有新数据，结束分页
+
+    // 用最早的时间戳（秒）继续往前获取
+    const earliestTime = Math.min(...history.map((h) => h.time));
+    const earliestSec = Math.floor(earliestTime / 1000);
+
+    // 如果已经到达 genesis 时间附近，停止
+    if (earliestSec <= hyperliquidGenesisSec + 1) break;
+
+    // 下一次请求用比最早时间早 1 秒作为 startTime
+    currentStartTime = earliestSec - 1;
+  }
+
+  return allHistory.sort((a, b) => a.time - b.time);
+}
+
 export async function getCandleSnapshot(
   coin: string,
   interval: ChartInterval = "1d",

@@ -182,18 +182,20 @@ function toOkxBar(interval: OkxChartInterval): string {
   return "1Dutc";
 }
 
-function getRequiredOkxFundingHistoryRows(fundingIntervalSeconds?: number): number {
+function getRequiredOkxFundingHistoryRows(fundingIntervalSeconds?: number, days?: number): number {
   const interval = fundingIntervalSeconds && fundingIntervalSeconds > 0 ? fundingIntervalSeconds : 8 * 60 * 60;
-  return Math.ceil((30 * 24 * 60 * 60) / interval) + 1;
+  const targetDays = days && days > 0 ? days : 30;
+  return Math.ceil((targetDays * 24 * 60 * 60) / interval) + 1;
 }
 
 export async function fetchOkxFundingHistory(
   rawSymbol: string,
   fundingIntervalSeconds?: number,
   signal?: AbortSignal,
+  days?: number,
 ): Promise<CanonicalFundingHistoryPoint[]> {
   const pageSize = 100;
-  const requiredRows = getRequiredOkxFundingHistoryRows(fundingIntervalSeconds);
+  const requiredRows = getRequiredOkxFundingHistoryRows(fundingIntervalSeconds, days);
   const pagesNeeded = Math.max(1, Math.ceil(requiredRows / pageSize));
   const collected = new Map<number, number>();
   let cursor: string | null = null;
