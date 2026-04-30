@@ -470,9 +470,19 @@ export default function SearchCandlesChart({
     };
   }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, showVolume]);
 
+  const is1m = interval === "1m";
+
   return (
     <div className="relative">
       <div ref={chartRef} className="h-[520px] w-full" />
+      {/* 图表说明注释 */}
+      <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
+        <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>
+        <p>• 主图：K线图，显示开盘/收盘/最高/最低价格</p>
+        <p>• 副图1：{showVolume ? "成交量" : "成交额"}（可切换）</p>
+        {!is1m && <p>• 副图2：年化资金费率（%），0轴为参考线</p>}
+        <p>• 1m间隔隐藏资金费率副图（资金费率按小时结算）</p>
+      </div>
     </div>
   );
 }

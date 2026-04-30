@@ -468,10 +468,19 @@ export default function ComboSearchCandlesChart({
   }, [data, interval, showVolume]);
 
   const hasFunding = data.fundingRates.length > 0 && interval !== "1m";
+  const { mode } = data;
 
   return (
     <div className="relative">
       <div ref={chartRef} className="h-[520px] w-full" />
+      {/* 图表说明注释 */}
+      <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
+        <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>
+        <p>• 主图：{mode === "spread" ? "价差 (first - second)" : "价比 (first / second)"}，仅显示开盘/收盘</p>
+        <p>• 副图1：{showVolume ? "较小成交量" : "较小成交额"} = min(第一交易对, 第二交易对)</p>
+        {hasFunding && <p>• 副图2：资金费率差 = 第一交易对年化费率 - 第二交易对年化费率</p>}
+        <p>• 数据对齐：仅保留两个交易对共同存在的时间戳（交集）</p>
+      </div>
     </div>
   );
 }

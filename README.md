@@ -130,6 +130,7 @@ The application monitors two types of assets:
 - State management: auto-clears all selections when search term changes
 - 1m interval combo mode explicitly blocked (clears selections)
 - Unit tests: 8 test cases for `alignComboData` function (spread, ratio, intersection, edge cases)
+- Chart annotations: added explanatory notes below all charts (combo and regular) showing calculation logic
 - Code quality: all changes pass TypeScript type check and build successfully
 
 ### v2026.04.23
