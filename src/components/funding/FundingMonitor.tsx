@@ -31,11 +31,29 @@ import {
 
 const isXyzHip3Coin = (coin: string) => coin.startsWith("xyz:");
 const isVntlHip3Coin = (coin: string) => coin.startsWith("vntl:");
-const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isVntlHip3Coin(coin);
+const isParaHip3Coin = (coin: string) => coin.startsWith("para:");
+const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isVntlHip3Coin(coin) || isParaHip3Coin(coin);
+
+// Hyperliquid API 内部名称与显示名称映射（para:BTCD -> para:BTC.D）
+const PARA_API_TO_DISPLAY: Record<string, string> = {
+  "para:BTCD": "para:BTC.D",
+};
+
+function toDisplaySymbol(apiSymbol: string): string {
+  return PARA_API_TO_DISPLAY[apiSymbol] ?? apiSymbol;
+}
+
+function toApiSymbol(displaySymbol: string): string {
+  for (const [api, display] of Object.entries(PARA_API_TO_DISPLAY)) {
+    if (display === displaySymbol) return api;
+  }
+  return displaySymbol;
+}
 
 function getAssetCategory(coin: string): string {
   if (isXyzHip3Coin(coin)) return "xyzHip3";
   if (isVntlHip3Coin(coin)) return "vntlHip3";
+  if (isParaHip3Coin(coin)) return "paraHip3";
   return "standard";
 }
 
@@ -45,12 +63,13 @@ function mapToExchangeFundingRate(rate: FundingRate): ExchangeFundingRate {
   const change24h = prevDayPx > 0 ? ((markPrice - prevDayPx) / prevDayPx) * 100 : 0;
   const openInterest = parseFloat(rate.openInterest);
   const notionalValue = openInterest * markPrice;
+  const displaySymbol = toDisplaySymbol(rate.coin);
 
   return {
-    symbol: rate.coin,
+    symbol: displaySymbol,
     fundingRate: parseFloat(rate.fundingRate),
     lastSettlementRate: Number.NaN,
-    settlementHydrationKey: `hyperliquid:${rate.coin}`,
+    settlementHydrationKey: `hyperliquid:${displaySymbol}`,
     markPrice,
     lastPrice: markPrice,
     change24h,
@@ -71,6 +90,7 @@ const categoryConfig: Record<string, CategoryConfig> = {
   standard: { label: "标准资产", borderColor: "border-cyan-600", bgColor: "bg-cyan-600", dotColor: "bg-cyan-400" },
   xyzHip3: { label: "Xyz-Hip3", borderColor: "border-purple-600", bgColor: "bg-purple-600", dotColor: "bg-purple-400" },
   vntlHip3: { label: "Vntl-Hip3", borderColor: "border-amber-600", bgColor: "bg-amber-600", dotColor: "bg-amber-400" },
+  paraHip3: { label: "Para-Hip3", borderColor: "border-pink-600", bgColor: "bg-pink-600", dotColor: "bg-pink-400" },
 };
 
 // ==================== Chart Wrapper ====================
@@ -121,7 +141,8 @@ export default function FundingMonitor() {
       const batch = targetRates.slice(i, Math.min(i + batchSize, targetRates.length));
       const updates = await Promise.all(
         batch.map(async (rate) => {
-          const lastSettlementRate = await getLatestSettledFundingRate(rate.symbol);
+          const apiSymbol = toApiSymbol(rate.symbol);
+          const lastSettlementRate = await getLatestSettledFundingRate(apiSymbol);
           if (!Number.isFinite(lastSettlementRate)) {
             return null;
           }
@@ -161,7 +182,7 @@ export default function FundingMonitor() {
       formatPrice: (price: number) => formatPrice(price),
       formatVolume: (volume: number) => formatVolume(volume),
       ChartComponent: HyperliquidChartWrapper,
-      searchPlaceholder: "搜索交易对，例如 BTC、ETH、xyz:GOLD、vntl:OPENAI",
+      searchPlaceholder: "搜索交易对，例如 BTC、ETH、xyz:GOLD、vntl:OPENAI、para:BTC.D",
       fetchRates,
       hydrateRates,
       hydrationPolicy: {
@@ -175,13 +196,15 @@ export default function FundingMonitor() {
       filterFn: (rate: ExchangeFundingRate, filterType: string) => {
         if (filterType === "xyzHip3") return rate.assetCategory === "xyzHip3";
         if (filterType === "vntlHip3") return rate.assetCategory === "vntlHip3";
+        if (filterType === "paraHip3") return rate.assetCategory === "paraHip3";
         if (filterType === "standard") return rate.assetCategory === "standard";
         return true;
       },
       fetchDetailData: async (symbol: string, interval: ChartInterval): Promise<DetailData> => {
+        const apiSymbol = toApiSymbol(symbol);
         const [candleData, fundingHistory] = await Promise.all([
-          getCandleSnapshot(symbol, interval, 30),
-          getFundingHistoryForDays(symbol, 30),
+          getCandleSnapshot(apiSymbol, interval, 30),
+          getFundingHistoryForDays(apiSymbol, 30),
         ]);
 
         // Map Hyperliquid candles to shared type
@@ -222,6 +245,9 @@ export default function FundingMonitor() {
           )}
           {isVntlHip3Coin(symbol) && (
             <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-400">Vntl-Hip3</span>
+          )}
+          {isParaHip3Coin(symbol) && (
+            <span className="rounded bg-pink-500/20 px-2 py-0.5 text-xs text-pink-400">Para-Hip3</span>
           )}
         </>
       ),

@@ -103,6 +103,16 @@ The application monitors two types of assets:
    - Stocks: xyz:AAPL, xyz:TSLA, xyz:NVDA, etc.
    - ETFs: xyz:SPY, xyz:QQQ, etc.
    - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
+   - Market dominance indexes: para:BTC.D, para:TOTAL2, para:OTHERS
+
+### v2026.05.04
+
+- Funding page: added Para-HIP3 asset category with independent filter tab
+- New Para-HIP3 assets: para:BTC.D, para:TOTAL2, para:OTHERS
+- Fixed API name mapping: Hyperliquid internal name `para:BTCD` mapped to display name `para:BTC.D`
+- All Para-HIP3 assets support full funding rate history, candle charts, and settlement rate hydration
+- Asset type filter tabs expanded: All / Standard / Xyz-Hip3 / Vntl-Hip3 / Para-Hip3 (pink theme)
+- Search placeholder updated to include `para:BTC.D` example
 
 ### v2026.04.24
 

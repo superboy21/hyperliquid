@@ -182,6 +182,12 @@ const KNOWN_VNTL_HIP3_ASSETS = [
   "vntl:BIOTECH",
 ];
 
+const KNOWN_PARA_HIP3_ASSETS = [
+  "para:BTCD",
+  "para:TOTAL2",
+  "para:OTHERS",
+];
+
 const INTERVAL_MS: Record<ChartInterval, number> = {
   "1d": 24 * 60 * 60 * 1000,
   "4h": 4 * 60 * 60 * 1000,
@@ -230,7 +236,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-async function getHip3MarketData(dex: "xyz" | "vntl"): Promise<Map<string, Partial<FundingRate>>> {
+async function getHip3MarketData(dex: "xyz" | "vntl" | "para"): Promise<Map<string, Partial<FundingRate>>> {
   try {
     const data = await fetchHyperliquidInfo<any[]>(
       { type: "metaAndAssetCtxs", dex },
@@ -275,7 +281,7 @@ async function getHip3MarketData(dex: "xyz" | "vntl"): Promise<Map<string, Parti
   }
 }
 
-async function getDexFundingRates(dex: "xyz" | "vntl", knownAssets: string[]): Promise<FundingRate[]> {
+async function getDexFundingRates(dex: "xyz" | "vntl" | "para", knownAssets: string[]): Promise<FundingRate[]> {
   const marketData = await getHip3MarketData(dex);
   const rates: FundingRate[] = [];
 
@@ -308,8 +314,10 @@ export async function getHip3FundingRates(): Promise<FundingRate[]> {
   const xyzRates = await getDexFundingRates("xyz", KNOWN_XYZ_HIP3_ASSETS);
   await sleep(150);
   const vntlRates = await getDexFundingRates("vntl", KNOWN_VNTL_HIP3_ASSETS);
+  await sleep(150);
+  const paraRates = await getDexFundingRates("para", KNOWN_PARA_HIP3_ASSETS);
 
-  return [...xyzRates, ...vntlRates];
+  return [...xyzRates, ...vntlRates, ...paraRates];
 }
 
 export async function getSpotFundingRates(): Promise<FundingRate[]> {
