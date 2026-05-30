@@ -204,6 +204,16 @@ bun start
 
 ## 更新日志
 
+### v2026.05.31
+- 新增 KM Hip3 资产（Kinetiq Markets）：24 个资产，包括股票（AAPL、TSLA、TENCENT）、商品（GOLD、SILVER、USOIL）、指数（US500、USTECH、SMALL2000）、债券（USBOND）、FX（EUR）
+- 新增 Km-Hip3 筛选标签页（emerald 主题色）
+- 新增 `src/lib/symbol-mapping.ts` 共享 API 名称映射模块
+- XYZ Hip3 资产从 45 个扩展至 82 个（与 API 完全同步）
+- 资产分类新增 ETF、FX、债券类别
+- 修复 Km-Hip3 标签页显示全部资产的 bug
+- 修复搜索页面历史资金费率对重命名资产无法显示的问题
+- README 更新为中文版
+
 ### v2026.05.04
 - 新增 Para-Hip3 资产类别（独立筛选标签页）
 - 新增 Para-Hip3 资产：para:BTC.D、para:TOTAL2、para:OTHERS
