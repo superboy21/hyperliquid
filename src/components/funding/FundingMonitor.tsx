@@ -32,28 +32,16 @@ import {
 const isXyzHip3Coin = (coin: string) => coin.startsWith("xyz:");
 const isVntlHip3Coin = (coin: string) => coin.startsWith("vntl:");
 const isParaHip3Coin = (coin: string) => coin.startsWith("para:");
-const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isVntlHip3Coin(coin) || isParaHip3Coin(coin);
+const isKmHip3Coin = (coin: string) => coin.startsWith("km:");
+const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isVntlHip3Coin(coin) || isParaHip3Coin(coin) || isKmHip3Coin(coin);
 
-// Hyperliquid API 内部名称与显示名称映射（para:BTCD -> para:BTC.D）
-const PARA_API_TO_DISPLAY: Record<string, string> = {
-  "para:BTCD": "para:BTC.D",
-};
-
-function toDisplaySymbol(apiSymbol: string): string {
-  return PARA_API_TO_DISPLAY[apiSymbol] ?? apiSymbol;
-}
-
-function toApiSymbol(displaySymbol: string): string {
-  for (const [api, display] of Object.entries(PARA_API_TO_DISPLAY)) {
-    if (display === displaySymbol) return api;
-  }
-  return displaySymbol;
-}
+import { toDisplaySymbol, toApiSymbol } from "@/lib/symbol-mapping";
 
 function getAssetCategory(coin: string): string {
   if (isXyzHip3Coin(coin)) return "xyzHip3";
   if (isVntlHip3Coin(coin)) return "vntlHip3";
   if (isParaHip3Coin(coin)) return "paraHip3";
+  if (isKmHip3Coin(coin)) return "kmHip3";
   return "standard";
 }
 
@@ -91,6 +79,7 @@ const categoryConfig: Record<string, CategoryConfig> = {
   xyzHip3: { label: "Xyz-Hip3", borderColor: "border-purple-600", bgColor: "bg-purple-600", dotColor: "bg-purple-400" },
   vntlHip3: { label: "Vntl-Hip3", borderColor: "border-amber-600", bgColor: "bg-amber-600", dotColor: "bg-amber-400" },
   paraHip3: { label: "Para-Hip3", borderColor: "border-pink-600", bgColor: "bg-pink-600", dotColor: "bg-pink-400" },
+  kmHip3: { label: "Km-Hip3", borderColor: "border-emerald-600", bgColor: "bg-emerald-600", dotColor: "bg-emerald-400" },
 };
 
 // ==================== Chart Wrapper ====================
@@ -197,6 +186,7 @@ export default function FundingMonitor() {
         if (filterType === "xyzHip3") return rate.assetCategory === "xyzHip3";
         if (filterType === "vntlHip3") return rate.assetCategory === "vntlHip3";
         if (filterType === "paraHip3") return rate.assetCategory === "paraHip3";
+        if (filterType === "kmHip3") return rate.assetCategory === "kmHip3";
         if (filterType === "standard") return rate.assetCategory === "standard";
         return true;
       },
@@ -248,6 +238,9 @@ export default function FundingMonitor() {
           )}
           {isParaHip3Coin(symbol) && (
             <span className="rounded bg-pink-500/20 px-2 py-0.5 text-xs text-pink-400">Para-Hip3</span>
+          )}
+          {isKmHip3Coin(symbol) && (
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400">Km-Hip3</span>
           )}
         </>
       ),

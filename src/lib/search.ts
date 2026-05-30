@@ -26,6 +26,7 @@ import {
   getCandleSnapshot as lighterGetCandleSnapshot,
 } from "./lighter";
 import { isAbortLikeError } from "./utils/abort";
+import { toDisplaySymbol } from "./symbol-mapping";
 import {
   fetchBinanceCanonicalDetail,
   fetchBinanceSearchRates,
@@ -308,7 +309,7 @@ async function fetchHyperliquidRates(): Promise<SearchExchangeRate[]> {
   return rates.map((r) => ({
     exchange: "Hyperliquid" as const,
     exchangeColor: "blue",
-    symbol: r.coin,
+    symbol: toDisplaySymbol(r.coin),
     rawSymbol: r.coin,
     fundingRate: parseFloat(r.fundingRate),
     markPrice: parseFloat(r.markPrice),
@@ -463,7 +464,7 @@ export async function fetchDetailForSymbol(
 ): Promise<DetailResult> {
   switch (rate.exchange) {
     case "Hyperliquid":
-      return fetchHyperliquidDetail(rate.symbol, rate.bestBid, rate.bestAsk, signal);
+      return fetchHyperliquidDetail(rate.rawSymbol ?? rate.symbol, rate.bestBid, rate.bestAsk, signal);
     case "Gate.io":
       return fetchGateioDetail(rate.symbol, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Binance":

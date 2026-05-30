@@ -688,9 +688,10 @@ export async function fetchSearchCandles(
 
   switch (rate.exchange) {
     case "Hyperliquid": {
+      const hlSymbol = rate.rawSymbol ?? rate.symbol;
       const [candles, fundingHistory] = await Promise.all([
-        fetchHyperliquidCandles(rate.symbol, interval, signal),
-        fetchHyperliquidFundingHistory(rate.symbol, signal),
+        fetchHyperliquidCandles(hlSymbol, interval, signal),
+        fetchHyperliquidFundingHistory(hlSymbol, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };

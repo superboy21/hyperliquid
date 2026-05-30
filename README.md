@@ -1,233 +1,224 @@
-# HyperTools - Hyperliquid Trading Toolkit
+# HyperTools - Hyperliquid 交易工具包
 
-A professional trading toolkit for Hyperliquid traders, providing real-time funding rate monitoring, position analysis, and arbitrage opportunities.
+一个面向 Hyperliquid 交易者的专业工具包，提供实时资金费率监控、持仓分析和套利机会发现。
 
-## Features
+## 功能特性
 
-- **Real-time Funding Rate Monitoring**: Track funding rates for all Hyperliquid perpetual contracts and HIP-3 assets
-- **Historical Data Analysis**: View 30-day funding rate history with statistical metrics
-- **Smart Sorting & Filtering**: Sort by rate, price, volume, open interest, and 24h change
-- **Asset Type Filtering**: View standard assets, XYZ-HIP3 assets, or VNTL-HIP3 assets separately
-- **Weighted Average Calculations**: Open interest weighted average funding rates
-- **Responsive Design**: Works on desktop and mobile devices
+- **实时资金费率监控**：追踪 Hyperliquid 所有永续合约及 HIP-3 资产的资金费率
+- **历史数据分析**：查看 30 天资金费率历史及统计指标
+- **智能排序与筛选**：按费率、价格、成交量、持仓量、24h 涨跌幅排序
+- **资产类型筛选**：按标准资产、XYZ-Hip3、Vntl-Hip3、Para-Hip3、Km-Hip3 分类查看
+- **加权平均计算**：持仓量加权平均资金费率
+- **响应式设计**：适配桌面端和移动端
 
-## Technology Stack
+## 技术栈
 
-- **Framework**: Next.js 16 (React 19)
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS 4
-- **State Management**: React Hooks (useState, useEffect)
-- **Data Fetching**: Native Fetch API with Hyperliquid SDK
-- **Package Manager**: Bun
+- **框架**：Next.js 16 (React 19)
+- **语言**：TypeScript
+- **样式**：Tailwind CSS 4
+- **状态管理**：React Hooks (useState, useEffect)
+- **数据获取**：原生 Fetch API + Hyperliquid SDK
+- **包管理器**：Bun
 
-## Project Structure
+## 项目结构
 
 ```
 src/
-├── app/                    # Next.js app router
-│   ├── funding/            # Funding rate monitor page
-│   ├── layout.tsx          # Root layout
-│   └── page.tsx            # Homepage
-├── components/             # React components
-│   └── funding/            # Funding monitor components
-│       └── FundingMonitor.tsx
-├── lib/                    # Utility functions and services
-│   └── hyperliquid.ts      # Hyperliquid API integration
+├── app/                    # Next.js App Router
+│   ├── funding/            # 资金费率监控页面
+│   ├── search/             # 跨交易所搜索页面
+│   ├── layout.tsx          # 根布局
+│   └── page.tsx            # 首页
+├── components/             # React 组件
+│   ├── funding/            # 资金费率监控组件
+│   │   ├── FundingMonitor.tsx          # Hyperliquid 资金费率监控
+│   │   ├── ExchangeFundingMonitor.tsx  # 通用交易所监控组件
+│   │   └── ...
+│   └── search/             # 搜索页面组件
+│       └── CrossExchangeSearch.tsx
+├── lib/                    # 工具函数与服务
+│   ├── hyperliquid.ts      # Hyperliquid API 封装
+│   ├── gateio.ts           # Gate.io API 封装
+│   ├── lighter.ts          # Lighter API 封装
+│   ├── search.ts           # 跨交易所搜索逻辑
+│   ├── search-candles.ts   # 搜索图表数据获取
+│   ├── symbol-mapping.ts   # API 名称与显示名称映射
+│   ├── adapters/           # 交易所适配器
+│   │   ├── binance.ts
+│   │   ├── gate.ts
+│   │   └── okx.ts
+│   └── utils/              # 通用工具函数
 └── ...
 ```
 
-## Key Components
+## 核心组件
 
 ### FundingMonitor.tsx
-The main component that displays:
-- Summary statistics (total pairs, HIP-3 assets, positive/negative rates)
-- Filter controls (asset type, search, sorting)
-- Data table with real-time funding rates
-- Historical chart for selected asset
-- Educational section explaining funding rates
+Hyperliquid 资金费率监控主组件，包含：
+- 汇总统计（总交易对数、HIP-3 资产数、正/负费率数量）
+- 筛选控件（资产类型、搜索、排序）
+- 实时资金费率数据表格
+- 选中资产的历史图表
+- 资金费率说明区域
 
-### hyperliquid.ts
-Service layer for interacting with Hyperliquid APIs:
-- `getAllFundingRatesWithHistory()` - Gets funding rates for all assets
-- `getFundingHistory()` - Retrieves historical funding rate data
-- `getMeta()` - Gets market information
-- Utility functions for formatting rates, prices, volumes, etc.
+### ExchangeFundingMonitor.tsx
+通用交易所资金费率监控组件，支持 Gate.io、Binance、OKX、Lighter 四个交易所。
 
-## Getting Started
+### CrossExchangeSearch.tsx
+跨交易所搜索与对比工具，支持：
+- 多交易所价格/费率对比
+- 组合图表（Spread/Ratio 模式）
+- 历史资金费率与成交额子图
 
-### Prerequisites
+## 快速开始
 
-- [Bun](https://bun.sh/) (package manager)
-- Node.js 18+ (for development)
+### 环境要求
 
-### Installation
+- [Bun](https://bun.sh/)（包管理器）
+- Node.js 18+
+
+### 安装
 
 ```bash
 bun install
 ```
 
-### Development
+### 开发
 
 ```bash
 bun dev
 ```
 
-### Building for Production
+### 构建生产版本
 
 ```bash
 bun build
 ```
 
-### Starting Production Server
+### 启动生产服务器
 
 ```bash
 bun start
 ```
 
-## Available Scripts
+## 可用命令
 
-- `bun dev` - Start development server
-- `bun build` - Build for production
-- `bun start` - Start production server
-- `bun lint` - Run ESLint
-- `bun typecheck` - Run TypeScript type checking
+| 命令 | 说明 |
+|------|------|
+| `bun dev` | 启动开发服务器 |
+| `bun build` | 构建生产版本 |
+| `bun start` | 启动生产服务器 |
+| `bun lint` | 运行 ESLint |
+| `bun typecheck` | 运行 TypeScript 类型检查 |
 
-## Features in Detail
+## 功能详解
 
-### Funding Rate Monitoring
+### 资金费率监控
 
-The application monitors two types of assets:
-1. **Standard Perpetual Contracts**: Traditional crypto perpetuals like BTC, ETH, SOL
-2. **HIP-3 Assets**: Hyperliquid Improvement Proposal 3 assets including:
-   - Commodities: xyz:GOLD, xyz:SILVER, xyz:PLATINUM, etc.
-   - Stocks: xyz:AAPL, xyz:TSLA, xyz:NVDA, etc.
-   - ETFs: xyz:SPY, xyz:QQQ, etc.
-   - Crypto indexes: vntl:SEMIS, vntl:ROBOT, etc.
-   - Market dominance indexes: para:BTC.D, para:TOTAL2, para:OTHERS
+应用监控两类资产：
+1. **标准永续合约**：BTC、ETH、SOL 等传统加密货币永续合约
+2. **HIP-3 资产**：Hyperliquid Improvement Proposal 3 支持的扩展资产，包括：
+   - **XYZ-Hip3**：商品（GOLD、SILVER）、股票（AAPL、TSLA、NVDA）、ETF（DRAM、XLE）、指数（SP500、JP225）、FX（JPY、EUR）等 82 个资产
+   - **Vntl-Hip3**：加密主题指数（SPACEX、OPENAI、ANTHROPIC、MAG7、SEMIS 等）
+   - **Para-Hip3**：市场主导指数（BTC.D、TOTAL2、OTHERS）
+   - **Km-Hip3**（Kinetiq Markets）：股票（AAPL、TSLA、TENCENT）、商品（GOLD、SILVER）、指数（US500、USTECH）、债券（USBOND）等 24 个资产
+
+### API 名称映射
+
+部分资产的 API 内部名称与 Spec 显示名称不同，已自动映射：
+- `xyz:CL` → `xyz:WTIOIL`
+- `xyz:SKHX` → `xyz:SKHYNIX`
+- `xyz:SMSN` → `xyz:SAMSUNG`
+- `para:BTCD` → `para:BTC.D`
+
+### 跨交易所搜索
+
+支持以下交易所的实时数据对比：
+- Hyperliquid
+- Gate.io
+- Binance
+- OKX
+- Lighter
+
+支持组合图表语法：
+- `ETH-BTC`：价差图（Spread）
+- `ETH/BTC`：比率图（Ratio）
+
+### 数据更新频率
+
+- 资金费率每 30 秒自动刷新
+- 历史数据在选中资产时按需加载
+- 所有数据均来自各交易所公开 API，无需认证
+
+### 排序选项
+
+| 排序字段 | 说明 |
+|----------|------|
+| 费率 | 当前年化资金费率 |
+| 价格 | 当前标记价格 |
+| 涨跌 | 24h 价格变化百分比 |
+| 成交量 | 24h 交易量 |
+| 持仓量 | 未平仓合约价值 |
+| 名称 | 按名称字母排序 |
+
+## API 集成
+
+项目使用以下公开 API 端点：
+- Hyperliquid：`POST /info`（`metaAndAssetCtxs`、`fundingHistory`、`l2Book`）
+- Gate.io：`GET /api/v4/spot/funding_rate`、`GET /api/v4/futures/usdt/funding_rate`
+- Binance：`GET /fapi/v1/fundingRate`
+- OKX：`GET /api/v5/public/funding-rate-history`
+- Lighter：`GET /v1/lighter/funding-rate-history`
+
+所有 API 调用均直接发往各交易所端点，无需认证。
+
+## 部署
+
+本 Next.js 应用可部署至：
+- Vercel（推荐）
+- Netlify
+- Docker 容器
+- 任何 Node.js 托管平台
+
+## 参与贡献
+
+1. Fork 本仓库
+2. 创建功能分支（`git checkout -b feature/amazing-feature`）
+3. 提交更改（`git commit -m 'Add some amazing feature'`）
+4. 推送至分支（`git push origin feature/amazing-feature`）
+5. 发起 Pull Request
+
+## 许可证
+
+本项目基于 MIT 许可证开源，详见 LICENSE 文件。
+
+## 免责声明
+
+本工具仅供参考，不构成投资建议。加密货币交易存在重大风险，可能不适合所有投资者。过往表现不代表未来收益。请在做出任何交易决策前，自行评估财务状况并进行充分研究。
+
+## 致谢
+
+- Hyperliquid 提供公开 API
+- 开源的 Next.js 和 Tailwind CSS 社区
+- 所有贡献者
+
+## 更新日志
 
 ### v2026.05.04
-
-- Funding page: added Para-HIP3 asset category with independent filter tab
-- New Para-HIP3 assets: para:BTC.D, para:TOTAL2, para:OTHERS
-- Fixed API name mapping: Hyperliquid internal name `para:BTCD` mapped to display name `para:BTC.D`
-- All Para-HIP3 assets support full funding rate history, candle charts, and settlement rate hydration
-- Asset type filter tabs expanded: All / Standard / Xyz-Hip3 / Vntl-Hip3 / Para-Hip3 (pink theme)
-- Search placeholder updated to include `para:BTC.D` example
+- 新增 Para-Hip3 资产类别（独立筛选标签页）
+- 新增 Para-Hip3 资产：para:BTC.D、para:TOTAL2、para:OTHERS
+- 修复 API 名称映射：内部名称 `para:BTCD` 映射为显示名称 `para:BTC.D`
 
 ### v2026.04.24
-
-- Search page chart: added 1m (1-minute) interval support for all 5 exchanges
-- Search page chart: 1m interval uses pagination for OKX (3,000+ candles with `after` parameter) to ensure sufficient data depth
-- Search page chart: funding rate subplot is hidden when 1m interval is selected (funding rates only settle hourly/8-hourly, meaningless at 1m granularity)
-- Search page chart: when switching to 1m, time range auto-adjusts to 1d (or 4h) for optimal data density
-- Search page chart: 1m interval only shows time range options of "1d" and "4h" (daily/weekly ranges excluded)
-- Search page chart: interval button labels unified to use interval codes (1w, 1d, 4h, 1h, 5m, 1m) instead of Chinese text
-- Search page chart: ECharts axis label formatting now supports 1m interval with proper date/time display
-
-### v2026.04.24 (Combo Chart Update)
-
-- Search page: added combo chart support with spread and ratio modes
-- Search syntax: type "ETH-BTC" to create spread chart (price difference), type "ETH/BTC" to create ratio chart (price ratio)
-- Multi-select UX: first click highlights in blue, second click highlights in purple and renders combo chart
-- Combo chart calculation: spread uses `open=first.second`, ratio uses `open=first/second` (both aligned by timestamp intersection)
-- Turnover sub-chart: displays `min(first.quoteVolume, second.quoteVolume)` per timestamp
-- Funding rate sub-chart: displays `first.annualizedRate - second.annualizedRate` difference
-- Grid layout adjusted: funding rate sub-chart enlarged to ~28% (was 12-16%), turnover sub-chart at ~14-18%
-- Volume/turnover toggle buttons moved to top-left (above charts),成交额→"较小成交额",成交量→"较小成交量" in tooltip
-- DataZoom slider position adjusted to `bottom: 28` to avoid overlapping x-axis labels
-- X-axis label margin increased to 22px for better readability
-- Search filtering: combo syntax triggers OR-filter on both keywords (e.g., "ETH-BTC" shows both ETH and BTC results)
-- State management: auto-clears all selections when search term changes
-- 1m interval combo mode explicitly blocked (clears selections)
-- Unit tests: 8 test cases for `alignComboData` function (spread, ratio, intersection, edge cases)
-- Chart annotations: added explanatory notes below all charts (combo and regular) showing calculation logic
-- Code quality: all changes pass TypeScript type check and build successfully
+- 搜索图表新增 1 分钟（1m）周期支持
+- 新增组合图表功能（Spread/Ratio 模式）
+- 支持多交易所对比（Hyperliquid、Gate.io、Binance、OKX、Lighter）
 
 ### v2026.04.23
-
-- Search page chart: default time range changed to "1y" (was "All") with 1d interval
-- Search page chart: fixed Hyperliquid funding history returning no data (restored getFundingHistoryAll pagination)
-- Search page chart: fixed Lighter funding history showing only 30 days (restored getFundingHistoryAll with 500+ days available)
-- Search page chart: fixed Gate.io funding history showing only 30 days (added from+to dual-parameter pagination for 1000+ days)
-- Search page chart: fixed Gate.io API proxy now correctly forwards `from` and `to` parameters
-- Search page chart: documented OKX funding history limitation (~90-100 days due to API retention policy)
-- Search page chart: documented Hyperliquid API hard limit (500 records/request, ~20-166 days depending on interval)
+- 默认时间范围调整为 "1年"
+- 修复 Hyperliquid/Gate.io/Lighter 历史资金费率分页问题
 
 ### v2026.04.22
-
-- Search page chart: added third subplot showing historical average settlement funding rate (annualized) aligned to candle intervals for all 5 exchanges
-- Search page chart: tooltip now shows both annualized funding rate (primary, e.g., "+36.50%") and raw hourly rate (secondary, e.g., "0.0042%")
-- Search page chart: annualized rate displayed as line chart with exchange-themed color area fill and 0-axis reference line
-- Search page chart: time range filter buttons added (All, 3y, 1y, 6m, 1m, 1d) to filter visible chart data client-side without re-fetching
-- Search page chart: fixed OKX closeTime being set equal to openTime (causing all OKX funding rates to show as 0)
-- Search page chart: fixed OKX realizedRate parsing (now uses realizedRate first, falls back to fundingRate for backward compatibility)
-- Search page chart: Lighter funding rate now correctly divided by 100 to convert percentage points to decimal for consistent annualization across all exchanges
-- Search page chart: Lighter getFundingHistory now returns raw percentage values (not normalized) matching the funding page
-
-### v2026.04.20
-
-- Search page chart: sub-chart now defaults to turnover (成交额) instead of volume (成交量)
-- Added toggle button in sub-chart top-right corner to switch between volume and turnover
-- Search page chart: 1w/1d x-axis now shows year prefix on every label for continuous year visibility (e.g., "26/04-20")
-- 4h chart: year shown only at year boundaries to keep labels concise
-
-### v2026.04.19
-
-- Fixed Lighter weekly (1w) candles - now aggregates from daily candles due to backend placeholder data after 09/14
-- Restriced faded/gray notional value display to Binance only on funding pages
-- Rewrote Binance OI hydration to use `openInterest × markPrice` formula with 50-symbol batch parallel requests
-- Fixed Cloudflare Workers deployment - moved undici to devDependencies, made proxy.ts edge-runtime safe
-
-### Data Update Frequency
-
-- Funding rates are fetched every 30 seconds via automatic refresh
-- Historical data is calculated on-demand when selecting an asset
-- All data is sourced directly from Hyperliquid's public API
-
-### Sorting Options
-
-- **Rate**: Current annualized funding rate (highest/lowest first)
-- **Price**: Current mark price
-- **Change**: 24h price change percentage
-- **Volume**: 24h trading volume
-- **OI**: Open interest value (position size × price)
-- **Name**: Alphabetical order
-
-## API Integration
-
-The project uses Hyperliquid's public API endpoints:
-- `metaAndAssetCtxs` - For getting market data and funding rates
-- `fundingHistory` - For historical funding rate data
-- `meta` - For general market information
-
-All API calls are made directly to `https://api.hyperliquid.xyz/info` without requiring authentication.
-
-## Deployment
-
-This Next.js application can be deployed to:
-- Vercel (recommended for Next.js apps)
-- Netlify
-- Docker containers
-- Any Node.js hosting platform
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Disclaimer
-
-This tool is for informational purposes only. Trading cryptocurrencies involves significant risk and may not be suitable for all investors. Past performance is not indicative of future results. Always do your own research and consider your financial situation before making any trading decisions.
-
-## Acknowledgments
-
-- Hyperliquid for providing the public API
-- The open-source Next.js and Tailwind CSS communities
-- All contributors to this project
+- 搜索图表新增第三个子图：历史平均结算资金费率
+- 新增时间范围筛选按钮
+- 修复 OKX 数据问题
