@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import LighterFundingCandlesChart from "@/components/funding/LighterFundingCandlesChart";
 import ExchangeFundingMonitor, {
   type CategoryConfig,
@@ -13,6 +13,16 @@ import ExchangeFundingMonitor, {
   type IntervalFundingRateItem,
 } from "@/components/funding/ExchangeFundingMonitor";
 import { lighterFetch, getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
+
+// ==================== Order Book Cache ====================
+
+interface OrderBookCacheEntry {
+  bidAskSpread: number | null;
+  timestamp: number;
+}
+
+const ORDERBOOK_CACHE_TTL = 30000; // 30 seconds
+const orderBookCache = new Map<number, OrderBookCacheEntry>();
 
 // ==================== Lighter-specific Types ====================
 
@@ -426,21 +436,27 @@ export default function LighterFundingMonitor() {
       const hourlyFundingRates7d = hourlyFundingRates.filter((item) => item.bucketStartTime >= sevenDaysAgoMs);
       const hourlyFundingRates30d = hourlyFundingRates.filter((item) => item.bucketStartTime >= thirtyDaysAgoMsForStats);
 
-      // Fetch order book for bid-ask spread
+      // Fetch order book for bid-ask spread (with cache)
       let bidAskSpread: number | null = null;
-      try {
-        const orderBookRes = await lighterFetch("orderBookOrders", `market_id=${marketId}&limit=1`);
-        if (orderBookRes.ok) {
-          const orderBookData = await orderBookRes.json();
-          const bestAsk = orderBookData.asks?.[0]?.price ? parseFloat(orderBookData.asks[0].price) : null;
-          const bestBid = orderBookData.bids?.[0]?.price ? parseFloat(orderBookData.bids[0].price) : null;
-          if (bestAsk && bestBid && bestAsk > 0 && bestBid > 0) {
-            const mid = (bestAsk + bestBid) / 2;
-            bidAskSpread = ((bestAsk - bestBid) / mid) * 100;
+      const cached = orderBookCache.get(marketId);
+      if (cached && Date.now() - cached.timestamp < ORDERBOOK_CACHE_TTL) {
+        bidAskSpread = cached.bidAskSpread;
+      } else {
+        try {
+          const orderBookRes = await lighterFetch("orderBookOrders", `market_id=${marketId}&limit=1`);
+          if (orderBookRes.ok) {
+            const orderBookData = await orderBookRes.json();
+            const bestAsk = orderBookData.asks?.[0]?.price ? parseFloat(orderBookData.asks[0].price) : null;
+            const bestBid = orderBookData.bids?.[0]?.price ? parseFloat(orderBookData.bids[0].price) : null;
+            if (bestAsk && bestBid && bestAsk > 0 && bestBid > 0) {
+              const mid = (bestAsk + bestBid) / 2;
+              bidAskSpread = ((bestAsk - bestBid) / mid) * 100;
+            }
           }
+          orderBookCache.set(marketId, { bidAskSpread, timestamp: Date.now() });
+        } catch (e) {
+          console.error("Error fetching order book:", e);
         }
-      } catch (e) {
-        console.error("Error fetching order book:", e);
       }
 
       return {
