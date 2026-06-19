@@ -3,8 +3,37 @@ import { isAbortLikeError, throwIfAborted } from "./utils/abort";
 // Lighter.xyz API 资金费率监控模块
 // API 文档: https://apidocs.lighter.xyz
 
-// 使用 Next.js API 代理避免 CORS 问题
-const API_PROXY_BASE = "/api/lighter";
+// 直接 API 基础 URL 和代理 URL
+const LIGHTER_DIRECT_BASE = "https://mainnet.zklighter.elliot.ai/api/v1";
+const LIGHTER_PROXY_BASE = "/api/lighter";
+
+/**
+ * Fetch from Lighter API with automatic fallback:
+ * 1. Try direct connection first (faster, no server roundtrip)
+ * 2. If direct fails (network/CORS), fall back to Next.js API proxy
+ */
+async function lighterFetch(endpoint: string, params: string = "", init?: RequestInit): Promise<Response> {
+  const paramPrefix = params ? `?${params}` : "";
+  const directUrl = `${LIGHTER_DIRECT_BASE}/${endpoint}${paramPrefix}`;
+  const proxyUrl = `${LIGHTER_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
+
+  // Try direct first
+  try {
+    const response = await fetch(directUrl, init);
+    if (response.ok) return response;
+    // If rate-limited, wait and retry direct once
+    if (response.status === 429) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const retryResponse = await fetch(directUrl, init);
+      if (retryResponse.ok) return retryResponse;
+    }
+  } catch {
+    // Direct connection failed (CORS/network), fall through to proxy
+  }
+
+  // Fallback to proxy
+  return fetch(proxyUrl, { ...init, cache: "no-store" });
+}
 
 // ==================== 类型定义 ====================
 
@@ -123,14 +152,7 @@ export async function getMarketMap(): Promise<Map<number, LighterOrderBook>> {
   }
 
   try {
-    const response = await fetch(
-      `${API_PROXY_BASE}?endpoint=orderBooks`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-      }
-    );
+    const response = await lighterFetch("orderBooks");
 
     if (!response.ok) {
       throw new Error("Failed to fetch order books");
@@ -190,14 +212,7 @@ export function getAssetCategory(symbol: string): string {
  */
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   try {
-    const response = await fetch(
-      `${API_PROXY_BASE}?endpoint=funding-rates`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-      }
-    );
+    const response = await lighterFetch("funding-rates");
 
     if (!response.ok) {
       throw new Error("Failed to fetch funding rates");
@@ -274,14 +289,10 @@ export async function getFundingHistory(
     const now = Math.floor(Date.now() / 1000);
     const startTime = now - (limit * LIGHTER_FUNDING_INTERVAL_SECONDS);
     
-    const response = await fetch(
-      `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${limit}`,
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          signal,
-        }
+    const response = await lighterFetch(
+      "fundings",
+      `market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${limit}`,
+      { signal }
     );
 
     if (!response.ok) {
@@ -335,14 +346,10 @@ async function fetchLatestSettledFundingRateInWindow(
   const now = Math.floor(Date.now() / 1000);
   const startTime = now - (boundedHours * LIGHTER_FUNDING_INTERVAL_SECONDS);
 
-  const response = await fetch(
-    `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${countBack}`,
-    {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      signal,
-    }
+  const response = await lighterFetch(
+    "fundings",
+    `market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${now}&count_back=${countBack}`,
+    { signal }
   );
 
   if (!response.ok) {
@@ -419,14 +426,10 @@ export async function getFundingHistoryAll(
 
     const startTime = Math.max(lighterLaunchSec, currentEndTime - batchSize * LIGHTER_FUNDING_INTERVAL_SECONDS);
 
-    const response = await fetch(
-      `${API_PROXY_BASE}?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${currentEndTime}&count_back=${batchSize}`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        signal,
-      },
+    const response = await lighterFetch(
+      "fundings",
+      `market_id=${marketId}&resolution=1h&start_timestamp=${startTime}&end_timestamp=${currentEndTime}&count_back=${batchSize}`,
+      { signal }
     );
 
     if (!response.ok) break;
@@ -489,14 +492,10 @@ export async function getCandleSnapshot(
         startTime = now - limit * 24 * 60 * 60 * 1000;
     }
 
-    const response = await fetch(
-      `${API_PROXY_BASE}?endpoint=candles&market_id=${marketId}&resolution=${intervalMap[interval]}&start_timestamp=${Math.floor(startTime)}&end_timestamp=${now}&count_back=${limit}`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        signal,
-      }
+    const response = await lighterFetch(
+      "candles",
+      `market_id=${marketId}&resolution=${intervalMap[interval]}&start_timestamp=${Math.floor(startTime)}&end_timestamp=${now}&count_back=${limit}`,
+      { signal }
     );
 
     if (!response.ok) {

@@ -113,6 +113,8 @@ function sleep(ms: number): Promise<void> {
 
 const BINANCE_DIRECT_BASE = "https://fapi.binance.com/fapi/v1";
 const BINANCE_PROXY_BASE = "/api/binance";
+const BINANCE_KLINES_DIRECT_BASE = "https://fapi.binance.com/fapi/v1/klines";
+const BINANCE_KLINES_PROXY_BASE = "/api/binance/klines";
 
 /**
  * Fetch from Binance with automatic fallback:
@@ -129,6 +131,32 @@ async function binanceFetch(endpoint: string, params: string, init?: RequestInit
     const response = await fetch(directUrl, init);
     if (response.ok) return response;
     // If rate-limited, wait and retry direct once
+    if (response.status === 429) {
+      await sleep(1000);
+      const retryResponse = await fetch(directUrl, init);
+      if (retryResponse.ok) return retryResponse;
+    }
+  } catch {
+    // Direct connection failed (CORS/network), fall through to proxy
+  }
+
+  // Fallback to proxy
+  return fetch(proxyUrl, { ...init, cache: "no-store" });
+}
+
+/**
+ * Fetch Binance klines with automatic fallback:
+ * 1. Try direct connection first
+ * 2. If direct fails, fall back to Next.js API proxy
+ */
+async function binanceKlinesFetch(symbol: string, interval: string, limit: string, init?: RequestInit): Promise<Response> {
+  const directUrl = `${BINANCE_KLINES_DIRECT_BASE}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  const proxyUrl = `${BINANCE_KLINES_PROXY_BASE}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+
+  // Try direct first
+  try {
+    const response = await fetch(directUrl, init);
+    if (response.ok) return response;
     if (response.status === 429) {
       await sleep(1000);
       const retryResponse = await fetch(directUrl, init);
@@ -261,8 +289,8 @@ async function fetchCcxtRates(): Promise<CanonicalFundingRateRow[]> {
 
 async function fetchNativeDetail(symbol: string, interval: BinanceChartInterval, signal?: AbortSignal): Promise<CanonicalFundingDetail> {
   const [candleRes, fundingRes] = await Promise.all([
-    fetch(`/api/binance/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=30`, { cache: "no-store", signal }),
-    fetch(`/api/binance?endpoint=fundingRate&symbol=${encodeURIComponent(symbol)}&limit=1000`, { cache: "no-store", signal }),
+    binanceKlinesFetch(symbol, interval, "30", { signal }),
+    binanceFetch("fundingRate", `symbol=${encodeURIComponent(symbol)}&limit=1000`, { signal }),
   ]);
 
   const candles = candleRes.ok
