@@ -12,7 +12,7 @@ import ExchangeFundingMonitor, {
   type HydrationPolicy,
   type IntervalFundingRateItem,
 } from "@/components/funding/ExchangeFundingMonitor";
-import { getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
+import { lighterFetch, getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
 
 // ==================== Lighter-specific Types ====================
 
@@ -429,7 +429,7 @@ export default function LighterFundingMonitor() {
       // Fetch order book for bid-ask spread
       let bidAskSpread: number | null = null;
       try {
-        const orderBookRes = await fetch(`/api/lighter?endpoint=orderBookOrders&market_id=${marketId}&limit=1`);
+        const orderBookRes = await lighterFetch("orderBookOrders", `market_id=${marketId}&limit=1`);
         if (orderBookRes.ok) {
           const orderBookData = await orderBookRes.json();
           const bestAsk = orderBookData.asks?.[0]?.price ? parseFloat(orderBookData.asks[0].price) : null;

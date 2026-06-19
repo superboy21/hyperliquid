@@ -12,7 +12,7 @@ const LIGHTER_PROXY_BASE = "/api/lighter";
  * 1. Try direct connection first (faster, no server roundtrip)
  * 2. If direct fails (network/CORS), fall back to Next.js API proxy
  */
-async function lighterFetch(endpoint: string, params: string = "", init?: RequestInit): Promise<Response> {
+export async function lighterFetch(endpoint: string, params: string = "", init?: RequestInit): Promise<Response> {
   const paramPrefix = params ? `?${params}` : "";
   const directUrl = `${LIGHTER_DIRECT_BASE}/${endpoint}${paramPrefix}`;
   const proxyUrl = `${LIGHTER_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
