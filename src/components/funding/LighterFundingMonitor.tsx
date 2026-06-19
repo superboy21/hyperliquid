@@ -346,12 +346,8 @@ export default function LighterFundingMonitor() {
       }
 
       const [candlesRes, fundingRes] = await Promise.all([
-        fetch(
-          `/api/lighter?endpoint=candles&market_id=${marketId}&resolution=${interval}&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=${countBack}`,
-        ),
-        fetch(
-          `/api/lighter?endpoint=fundings&market_id=${marketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`,
-        ),
+        lighterFetch("candles", `market_id=${marketId}&resolution=${interval}&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=${countBack}`),
+        lighterFetch("fundings", `market_id=${marketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`),
       ]);
 
       // Process candles

@@ -21,6 +21,7 @@ import {
 } from "./gateio";
 import { calculateHistoricalVolatility } from "./utils/funding";
 import {
+  lighterFetch,
   getLatestSettledFundingRate as lighterGetLatestSettledFundingRate,
   getFundingHistoryForDays as lighterGetFundingHistoryForDays,
   getCandleSnapshot as lighterGetCandleSnapshot,
@@ -646,15 +647,9 @@ async function fetchLighterDetail(
   const thirtyDaysAgoMs = nowMs - 30 * 24 * 60 * 60 * 1000;
 
   const [candlesRes, fundingRes, orderBookRes, latestSettledRate] = await Promise.allSettled([
-    fetch(
-      `/api/lighter?endpoint=candles&market_id=${resolvedMarketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`,
-      { signal },
-    ),
-    fetch(
-      `/api/lighter?endpoint=fundings&market_id=${resolvedMarketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`,
-      { signal },
-    ),
-    fetch(`/api/lighter?endpoint=orderBookOrders&market_id=${resolvedMarketId}&limit=1`, { signal }),
+    lighterFetch("candles", `market_id=${resolvedMarketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`, { signal }),
+    lighterFetch("fundings", `market_id=${resolvedMarketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`, { signal }),
+    lighterFetch("orderBookOrders", `market_id=${resolvedMarketId}&limit=1`, { signal }),
     lighterGetLatestSettledFundingRate(resolvedMarketId, 6, signal),
   ]);
 
