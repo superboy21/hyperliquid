@@ -203,9 +203,9 @@ export default function LighterFundingMonitor() {
   // Fetch rates with Lighter-specific logic
   const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
     const [fundingRes, statsRes, orderBookRes] = await Promise.all([
-      fetch("/api/lighter?endpoint=funding-rates"),
-      fetch("/api/lighter?endpoint=exchangeStats"),
-      fetch("/api/lighter?endpoint=orderBookDetails&filter=perp"),
+      lighterFetch("funding-rates"),
+      lighterFetch("exchangeStats"),
+      lighterFetch("orderBookDetails", "filter=perp"),
     ]);
 
     if (!fundingRes.ok || !statsRes.ok) throw new Error("Failed to fetch data");
