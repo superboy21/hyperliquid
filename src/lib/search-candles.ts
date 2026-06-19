@@ -6,6 +6,7 @@ import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as h
 import { getFundingHistoryAll as gateGetFundingHistoryAll } from "./gateio";
 import { getFundingHistoryAll as lighterGetFundingHistoryAll } from "./lighter";
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical } from "./adapters/okx";
+import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
 import type { SearchExchangeRate } from "./search";
 
@@ -275,9 +276,7 @@ async function fetchBinanceCandles(
   try {
     const binanceInterval = toBinanceInterval(interval);
     const limit = MAX_CANDLES.binance;
-    // Use Next.js API proxy to avoid CORS
-    const url = `/api/binance/klines?symbol=${encodeURIComponent(symbol)}&interval=${binanceInterval}&limit=${limit}`;
-    const response = await fetch(url, { signal });
+    const response = await binanceKlinesFetch(symbol, binanceInterval, String(limit), { signal });
 
     if (!response.ok) return [];
 
@@ -576,8 +575,7 @@ async function fetchBinanceFundingHistory(
       throwIfAborted(signal);
 
       const startTime = Math.max(0, currentEndTime - batchMs);
-      const url = `/api/binance?endpoint=fundingRate&symbol=${encodeURIComponent(symbol)}&limit=1000&startTime=${startTime}&endTime=${currentEndTime}`;
-      const response = await fetch(url, { signal });
+      const response = await binanceFetch("fundingRate", `symbol=${encodeURIComponent(symbol)}&limit=1000&startTime=${startTime}&endTime=${currentEndTime}`, { signal });
       if (!response.ok) break;
 
       const data = await response.json();

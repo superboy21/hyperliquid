@@ -121,7 +121,7 @@ const BINANCE_KLINES_PROXY_BASE = "/api/binance/klines";
  * 1. Try direct connection first (faster, no server roundtrip)
  * 2. If direct fails (network/CORS), fall back to Next.js API proxy
  */
-async function binanceFetch(endpoint: string, params: string, init?: RequestInit): Promise<Response> {
+export async function binanceFetch(endpoint: string, params: string, init?: RequestInit): Promise<Response> {
   const paramPrefix = params ? `?${params}` : "";
   const directUrl = `${BINANCE_DIRECT_BASE}/${endpoint}${paramPrefix}`;
   const proxyUrl = `${BINANCE_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
@@ -149,7 +149,7 @@ async function binanceFetch(endpoint: string, params: string, init?: RequestInit
  * 1. Try direct connection first
  * 2. If direct fails, fall back to Next.js API proxy
  */
-async function binanceKlinesFetch(symbol: string, interval: string, limit: string, init?: RequestInit): Promise<Response> {
+export async function binanceKlinesFetch(symbol: string, interval: string, limit: string, init?: RequestInit): Promise<Response> {
   const directUrl = `${BINANCE_KLINES_DIRECT_BASE}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const proxyUrl = `${BINANCE_KLINES_PROXY_BASE}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
 
