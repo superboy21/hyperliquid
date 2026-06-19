@@ -23,15 +23,18 @@ export async function lighterFetch(endpoint: string, params: string = "", init?:
     if (response.ok) return response;
     // If rate-limited, wait and retry direct once
     if (response.status === 429) {
+      console.warn(`[lighterFetch] Direct 429 for ${endpoint}, retrying in 1s...`);
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const retryResponse = await fetch(directUrl, init);
       if (retryResponse.ok) return retryResponse;
+      console.warn(`[lighterFetch] Direct retry also failed (${retryResponse.status}), falling back to proxy`);
     }
-  } catch {
-    // Direct connection failed (CORS/network), fall through to proxy
+  } catch (e) {
+    console.warn(`[lighterFetch] Direct fetch error for ${endpoint}:`, e);
   }
 
   // Fallback to proxy
+  console.warn(`[lighterFetch] Using proxy for ${endpoint}`);
   return fetch(proxyUrl, { ...init, cache: "no-store" });
 }
 
