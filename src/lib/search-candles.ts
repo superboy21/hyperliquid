@@ -610,10 +610,11 @@ async function fetchBinanceFundingHistory(
 
 async function fetchGateFundingHistory(
   symbol: string,
+  fundingIntervalSeconds: number,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const history = await gateGetFundingHistoryAll(symbol, signal);
+    const history = await gateGetFundingHistoryAll(symbol, fundingIntervalSeconds, signal);
     return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -697,7 +698,7 @@ export async function fetchSearchCandles(
     case "Gate.io": {
       const [candles, fundingHistory] = await Promise.all([
         fetchGateCandles(rate.symbol, interval, signal),
-        fetchGateFundingHistory(rate.symbol, signal),
+        fetchGateFundingHistory(rate.symbol, rate.fundingInterval, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };

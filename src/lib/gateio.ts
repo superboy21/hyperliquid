@@ -287,6 +287,7 @@ export async function getFundingHistoryForDays(
  */
 export async function getFundingHistoryAll(
   coin: string,
+  fundingIntervalSeconds: number = 28800,
   signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
   const contract = toContractName(coin);
@@ -294,14 +295,14 @@ export async function getFundingHistoryAll(
   const seen = new Set<number>();
   let currentTo = Math.floor(Date.now() / 1000);
   const pageSize = 1000;
-  const maxLoops = 20;
+  const maxLoops = 30;
 
   for (let i = 0; i < maxLoops; i++) {
     throwIfAborted(signal);
 
-    // 每次请求一个固定时间窗口的数据，确保能往前翻页
-    // 用 from/to 双参数定义时间窗口
-    const windowSeconds = pageSize * 8 * 3600; // 假设 8h interval，1000 条约 333 天
+    // Gate API 对 from/to 范围有限制，单次最多约 90 天
+    // 通过多次分页向前翻，每次 90 天窗口
+    const windowSeconds = 90 * 24 * 3600; // 90 天
     const currentFrom = Math.max(0, currentTo - windowSeconds);
 
     const url = `${API_PROXY_BASE}/futures/${SETTLE}/funding_rate?contract=${encodeURIComponent(contract)}&limit=${pageSize}&from=${currentFrom}&to=${currentTo}`;
