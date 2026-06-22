@@ -67,7 +67,7 @@ export interface SearchExchangeRate {
   bestAsk?: number;
   // Detail fields (loaded progressively)
   lastSettlementRate?: number | null;
-  avgFundingRate1d?: number | null;
+  avgFundingRate2d?: number | null;
   historicalVolatility?: number | null;
   bidAskSpread?: number | null;
   avgFundingRate7d?: number | null;
@@ -78,7 +78,7 @@ export interface SearchExchangeRate {
 
 interface DetailResult {
   lastSettlementRate: number | null;
-  avgFundingRate1d: number | null;
+  avgFundingRate2d: number | null;
   historicalVolatility: number | null;
   bidAskSpread: number | null;
   avgFundingRate7d: number | null;
@@ -240,9 +240,9 @@ function computeAvgFundingRates(
   return { avg7d, avg30d };
 }
 
-// ==================== Avg 1D Funding Rate Calculation ====================
+// ==================== Avg 2D Funding Rate Calculation ====================
 
-function computeAvgFundingRate1d(
+function computeAvgFundingRate2d(
   fundingHistory: { time: number; fundingRate: string }[],
 ): number | null {
   if (fundingHistory.length === 0) return null;
@@ -250,11 +250,11 @@ function computeAvgFundingRate1d(
   // Get daily bucket averages
   const dailyRates = getAverageFundingRatesByInterval(fundingHistory, "1d");
 
-  // Return the last 1d bucket average (matching chart tooltip semantics)
+  // Return the average of the last 2 daily buckets
   if (dailyRates.length === 0) return null;
 
-  const lastDailyBucket = dailyRates[dailyRates.length - 1];
-  return lastDailyBucket.averageFundingRate;
+  const lastTwoBuckets = dailyRates.slice(-2);
+  return lastTwoBuckets.reduce((sum, item) => sum + item.averageFundingRate, 0) / lastTwoBuckets.length;
 }
 
 // ==================== Fetch All Rates ====================
@@ -491,19 +491,19 @@ async function fetchHyperliquidDetail(
   ]);
 
   if (signal?.aborted) {
-    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
+    return { lastSettlementRate: null, avgFundingRate2d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
   }
 
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
-  const avg1d = computeAvgFundingRate1d(fundingHistory);
+  const avg2d = computeAvgFundingRate2d(fundingHistory);
   const latestSettledRate = fundingHistory.length > 0
     ? Number.parseFloat(fundingHistory[fundingHistory.length - 1]?.fundingRate ?? "")
     : Number.NaN;
 
   return {
     lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
-    avgFundingRate1d: avg1d,
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -528,11 +528,11 @@ async function fetchGateioDetail(
   }));
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
-  const avg1d = computeAvgFundingRate1d(fundingHistory);
+  const avg2d = computeAvgFundingRate2d(fundingHistory);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
-    avgFundingRate1d: avg1d,
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: detail.bidAskSpread ?? computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -558,11 +558,11 @@ async function fetchBinanceDetail(
   const fundingHistory30d = fundingHistory.filter((item) => item.time >= thirtyDaysAgo);
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory30d);
-  const avg1d = computeAvgFundingRate1d(fundingHistory30d);
+  const avg2d = computeAvgFundingRate2d(fundingHistory30d);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
-    avgFundingRate1d: avg1d,
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -590,13 +590,18 @@ async function fetchOkxDetail(
     }));
   const candles = detail.candles.map((item) => ({ close: item.close }));
   const historicalVolatility = computeHistoricalVolatility(candles);
-  const avg1dBuckets = computeOkxAverageFundingRatesByInterval(detail.fundingHistory, "1d");
-  const avg1d = avg1dBuckets.length > 0 ? avg1dBuckets[avg1dBuckets.length - 1]?.averageFundingRate ?? null : null;
+  const avg2dBuckets = computeOkxAverageFundingRatesByInterval(detail.fundingHistory, "1d");
+  const avg2d =
+    avg2dBuckets.length > 0
+      ? avg2dBuckets
+          .slice(-2)
+          .reduce((sum, item) => sum + item.averageFundingRate, 0) / Math.min(avg2dBuckets.length, 2)
+      : null;
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
-    avgFundingRate1d: avg1d,
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
@@ -635,7 +640,7 @@ async function fetchLighterDetail(
   if (resolvedMarketId === null) {
     return {
       lastSettlementRate: null,
-      avgFundingRate1d: null,
+      avgFundingRate2d: null,
       historicalVolatility: null,
       bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
       avgFundingRate7d: null,
@@ -654,7 +659,7 @@ async function fetchLighterDetail(
   ]);
 
   if (signal?.aborted) {
-    return { lastSettlementRate: null, avgFundingRate1d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
+    return { lastSettlementRate: null, avgFundingRate2d: null, historicalVolatility: null, bidAskSpread: null, avgFundingRate7d: null, avgFundingRate30d: null };
   }
 
   // Parse candles
@@ -704,7 +709,7 @@ async function fetchLighterDetail(
 
   const historicalVolatility = computeHistoricalVolatility(candles);
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
-  const avg1d = computeAvgFundingRate1d(fundingHistory);
+  const avg2d = computeAvgFundingRate2d(fundingHistory);
 
   // Extract latest settled rate from Promise.allSettled result
   let lastSettlementRateValue: number | null = null;
@@ -714,7 +719,7 @@ async function fetchLighterDetail(
 
   return {
     lastSettlementRate: lastSettlementRateValue,
-    avgFundingRate1d: avg1d,
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread,
     avgFundingRate7d: avg7d,
@@ -738,7 +743,7 @@ export async function batchFetchDetails(
       // Mark as loading
       onUpdate(rate, {
         lastSettlementRate: null,
-        avgFundingRate1d: null,
+        avgFundingRate2d: null,
         historicalVolatility: null,
         bidAskSpread: null,
         avgFundingRate7d: null,
@@ -759,7 +764,7 @@ export async function batchFetchDetails(
       if (!signal?.aborted) {
         onUpdate(rate, {
           lastSettlementRate: null,
-          avgFundingRate1d: null,
+          avgFundingRate2d: null,
           historicalVolatility: null,
           bidAskSpread: null,
           avgFundingRate7d: null,

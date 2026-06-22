@@ -50,7 +50,7 @@ type SortField =
   | "volatility"
   | "spread"
   | "latestSettlement"
-  | "avg1d"
+  | "avg2d"
   | "avg7d"
   | "avg30d";
 
@@ -63,7 +63,7 @@ interface DetailCache {
   historicalVolatility: number | null;
   bidAskSpread: number | null;
   latestSettlementRate: number | null;
-  avgFundingRate1d: number | null;
+  avgFundingRate2d: number | null;
   avgFundingRate7d: number | null;
   avgFundingRate30d: number | null;
 }
@@ -153,8 +153,8 @@ function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field
       return rate.detail?.bidAskSpread ?? -1;
     case "latestSettlement":
       return rate.detail?.latestSettlementRate ?? -999;
-    case "avg1d":
-      return rate.detail?.avgFundingRate1d ?? -999;
+    case "avg2d":
+      return rate.detail?.avgFundingRate2d ?? -999;
     case "avg7d":
       return rate.detail?.avgFundingRate7d ?? -999;
     case "avg30d":
@@ -325,7 +325,7 @@ export default function CrossExchangeSearch() {
               historicalVolatility: detail.historicalVolatility,
               bidAskSpread: detail.bidAskSpread,
               latestSettlementRate: detail.lastSettlementRate,
-              avgFundingRate1d: detail.avgFundingRate1d,
+              avgFundingRate2d: detail.avgFundingRate2d,
               avgFundingRate7d: detail.avgFundingRate7d,
               avgFundingRate30d: detail.avgFundingRate30d,
             });
@@ -831,11 +831,11 @@ export default function CrossExchangeSearch() {
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
-                onClick={() => handleSort("avg1d")}
+                onClick={() => handleSort("avg2d")}
               >
                 <span className="flex items-center justify-end whitespace-nowrap">
-                  平均费率（1天）
-                  <SortIcon field="avg1d" />
+                  平均费率（2天）
+                  <SortIcon field="avg2d" />
                 </span>
               </th>
               <th
@@ -992,17 +992,17 @@ export default function CrossExchangeSearch() {
                   <td className="px-2 py-2 text-right xl:px-2.5">
                     {isLoading ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                      ) : detail?.avgFundingRate1d != null ? (
+                      ) : detail?.avgFundingRate2d != null ? (
                       <span
                         className={`whitespace-nowrap font-mono text-xs ${
-                          detail.avgFundingRate1d > 0
+                          detail.avgFundingRate2d > 0
                             ? "text-green-400"
-                            : detail.avgFundingRate1d < 0
+                            : detail.avgFundingRate2d < 0
                               ? "text-red-400"
                               : "text-gray-400"
                         }`}
                       >
-                        {formatSearchAverageAnnualizedRate(detail.avgFundingRate1d, rate.fundingInterval, rate.exchange)}
+                        {formatSearchAverageAnnualizedRate(detail.avgFundingRate2d, rate.fundingInterval, rate.exchange)}
                       </span>
                     ) : (
                       <span className="text-xs text-gray-600">--</span>
