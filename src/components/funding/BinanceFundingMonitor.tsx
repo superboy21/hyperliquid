@@ -194,7 +194,7 @@ export default function BinanceFundingMonitor() {
         <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
           <h3 className="mb-2 text-sm font-medium text-gray-300">Binance 资金费率说明</h3>
           <ul className="list-inside list-disc space-y-1 text-sm text-gray-400">
-            <li>Binance 永续合约采用 USDT 结算机制。</li>
+            <li>Binance 永续合约采用 USDT / USDC / USD1 结算机制。</li>
             <li>正资金费率表示多头支付空头，通常代表市场偏多。</li>
             <li>负资金费率表示空头支付多头，通常代表市场偏空。</li>
             <li>主要合约每 8 小时结算一次，部分合约每 4 小时或 1 小时结算。</li>

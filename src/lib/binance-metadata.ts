@@ -26,8 +26,16 @@ const BINANCE_STOCKS = [
   "MSTRX", "COINX", "NVDAX", "AAPLX", "GOOGLX", "ORCLX", "TQQQX", "PLTRX", "METAX", "AMZNX", "HOODX",
 ];
 
+const BINANCE_QUOTE_ASSETS = ["USDT", "USDC", "USD1"];
+
+function getBinanceBaseAsset(symbol: string): string {
+  const upperSymbol = symbol.toUpperCase();
+  const quote = BINANCE_QUOTE_ASSETS.find((q) => upperSymbol.endsWith(q));
+  return quote ? upperSymbol.slice(0, -quote.length) : upperSymbol;
+}
+
 export function getBinanceAssetCategory(symbol: string): string {
-  const base = symbol.replace(/USDT$/i, "").toUpperCase();
+  const base = getBinanceBaseAsset(symbol);
   if (BINANCE_MAJORS.includes(base)) return "Majors";
   if (BINANCE_METALS.includes(base)) return "Metals";
   if (BINANCE_ENERGY.includes(base)) return "Energy";

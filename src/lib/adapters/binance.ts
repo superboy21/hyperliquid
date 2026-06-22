@@ -170,6 +170,14 @@ export async function binanceKlinesFetch(symbol: string, interval: string, limit
   return fetch(proxyUrl, { ...init, cache: "no-store" });
 }
 
+// ==================== Symbol Filtering ====================
+
+const BINANCE_QUOTE_ASSETS = ["USDT", "USDC", "USD1"];
+
+function isSupportedBinanceSymbol(symbol: string): boolean {
+  return BINANCE_QUOTE_ASSETS.some((quote) => symbol.endsWith(quote));
+}
+
 // ==================== Mapping Functions ====================
 
 function mapCanonicalRow(row: CanonicalFundingRateRow): BinanceFundingMonitorRow {
@@ -234,7 +242,7 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
   const bookTickerMap = new Map(bookTickers.map((ticker) => [ticker.symbol, ticker]));
   const candidateSymbols = premiums
     .map((premium) => premium.symbol)
-    .filter((symbol) => symbol.endsWith("USDT") && !BINANCE_DELISTED_SYMBOLS.has(symbol));
+    .filter((symbol) => isSupportedBinanceSymbol(symbol) && !BINANCE_DELISTED_SYMBOLS.has(symbol));
   // Only fetch settlement rates (1 request) — skip OI to avoid 200+ individual requests
   // OI data is derived from quoteVolume as a reasonable approximation
   const latestSettledMap = await fetchNativeLatestSettledRateMap(candidateSymbols);
@@ -242,7 +250,7 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
 
   for (const premium of premiums) {
     const symbol = premium.symbol;
-    if (!symbol.endsWith("USDT") || BINANCE_DELISTED_SYMBOLS.has(symbol)) {
+    if (!isSupportedBinanceSymbol(symbol) || BINANCE_DELISTED_SYMBOLS.has(symbol)) {
       continue;
     }
 

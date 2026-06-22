@@ -15,6 +15,11 @@ export const runtime = "nodejs";
 
 const BINANCE_API_BASE = "https://fapi.binance.com";
 const DEFAULT_FUNDING_INTERVAL_SECONDS = 8 * 60 * 60;
+const BINANCE_QUOTE_ASSETS = ["USDT", "USDC", "USD1"];
+
+function isSupportedBinanceSymbol(symbol: string): boolean {
+  return BINANCE_QUOTE_ASSETS.some((quote) => symbol.endsWith(quote));
+}
 
 type CcxtFundingRate = {
   symbol?: string;
@@ -118,7 +123,7 @@ async function getListRows(): Promise<CanonicalFundingRateRow[]> {
     .filter((entry) => entry.symbol && entry.info?.symbol)
     .filter((entry) => {
       const rawSymbol = entry.info?.symbol ?? "";
-      return rawSymbol.endsWith("USDT") && !BINANCE_DELISTED_SYMBOLS.has(rawSymbol);
+      return isSupportedBinanceSymbol(rawSymbol) && !BINANCE_DELISTED_SYMBOLS.has(rawSymbol);
     });
 
   const unifiedSymbols = fundingEntries.map((entry) => entry.symbol as string);
