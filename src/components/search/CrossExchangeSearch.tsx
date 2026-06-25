@@ -178,7 +178,7 @@ export default function CrossExchangeSearch() {
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 400);
+    const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 1000);
     return () => clearTimeout(timer);
   }, [searchTerm]);
   const [allRates, setAllRates] = useState<SearchExchangeRate[]>([]);
