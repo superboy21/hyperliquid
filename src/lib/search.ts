@@ -55,6 +55,7 @@ export interface SearchExchangeRate {
   marketId?: number;
   fundingRate: number;
   markPrice: number;
+  indexPrice: number | null;
   lastPrice: number;
   change24h: number;
   quoteVolume: number;
@@ -314,6 +315,7 @@ async function fetchHyperliquidRates(): Promise<SearchExchangeRate[]> {
     rawSymbol: r.coin,
     fundingRate: parseFloat(r.fundingRate),
     markPrice: parseFloat(r.markPrice),
+    indexPrice: parseFloat(r.indexPrice || "0") || null,
     lastPrice: parseFloat(r.markPrice),
     change24h: r.prevDayPx && parseFloat(r.prevDayPx) > 0
       ? ((parseFloat(r.markPrice) - parseFloat(r.prevDayPx)) / parseFloat(r.prevDayPx)) * 100
@@ -364,6 +366,7 @@ async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
     markPrice: row.markPrice,
+    indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
     change24h: row.change24h,
     quoteVolume: row.quoteVolume,
@@ -435,6 +438,7 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       marketId: entry.market_id,
       fundingRate: parseFloat(entry.rate || "0"),
       markPrice: lastPrice,
+      indexPrice: null,
       lastPrice,
       change24h: parseFloat(String(stat?.daily_price_change || "0")),
       quoteVolume: parseFloat(String(stat?.daily_quote_token_volume || "0")),

@@ -43,6 +43,7 @@ type SortField =
   | "symbol"
   | "exchange"
   | "price"
+  | "indexPrice"
   | "change24h"
   | "fundingRate"
   | "volume"
@@ -139,6 +140,8 @@ function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field
       return rate.exchange;
     case "price":
       return rate.lastPrice;
+    case "indexPrice":
+      return rate.indexPrice ?? -1;
     case "change24h":
       return rate.change24h;
     case "fundingRate":
@@ -768,6 +771,15 @@ export default function CrossExchangeSearch() {
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
+                onClick={() => handleSort("indexPrice")}
+              >
+                <span className="flex items-center justify-end whitespace-nowrap">
+                  指数价格
+                  <SortIcon field="indexPrice" />
+                </span>
+              </th>
+              <th
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("change24h")}
               >
                 <span className="flex items-center justify-end whitespace-nowrap">
@@ -894,6 +906,14 @@ export default function CrossExchangeSearch() {
                   {/* Price */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
                       <span className="whitespace-nowrap font-mono text-xs text-gray-300">{formatPrice(rate.lastPrice)}</span>
+                  </td>
+                  {/* Index Price */}
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                    {rate.indexPrice != null ? (
+                      <span className="whitespace-nowrap font-mono text-xs text-gray-300">{formatPrice(rate.indexPrice)}</span>
+                    ) : (
+                      <span className="text-xs text-gray-600">--</span>
+                    )}
                   </td>
                   {/* 24h Change */}
                   <td className="px-2 py-2 text-right xl:px-2.5">

@@ -37,6 +37,7 @@ export interface GateSearchRate {
   rawSymbol: string;
   fundingRate: number;
   markPrice: number;
+  indexPrice: number | null;
   lastPrice: number;
   change24h: number;
   quoteVolume: number;
@@ -148,6 +149,7 @@ export async function fetchGateSearchRates(): Promise<GateSearchRate[]> {
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
     markPrice: row.markPrice,
+    indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
     change24h: row.change24h,
     quoteVolume: row.quoteVolume,

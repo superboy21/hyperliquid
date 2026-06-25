@@ -87,6 +87,11 @@ type OkxNativeHistoryEntry = {
 
 type OkxNativeCandleRow = [string, string, string, string, string, string, string?, string?, string?];
 
+type OkxNativeIndexTickerEntry = {
+  instId?: string;
+  idxPx?: string;
+};
+
 function toNumber(value: unknown): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (typeof value === "string") {
@@ -301,12 +306,35 @@ async function fetchNativeOpenInterest(): Promise<Map<string, OkxNativeOpenInter
   return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
 }
 
+async function fetchNativeIndexPrices(signal?: AbortSignal): Promise<Map<string, number>> {
+  const response = await fetch("/api/okx?endpoint=market/index-tickers&quoteCcy=USDT", {
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    return new Map();
+  }
+
+  const payload = (await response.json()) as { data?: OkxNativeIndexTickerEntry[] };
+  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const result = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.instId || !row.idxPx) continue;
+    const price = parseOptionalNumber(row.idxPx);
+    if (price != null && price > 0) {
+      result.set(row.instId, price);
+    }
+  }
+  return result;
+}
+
 async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
-  const [fundingSnapshot, instruments, tickers, openInterest] = await Promise.all([
+  const [fundingSnapshot, instruments, tickers, openInterest, indexPrices] = await Promise.all([
     fetchNativeFundingSnapshot(),
     fetchNativeInstruments(),
     fetchNativeTickers(),
     fetchNativeOpenInterest(),
+    fetchNativeIndexPrices(),
   ]);
 
   return Array.from(fundingSnapshot.entries())
@@ -320,6 +348,8 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
       const lastPrice = parseOptionalNumber(ticker?.last) ?? markPrice;
       const open24h = parseOptionalNumber(ticker?.open24h) ?? 0;
 
+      const indexPrice = indexPrices.get(`${symbol}-USDT`) ?? parseOptionalNumber(funding.indexPx);
+
       return {
         exchange: "okx",
         transportMode: "native",
@@ -331,7 +361,7 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
         predictedFundingRate: parseOptionalNumber(funding.nextFundingRate),
         lastSettlementRate: funding.settState === "settled" ? parseOptionalNumber(funding.settFundingRate) : null,
         markPrice,
-        indexPrice: parseOptionalNumber(funding.indexPx),
+        indexPrice,
         lastPrice,
         change24h: computeChangePercent(lastPrice, open24h),
         quoteVolume: computeOkxQuoteAmount(ticker, instrument, lastPrice),
