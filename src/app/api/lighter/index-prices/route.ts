@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import WebSocket from "ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,23 +15,22 @@ interface LighterMarketStats {
 
 /**
  * Serverless-friendly WebSocket snapshot for Lighter index prices.
- * Opens a short-lived WS connection, subscribes to all market stats,
- * collects pushes for a short window, extracts index prices, then closes.
+ * Uses Node.js native WebSocket (no external ws dependency).
  */
 export async function GET() {
   try {
     const prices = await new Promise<Record<string, number>>((resolve) => {
       let settled = false;
-      const ws = new WebSocket(LIGHTER_WS);
+      const ws = new globalThis.WebSocket(LIGHTER_WS);
       const result: Record<string, number> = {};
-      let collectTimer: NodeJS.Timeout | null = null;
+      let collectTimer: ReturnType<typeof setTimeout> | null = null;
 
       const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;
         if (collectTimer) clearTimeout(collectTimer);
         try {
-          ws.terminate();
+          ws.close();
         } catch {
           // ignore
         }
@@ -52,7 +50,7 @@ export async function GET() {
         resolve(result);
       }
 
-      ws.on("open", () => {
+      ws.addEventListener("open", () => {
         ws.send(
           JSON.stringify({
             type: "subscribe",
@@ -61,9 +59,9 @@ export async function GET() {
         );
       });
 
-      ws.on("message", (data: WebSocket.Data) => {
+      ws.addEventListener("message", (event) => {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(event.data);
           if (msg.type === "update/market_stats" && msg.market_stats) {
             const stats = Array.isArray(msg.market_stats)
               ? msg.market_stats
@@ -87,11 +85,11 @@ export async function GET() {
         }
       });
 
-      ws.on("error", (err) => {
-        console.error("[Lighter Index Prices] WS error:", err.message);
+      ws.addEventListener("error", (err) => {
+        console.error("[Lighter Index Prices] WS error:", err.type);
         finish();
       });
-      ws.on("close", () => finish());
+      ws.addEventListener("close", () => finish());
     });
 
     return NextResponse.json(prices);
