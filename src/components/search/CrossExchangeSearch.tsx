@@ -5,10 +5,10 @@ import {
   fetchAllRates,
   filterByKeyword,
   fetchDetailForSymbol,
-  batchFetchDetails,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
 } from "@/lib/search";
+import { isAbortLikeError } from "@/lib/utils/abort";
 import {
   fetchSearchCandles,
   type SearchChartInterval,
@@ -176,6 +176,11 @@ function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field
 
 export default function CrossExchangeSearch() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
   const [allRates, setAllRates] = useState<SearchExchangeRate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -206,8 +211,10 @@ export default function CrossExchangeSearch() {
     [comboSelection]
   );
 
-  const abortRef = useRef<AbortController | null>(null);
-  const ratesRef = useRef<SearchExchangeRate[]>([]);
+  const detailCacheRef = useRef(detailCache);
+  const detailLoadingRef = useRef(detailLoading);
+  useEffect(() => { detailCacheRef.current = detailCache; }, [detailCache]);
+  useEffect(() => { detailLoadingRef.current = detailLoading; }, [detailLoading]);
 
   // Fetch all rates on mount
   useEffect(() => {
@@ -220,7 +227,6 @@ export default function CrossExchangeSearch() {
         const rates = await fetchAllRates();
         if (!cancelled) {
           setAllRates(rates);
-          ratesRef.current = rates;
         }
       } catch (e) {
         if (!cancelled) {
@@ -239,17 +245,17 @@ export default function CrossExchangeSearch() {
     };
   }, []);
 
-  // Filter by keyword
+  // Filter by keyword (debounced to reduce Lighter 429s)
   const filteredRates = useMemo(() => {
-    const { keyword1, keyword2, mode } = parseComboSearch(searchTerm);
+    const { keyword1, keyword2, mode } = parseComboSearch(debouncedSearchTerm);
     if (mode && keyword1 && keyword2) {
       return allRates.filter(rate =>
         rate.symbol.toLowerCase().includes(keyword1) ||
         rate.symbol.toLowerCase().includes(keyword2)
       );
     }
-    return filterByKeyword(allRates, searchTerm);
-  }, [allRates, searchTerm]);
+    return filterByKeyword(allRates, debouncedSearchTerm);
+  }, [allRates, debouncedSearchTerm]);
 
   // Sort
   const sortedRates = useMemo(() => {
@@ -308,25 +314,26 @@ export default function CrossExchangeSearch() {
     };
   }, [comboChartData, chartRange]);
 
-  // Progressive detail fetching
-  const startDetailFetching = useCallback(
-    (rates: SearchExchangeRate[]) => {
-      // Cancel previous
-      if (abortRef.current) {
-        abortRef.current.abort();
+  // Lazy-load detail for a single row on click. Cache hit short-circuits.
+  const fetchDetailIfNeeded = useCallback(
+    (rate: SearchExchangeRate) => {
+      const key = getDetailKey(rate.exchange, rate.symbol);
+      // Cache hit or already in-flight
+      if (detailCacheRef.current.has(key) || detailLoadingRef.current.has(key)) {
+        return;
       }
-      abortRef.current = new AbortController();
-      const signal = abortRef.current.signal;
 
-      // Clear cache
-      setDetailCache(new Map());
-      setDetailLoading(new Set(rates.map((r) => getDetailKey(r.exchange, r.symbol))));
+      setDetailLoading((prev) => {
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
 
-      batchFetchDetails(
-        rates,
-        (rate, detail) => {
-          if (signal.aborted) return;
-          const key = getDetailKey(rate.exchange, rate.symbol);
+      const controller = new AbortController();
+
+      fetchDetailForSymbol(rate, controller.signal)
+        .then((detail) => {
+          if (controller.signal.aborted) return;
           setDetailCache((prev) => {
             const next = new Map(prev);
             next.set(key, {
@@ -344,37 +351,25 @@ export default function CrossExchangeSearch() {
             next.delete(key);
             return next;
           });
-        },
-        signal,
-        4,
-      );
+        })
+        .catch((error) => {
+          // Always clear loading state, even on abort
+          setDetailLoading((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          if (isAbortLikeError(error) || controller.signal.aborted) return;
+          console.warn(`[Search] Detail fetch failed for ${rate.symbol}:`, error);
+        });
     },
     [],
   );
 
-  // Trigger detail fetching ONLY when user enters a search term
-  useEffect(() => {
-    if (filteredRates.length > 0 && !loading && searchTerm.trim()) {
-      startDetailFetching(filteredRates);
-    } else {
-      // Cancel any in-flight requests when search term is cleared
-      if (abortRef.current) {
-        abortRef.current.abort();
-      }
-      setDetailCache(new Map());
-      setDetailLoading(new Set());
-    }
-    return () => {
-      if (abortRef.current) {
-        abortRef.current.abort();
-      }
-    };
-  }, [filteredRates, loading, searchTerm, startDetailFetching]);
-
   // Hydrate Binance OI for current search results only.
   // Initial notionalValue may use quoteVolume placeholder; replace it with OI * price progressively.
   useEffect(() => {
-    if (!searchTerm.trim() || loading || filteredRates.length === 0) {
+    if (!debouncedSearchTerm.trim() || loading || filteredRates.length === 0) {
       if (oiAbortRef.current) {
         oiAbortRef.current.abort();
       }
@@ -422,7 +417,7 @@ export default function CrossExchangeSearch() {
         oiAbortRef.current.abort();
       }
     };
-  }, [filteredRates, loading, searchTerm]);
+  }, [filteredRates, loading, debouncedSearchTerm]);
 
   // When user searches, default results to sort by notional value descending.
   // When search is cleared, restore the page default sort.
@@ -433,15 +428,6 @@ export default function CrossExchangeSearch() {
       setSortConfig({ field: "fundingRate", descending: true });
     }
   }, [searchTerm]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (abortRef.current) {
-        abortRef.current.abort();
-      }
-    };
-  }, []);
 
   const handleSort = (field: SortField) => {
     setSortConfig((prev) => ({
@@ -481,12 +467,14 @@ export default function CrossExchangeSearch() {
           // Case C: set as first
           const { mode } = parseComboSearch(searchTerm);
           setComboSelection({ first: rate, second: null, mode });
+          void fetchDetailIfNeeded(rate);
           return;
         }
 
         if (!comboSelection.second) {
           // Case D: set as second
           setComboSelection({ ...comboSelection, second: rate });
+          void fetchDetailIfNeeded(rate);
           return;
         }
 
@@ -504,6 +492,8 @@ export default function CrossExchangeSearch() {
       }
 
       setSelectedRate(rate);
+      // A4: lazy-load detail for the newly selected row
+      void fetchDetailIfNeeded(rate);
       setChartCandles([]);
       setChartFundingRates([]);
       setChartLoading(true);
@@ -532,7 +522,7 @@ export default function CrossExchangeSearch() {
           }
         });
     },
-    [selectedRate, chartInterval, searchTerm, comboSelection],
+    [selectedRate, chartInterval, searchTerm, comboSelection, fetchDetailIfNeeded],
   );
 
   const fetchComboCandles = useCallback(async (
@@ -736,7 +726,7 @@ export default function CrossExchangeSearch() {
           {detailLoading.size > 0 && (
             <span className="flex items-center gap-1">
               <span className="h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-              正在加载详情 ({detailLoading.size} 个)...
+              正在加载详情...
             </span>
           )}
         </div>
