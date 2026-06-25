@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 
 const LIGHTER_WS = "wss://mainnet.zklighter.elliot.ai/stream?readonly=true";
 const WS_TIMEOUT_MS = 8_000;
+const WS_COLLECT_MS = 2_500;
 
 interface LighterMarketStats {
   symbol?: string;
@@ -16,28 +17,32 @@ interface LighterMarketStats {
 /**
  * Serverless-friendly WebSocket snapshot for Lighter index prices.
  * Opens a short-lived WS connection, subscribes to all market stats,
- * waits for the first push, extracts index prices, then closes.
+ * collects pushes for a short window, extracts index prices, then closes.
  */
 export async function GET() {
   const prices = await new Promise<Record<string, number>>((resolve) => {
     let settled = false;
     const ws = new WebSocket(LIGHTER_WS);
+    const result: Record<string, number> = {};
+    let collectTimer: NodeJS.Timeout | null = null;
 
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
+      if (collectTimer) clearTimeout(collectTimer);
       try {
         ws.terminate();
       } catch {
         // ignore
       }
-      resolve({});
+      resolve(result);
     }, WS_TIMEOUT_MS);
 
-    function finish(result: Record<string, number>) {
+    function finish() {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (collectTimer) clearTimeout(collectTimer);
       try {
         ws.close();
       } catch {
@@ -62,7 +67,6 @@ export async function GET() {
           const stats = Array.isArray(msg.market_stats)
             ? msg.market_stats
             : Object.values(msg.market_stats);
-          const result: Record<string, number> = {};
           for (const s of stats) {
             const stat = s as LighterMarketStats;
             if (stat.symbol && stat.index_price) {
@@ -72,15 +76,18 @@ export async function GET() {
               }
             }
           }
-          finish(result);
+
+          // Start/reset collection window after first useful message.
+          if (collectTimer) clearTimeout(collectTimer);
+          collectTimer = setTimeout(finish, WS_COLLECT_MS);
         }
       } catch {
         // ignore parse errors, keep waiting
       }
     });
 
-    ws.on("error", () => finish({}));
-    ws.on("close", () => finish({}));
+    ws.on("error", () => finish());
+    ws.on("close", () => finish());
   });
 
   return NextResponse.json(prices);
