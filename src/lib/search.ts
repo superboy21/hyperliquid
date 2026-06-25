@@ -382,11 +382,10 @@ async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
 // ==================== Lighter Rates ====================
 
 async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
-  const [fundingRes, statsRes, orderBookRes, indexPricesRes] = await Promise.allSettled([
+  const [fundingRes, statsRes, orderBookRes] = await Promise.allSettled([
     fetch("/api/lighter?endpoint=funding-rates"),
     fetch("/api/lighter?endpoint=exchangeStats"),
     fetch("/api/lighter?endpoint=orderBookDetails&filter=perp"),
-    fetch("/api/lighter/index-prices"),
   ]);
 
   if (fundingRes.status !== "fulfilled" || !fundingRes.value.ok) {
@@ -424,20 +423,6 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
     }
   }
 
-  const indexPriceMap = new Map<string, number>();
-  if (indexPricesRes.status === "fulfilled" && indexPricesRes.value.ok) {
-    try {
-      const indexPrices: Record<string, number> = await indexPricesRes.value.json();
-      for (const [symbol, price] of Object.entries(indexPrices)) {
-        if (Number.isFinite(price) && price > 0) {
-          indexPriceMap.set(symbol, price);
-        }
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }
-
   return lighterRates.map((entry: LighterFundingEntry) => {
     const stat = statsMap.get(entry.symbol);
     const orderDetails = orderBookDetailsMap.get(entry.market_id);
@@ -453,7 +438,7 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       marketId: entry.market_id,
       fundingRate: parseFloat(entry.rate || "0"),
       markPrice: lastPrice,
-      indexPrice: indexPriceMap.get(entry.symbol) ?? null,
+      indexPrice: null, // Lazily hydrated after first search via fetchLighterIndexPrices()
       lastPrice,
       change24h: parseFloat(String(stat?.daily_price_change || "0")),
       quoteVolume: parseFloat(String(stat?.daily_quote_token_volume || "0")),
@@ -463,6 +448,28 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       assetCategory: getLighterAssetCategory(entry.symbol || ""),
     };
   });
+}
+
+/**
+ * Fetch Lighter index prices from the serverless WebSocket snapshot endpoint.
+ * Returns a map of symbol -> index price. Only valid (> 0) prices are included.
+ * Used to lazily populate `indexPrice` on Lighter rates after the user first searches.
+ */
+export async function fetchLighterIndexPrices(): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  try {
+    const res = await fetch("/api/lighter/index-prices");
+    if (!res.ok) return map;
+    const prices: Record<string, number> = await res.json();
+    for (const [symbol, price] of Object.entries(prices)) {
+      if (Number.isFinite(price) && price > 0) {
+        map.set(symbol, price);
+      }
+    }
+  } catch (error) {
+    console.warn("[Search] Lighter index prices fetch failed:", error);
+  }
+  return map;
 }
 
 // ==================== Filter by Keyword ====================

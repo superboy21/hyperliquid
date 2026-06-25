@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAllRates,
   filterByKeyword,
-  fetchDetailForSymbol,
+  batchFetchDetails,
+  fetchLighterIndexPrices,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
 } from "@/lib/search";
-import { isAbortLikeError } from "@/lib/utils/abort";
 import {
   fetchSearchCandles,
   type SearchChartInterval,
@@ -188,6 +188,7 @@ export default function CrossExchangeSearch() {
   const [detailCache, setDetailCache] = useState<Map<string, DetailCache>>(new Map());
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
   const oiAbortRef = useRef<AbortController | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Chart state
   const [selectedRate, setSelectedRate] = useState<SearchExchangeRate | null>(null);
@@ -211,10 +212,7 @@ export default function CrossExchangeSearch() {
     [comboSelection]
   );
 
-  const detailCacheRef = useRef(detailCache);
-  const detailLoadingRef = useRef(detailLoading);
-  useEffect(() => { detailCacheRef.current = detailCache; }, [detailCache]);
-  useEffect(() => { detailLoadingRef.current = detailLoading; }, [detailLoading]);
+
 
   // Fetch all rates on mount
   useEffect(() => {
@@ -314,26 +312,23 @@ export default function CrossExchangeSearch() {
     };
   }, [comboChartData, chartRange]);
 
-  // Lazy-load detail for a single row on click. Cache hit short-circuits.
-  const fetchDetailIfNeeded = useCallback(
-    (rate: SearchExchangeRate) => {
-      const key = getDetailKey(rate.exchange, rate.symbol);
-      // Cache hit or already in-flight
-      if (detailCacheRef.current.has(key) || detailLoadingRef.current.has(key)) {
-        return;
+  // Auto-load all detail for the filtered set after debounce (concurrency 4)
+  const startDetailFetching = useCallback(
+    (rates: SearchExchangeRate[]) => {
+      if (abortRef.current) {
+        abortRef.current.abort();
       }
+      abortRef.current = new AbortController();
+      const signal = abortRef.current.signal;
 
-      setDetailLoading((prev) => {
-        const next = new Set(prev);
-        next.add(key);
-        return next;
-      });
+      setDetailCache(new Map());
+      setDetailLoading(new Set(rates.map((r) => getDetailKey(r.exchange, r.symbol))));
 
-      const controller = new AbortController();
-
-      fetchDetailForSymbol(rate, controller.signal)
-        .then((detail) => {
-          if (controller.signal.aborted) return;
+      batchFetchDetails(
+        rates,
+        (rate, detail) => {
+          if (signal.aborted) return;
+          const key = getDetailKey(rate.exchange, rate.symbol);
           setDetailCache((prev) => {
             const next = new Map(prev);
             next.set(key, {
@@ -351,20 +346,58 @@ export default function CrossExchangeSearch() {
             next.delete(key);
             return next;
           });
-        })
-        .catch((error) => {
-          // Always clear loading state, even on abort
-          setDetailLoading((prev) => {
-            const next = new Set(prev);
-            next.delete(key);
-            return next;
-          });
-          if (isAbortLikeError(error) || controller.signal.aborted) return;
-          console.warn(`[Search] Detail fetch failed for ${rate.symbol}:`, error);
-        });
+        },
+        signal,
+        4,
+      );
     },
     [],
   );
+
+  // Trigger detail fetching when debounced search term produces results
+  useEffect(() => {
+    if (filteredRates.length > 0 && !loading && debouncedSearchTerm.trim()) {
+      startDetailFetching(filteredRates);
+    } else {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+      setDetailCache(new Map());
+      setDetailLoading(new Set());
+    }
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+    };
+  }, [filteredRates, loading, debouncedSearchTerm, startDetailFetching]);
+
+  // Lazily fetch Lighter index prices on first search that returns Lighter matches.
+  // The endpoint returns all 163 Lighter markets in one call, so we fetch once per session.
+  const [lighterIndexPricesLoaded, setLighterIndexPricesLoaded] = useState(false);
+
+  const hydrateLighterIndexPrices = useCallback(async () => {
+    const map = await fetchLighterIndexPrices();
+    if (map.size === 0) return;
+    setAllRates((prev) =>
+      prev.map((rate) => {
+        if (rate.exchange !== "Lighter") return rate;
+        const price = map.get(rate.symbol);
+        return Number.isFinite(price) && (price as number) > 0
+          ? { ...rate, indexPrice: price as number }
+          : rate;
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!debouncedSearchTerm.trim() || loading) return;
+    if (lighterIndexPricesLoaded) return;
+    const hasLighter = filteredRates.some((r) => r.exchange === "Lighter");
+    if (!hasLighter) return;
+    setLighterIndexPricesLoaded(true);
+    void hydrateLighterIndexPrices();
+  }, [debouncedSearchTerm, loading, filteredRates, lighterIndexPricesLoaded, hydrateLighterIndexPrices]);
 
   // Hydrate Binance OI for current search results only.
   // Initial notionalValue may use quoteVolume placeholder; replace it with OI * price progressively.
@@ -467,14 +500,12 @@ export default function CrossExchangeSearch() {
           // Case C: set as first
           const { mode } = parseComboSearch(searchTerm);
           setComboSelection({ first: rate, second: null, mode });
-          void fetchDetailIfNeeded(rate);
           return;
         }
 
         if (!comboSelection.second) {
           // Case D: set as second
           setComboSelection({ ...comboSelection, second: rate });
-          void fetchDetailIfNeeded(rate);
           return;
         }
 
@@ -492,8 +523,6 @@ export default function CrossExchangeSearch() {
       }
 
       setSelectedRate(rate);
-      // A4: lazy-load detail for the newly selected row
-      void fetchDetailIfNeeded(rate);
       setChartCandles([]);
       setChartFundingRates([]);
       setChartLoading(true);
@@ -522,7 +551,7 @@ export default function CrossExchangeSearch() {
           }
         });
     },
-    [selectedRate, chartInterval, searchTerm, comboSelection, fetchDetailIfNeeded],
+    [selectedRate, chartInterval, searchTerm, comboSelection],
   );
 
   const fetchComboCandles = useCallback(async (
@@ -655,6 +684,15 @@ export default function CrossExchangeSearch() {
     };
   }, []);
 
+  // Cleanup detail abort on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+    };
+  }, []);
+
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortConfig.field !== field) return <span className="text-gray-600 ml-1">↕</span>;
     return <span className="text-gray-400 ml-1">{sortConfig.descending ? "↓" : "↑"}</span>;
@@ -726,7 +764,7 @@ export default function CrossExchangeSearch() {
           {detailLoading.size > 0 && (
             <span className="flex items-center gap-1">
               <span className="h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-              正在加载详情...
+              正在加载详情 ({detailLoading.size} 个)...
             </span>
           )}
         </div>
