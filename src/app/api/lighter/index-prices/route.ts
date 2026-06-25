@@ -4,8 +4,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const LIGHTER_WS = "wss://mainnet.zklighter.elliot.ai/stream?readonly=true";
-const WS_TIMEOUT_MS = 5_000;
-const WS_COLLECT_MS = 1_500;
+const WS_TIMEOUT_MS = 6_000;
+const WS_COLLECT_MS = 3_000;
 
 interface LighterMarketStats {
   symbol?: string;
@@ -18,6 +18,13 @@ interface LighterMarketStats {
  * Uses Node.js native WebSocket (no external ws dependency).
  */
 export async function GET() {
+  const startedAt = Date.now();
+  if (typeof globalThis.WebSocket !== "function") {
+    return NextResponse.json(
+      { error: "WebSocket not available in this runtime" },
+      { status: 500 },
+    );
+  }
   try {
     const prices = await new Promise<Record<string, number>>((resolve) => {
       let settled = false;
@@ -92,7 +99,13 @@ export async function GET() {
       ws.addEventListener("close", () => finish());
     });
 
-    return NextResponse.json(prices);
+    const elapsed = Date.now() - startedAt;
+    return NextResponse.json(prices, {
+      headers: {
+        "X-Lighter-Count": String(Object.keys(prices).length),
+        "X-Lighter-Elapsed": String(elapsed),
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[Lighter Index Prices] Failed:", message);
