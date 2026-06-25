@@ -30,18 +30,18 @@ import {
 // ==================== Helpers ====================
 
 const isXyzHip3Coin = (coin: string) => coin.startsWith("xyz:");
-const isVntlHip3Coin = (coin: string) => coin.startsWith("vntl:");
 const isParaHip3Coin = (coin: string) => coin.startsWith("para:");
-const isKmHip3Coin = (coin: string) => coin.startsWith("km:");
-const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isVntlHip3Coin(coin) || isParaHip3Coin(coin) || isKmHip3Coin(coin);
+const isCashHip3Coin = (coin: string) => coin.startsWith("cash:");
+const isHynaHip3Coin = (coin: string) => coin.startsWith("hyna:");
+const isHip3Asset = (coin: string) => isXyzHip3Coin(coin) || isParaHip3Coin(coin) || isCashHip3Coin(coin) || isHynaHip3Coin(coin);
 
 import { toDisplaySymbol, toApiSymbol } from "@/lib/symbol-mapping";
 
 function getAssetCategory(coin: string): string {
   if (isXyzHip3Coin(coin)) return "xyzHip3";
-  if (isVntlHip3Coin(coin)) return "vntlHip3";
   if (isParaHip3Coin(coin)) return "paraHip3";
-  if (isKmHip3Coin(coin)) return "kmHip3";
+  if (isCashHip3Coin(coin)) return "cashHip3";
+  if (isHynaHip3Coin(coin)) return "hynaHip3";
   return "standard";
 }
 
@@ -77,9 +77,9 @@ const categoryConfig: Record<string, CategoryConfig> = {
   all: { label: "全部资产", borderColor: "border-blue-600", bgColor: "bg-blue-600", dotColor: "bg-blue-400" },
   standard: { label: "标准资产", borderColor: "border-cyan-600", bgColor: "bg-cyan-600", dotColor: "bg-cyan-400" },
   xyzHip3: { label: "Xyz-Hip3", borderColor: "border-purple-600", bgColor: "bg-purple-600", dotColor: "bg-purple-400" },
-  vntlHip3: { label: "Vntl-Hip3", borderColor: "border-amber-600", bgColor: "bg-amber-600", dotColor: "bg-amber-400" },
   paraHip3: { label: "Para-Hip3", borderColor: "border-pink-600", bgColor: "bg-pink-600", dotColor: "bg-pink-400" },
-  kmHip3: { label: "Km-Hip3", borderColor: "border-emerald-600", bgColor: "bg-emerald-600", dotColor: "bg-emerald-400" },
+  cashHip3: { label: "Cash-Hip3", borderColor: "border-orange-600", bgColor: "bg-orange-600", dotColor: "bg-orange-400" },
+  hynaHip3: { label: "Hyna-Hip3", borderColor: "border-teal-600", bgColor: "bg-teal-600", dotColor: "bg-teal-400" },
 };
 
 // ==================== Chart Wrapper ====================
@@ -171,7 +171,7 @@ export default function FundingMonitor() {
       formatPrice: (price: number) => formatPrice(price),
       formatVolume: (volume: number) => formatVolume(volume),
       ChartComponent: HyperliquidChartWrapper,
-      searchPlaceholder: "搜索交易对，例如 BTC、ETH、xyz:GOLD、vntl:OPENAI、para:BTC.D",
+      searchPlaceholder: "搜索交易对，例如 BTC、ETH、xyz:GOLD、para:BTC.D、cash:xxx",
       fetchRates,
       hydrateRates,
       hydrationPolicy: {
@@ -184,9 +184,9 @@ export default function FundingMonitor() {
       } satisfies HydrationPolicy,
       filterFn: (rate: ExchangeFundingRate, filterType: string) => {
         if (filterType === "xyzHip3") return rate.assetCategory === "xyzHip3";
-        if (filterType === "vntlHip3") return rate.assetCategory === "vntlHip3";
         if (filterType === "paraHip3") return rate.assetCategory === "paraHip3";
-        if (filterType === "kmHip3") return rate.assetCategory === "kmHip3";
+        if (filterType === "cashHip3") return rate.assetCategory === "cashHip3";
+        if (filterType === "hynaHip3") return rate.assetCategory === "hynaHip3";
         if (filterType === "standard") return rate.assetCategory === "standard";
         return true;
       },
@@ -233,14 +233,14 @@ export default function FundingMonitor() {
           {isXyzHip3Coin(symbol) && (
             <span className="rounded bg-purple-500/20 px-2 py-0.5 text-xs text-purple-400">Xyz-Hip3</span>
           )}
-          {isVntlHip3Coin(symbol) && (
-            <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-400">Vntl-Hip3</span>
-          )}
           {isParaHip3Coin(symbol) && (
             <span className="rounded bg-pink-500/20 px-2 py-0.5 text-xs text-pink-400">Para-Hip3</span>
           )}
-          {isKmHip3Coin(symbol) && (
-            <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400">Km-Hip3</span>
+          {isCashHip3Coin(symbol) && (
+            <span className="rounded bg-orange-500/20 px-2 py-0.5 text-xs text-orange-400">Cash-Hip3</span>
+          )}
+          {isHynaHip3Coin(symbol) && (
+            <span className="rounded bg-teal-500/20 px-2 py-0.5 text-xs text-teal-400">Hyna-Hip3</span>
           )}
         </>
       ),

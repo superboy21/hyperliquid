@@ -120,133 +120,8 @@ async function fetchHyperliquidInfo<T>(
   return null;
 }
 
-const KNOWN_XYZ_HIP3_ASSETS = [
-  // --- Indices ---
-  "xyz:SP500",
-  "xyz:XYZ100",
-  "xyz:JP225",
-  "xyz:KR200",
-  "xyz:NIFTY",
-  "xyz:IBOV",
-  "xyz:DXY",
-  "xyz:VIX",
-  // --- Commodities ---
-  "xyz:GOLD",
-  "xyz:SILVER",
-  "xyz:PLATINUM",
-  "xyz:PALLADIUM",
-  "xyz:COPPER",
-  "xyz:ALUMINIUM",
-  "xyz:BRENTOIL",
-  "xyz:CL",
-  "xyz:NATGAS",
-  "xyz:TTF",
-  "xyz:URANIUM",
-  "xyz:URNM",
-  "xyz:CORN",
-  "xyz:WHEAT",
-  // --- FX ---
-  "xyz:JPY",
-  "xyz:EUR",
-  "xyz:GBP",
-  "xyz:KRW",
-  // --- US Equities ---
-  "xyz:TSLA",
-  "xyz:NVDA",
-  "xyz:GOOGL",
-  "xyz:AAPL",
-  "xyz:AMZN",
-  "xyz:MSFT",
-  "xyz:META",
-  "xyz:NFLX",
-  "xyz:AMD",
-  "xyz:MSTR",
-  "xyz:COIN",
-  "xyz:INTC",
-  "xyz:MU",
-  "xyz:PLTR",
-  "xyz:ORCL",
-  "xyz:HOOD",
-  "xyz:CRCL",
-  "xyz:SNDK",
-  "xyz:RIVN",
-  "xyz:USAR",
-  "xyz:TSM",
-  "xyz:BABA",
-  "xyz:CRWV",
-  "xyz:DKNG",
-  "xyz:HIMS",
-  "xyz:COST",
-  "xyz:LLY",
-  "xyz:BIRD",
-  "xyz:BX",
-  "xyz:LITE",
-  "xyz:GME",
-  "xyz:RKLB",
-  "xyz:MRVL",
-  "xyz:ZM",
-  "xyz:EBAY",
-  "xyz:CBRS",
-  "xyz:PURRDAT",
-  "xyz:ARM",
-  "xyz:BB",
-  "xyz:ASML",
-  "xyz:DELL",
-  "xyz:SOFTBANK",
-  "xyz:KIOXIA",
-  "xyz:MINIMAX",
-  "xyz:H100",
-  "xyz:VOL",
-  // --- ETFs ---
-  "xyz:DRAM",
-  "xyz:XLE",
-  "xyz:EWT",
-  "xyz:EWY",
-  "xyz:EWJ",
-  "xyz:EWZ",
-  // --- Korea ---
-  "xyz:SKHX",
-  "xyz:SMSN",
-  "xyz:HYUNDAI",
-  // --- IPOPs ---
-  "xyz:SPCX",
-  "xyz:QNT",
-];
-
-const KNOWN_VNTL_HIP3_ASSETS = [
-  "vntl:SPACEX",
-  "vntl:OPENAI",
-  "vntl:ANTHROPIC",
-  "vntl:MAG7",
-  "vntl:SEMIS",
-  "vntl:ROBOT",
-  "vntl:INFOTECH",
-  "vntl:NUCLEAR",
-  "vntl:DEFENSE",
-  "vntl:ENERGY",
-  "vntl:BIOTECH",
-];
-
-const KNOWN_PARA_HIP3_ASSETS = [
-  "para:BTCD",
-  "para:TOTAL2",
-  "para:OTHERS",
-];
-
-const KNOWN_KM_HIP3_ASSETS = [
-  // --- Indices ---
-  "km:US500", "km:USTECH", "km:SMALL2000", "km:USENERGY", "km:GLDMINE", "km:SEMI", "km:JPN225",
-  // --- US Equities ---
-  "km:AAPL", "km:TSLA", "km:NVDA", "km:GOOGL", "km:BABA", "km:PLTR", "km:MU", "km:RTX", "km:BMNR",
-  // --- HK Equities ---
-  "km:TENCENT", "km:XIAOMI",
-  // --- Commodities ---
-  "km:GOLD", "km:SILVER", "km:USOIL",
-  // --- Rates ---
-  "km:USBOND",
-  // --- FX ---
-  "km:EUR",
-];
+// HIP-3 assets are now discovered dynamically from the API response.
+// No hardcoded list needed — all assets returned by metaAndAssetCtxs are included automatically.
 
 const INTERVAL_MS: Record<ChartInterval, number> = {
   "1d": 24 * 60 * 60 * 1000,
@@ -296,7 +171,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-async function getHip3MarketData(dex: "xyz" | "vntl" | "para" | "km"): Promise<Map<string, Partial<FundingRate>>> {
+async function getHip3MarketData(dex: "xyz" | "para" | "cash" | "hyna"): Promise<Map<string, Partial<FundingRate>>> {
   try {
     const data = await fetchHyperliquidInfo<any[]>(
       { type: "metaAndAssetCtxs", dex },
@@ -341,16 +216,11 @@ async function getHip3MarketData(dex: "xyz" | "vntl" | "para" | "km"): Promise<M
   }
 }
 
-async function getDexFundingRates(dex: "xyz" | "vntl" | "para" | "km", knownAssets: string[]): Promise<FundingRate[]> {
+async function getDexFundingRates(dex: "xyz" | "para" | "cash" | "hyna"): Promise<FundingRate[]> {
   const marketData = await getHip3MarketData(dex);
   const rates: FundingRate[] = [];
 
-  for (const coin of knownAssets) {
-    const marketInfo = marketData.get(coin);
-    if (!marketInfo) {
-      continue;
-    }
-
+  for (const [coin, marketInfo] of marketData) {
     rates.push({
       coin,
       fundingRate: marketInfo.fundingRate || "0",
@@ -371,15 +241,15 @@ async function getDexFundingRates(dex: "xyz" | "vntl" | "para" | "km", knownAsse
 }
 
 export async function getHip3FundingRates(): Promise<FundingRate[]> {
-  const xyzRates = await getDexFundingRates("xyz", KNOWN_XYZ_HIP3_ASSETS);
+  const xyzRates = await getDexFundingRates("xyz");
   await sleep(150);
-  const vntlRates = await getDexFundingRates("vntl", KNOWN_VNTL_HIP3_ASSETS);
+  const paraRates = await getDexFundingRates("para");
   await sleep(150);
-  const paraRates = await getDexFundingRates("para", KNOWN_PARA_HIP3_ASSETS);
+  const cashRates = await getDexFundingRates("cash");
   await sleep(150);
-  const kmRates = await getDexFundingRates("km", KNOWN_KM_HIP3_ASSETS);
+  const hynaRates = await getDexFundingRates("hyna");
 
-  return [...xyzRates, ...vntlRates, ...paraRates, ...kmRates];
+  return [...xyzRates, ...paraRates, ...cashRates, ...hynaRates];
 }
 
 export async function getSpotFundingRates(): Promise<FundingRate[]> {

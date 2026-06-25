@@ -51,101 +51,6 @@ interface HyperliquidCandleItem {
   n: number;   // trades
 }
 
-// ==================== HIP-3 资产列表 ====================
-
-const KNOWN_XYZ_HIP3_ASSETS = [
-  "xyz:SP500", "xyz:XYZ100", "xyz:JP225", "xyz:KR200", "xyz:NIFTY", "xyz:IBOV", "xyz:DXY", "xyz:VIX",
-  "xyz:GOLD", "xyz:SILVER", "xyz:PLATINUM", "xyz:PALLADIUM", "xyz:COPPER", "xyz:ALUMINIUM",
-  "xyz:BRENTOIL", "xyz:CL", "xyz:NATGAS", "xyz:TTF", "xyz:URANIUM", "xyz:URNM", "xyz:CORN", "xyz:WHEAT",
-  "xyz:JPY", "xyz:EUR", "xyz:GBP", "xyz:KRW",
-  "xyz:TSLA", "xyz:NVDA", "xyz:GOOGL", "xyz:AAPL", "xyz:AMZN", "xyz:MSFT", "xyz:META", "xyz:NFLX",
-  "xyz:AMD", "xyz:MSTR", "xyz:COIN", "xyz:INTC", "xyz:MU", "xyz:PLTR", "xyz:ORCL", "xyz:HOOD",
-  "xyz:CRCL", "xyz:SNDK", "xyz:RIVN", "xyz:USAR", "xyz:TSM", "xyz:BABA", "xyz:CRWV", "xyz:DKNG",
-  "xyz:HIMS", "xyz:COST", "xyz:LLY", "xyz:BIRD", "xyz:BX", "xyz:LITE", "xyz:GME", "xyz:RKLB",
-  "xyz:MRVL", "xyz:ZM", "xyz:EBAY", "xyz:CBRS", "xyz:PURRDAT", "xyz:ARM", "xyz:BB", "xyz:ASML",
-  "xyz:DELL", "xyz:SOFTBANK", "xyz:KIOXIA", "xyz:MINIMAX", "xyz:H100", "xyz:VOL",
-  "xyz:DRAM", "xyz:XLE", "xyz:EWT", "xyz:EWY", "xyz:EWJ", "xyz:EWZ",
-  "xyz:SKHX", "xyz:SMSN", "xyz:HYUNDAI",
-  "xyz:SPCX", "xyz:QNT",
-];
-
-const KNOWN_VNTL_HIP3_ASSETS = [
-  "vntl:SPACEX", "vntl:OPENAI", "vntl:ANTHROPIC", "vntl:MAG7",
-  "vntl:SEMIS", "vntl:ROBOT", "vntl:INFOTECH", "vntl:NUCLEAR",
-  "vntl:DEFENSE", "vntl:ENERGY", "vntl:BIOTECH",
-];
-
-const KNOWN_KM_HIP3_ASSETS = [
-  "km:US500", "km:USTECH", "km:SMALL2000", "km:USENERGY", "km:GLDMINE", "km:SEMI", "km:JPN225",
-  "km:AAPL", "km:TSLA", "km:NVDA", "km:GOOGL", "km:BABA", "km:PLTR", "km:MU", "km:RTX", "km:BMNR",
-  "km:TENCENT", "km:XIAOMI",
-  "km:GOLD", "km:SILVER", "km:USOIL",
-  "km:USBOND",
-  "km:EUR",
-];
-
-// ==================== 工具函数 ====================
-
-function isHip3Asset(symbol: string): boolean {
-  return symbol.startsWith("xyz:") || symbol.startsWith("vntl:") || symbol.startsWith("para:") || symbol.startsWith("km:");
-}
-
-function getAssetCategory(symbol: string): string {
-  if (isHip3Asset(symbol)) {
-    // HIP-3 资产的分类逻辑
-    const baseSymbol = symbol.split(":")[1];
-    
-    // 股票
-    const stocks = [
-      "MSTR", "COIN", "NVDA", "AMD", "TSLA", "AAPL", "GOOGL", "AMZN", "MSFT", "META", "NFLX",
-      "INTC", "MU", "PLTR", "ORCL", "HOOD", "CRCL", "SNDK", "RIVN", "USAR", "TSM", "SKHX", "SMSN",
-      "HYUNDAI", "BABA", "CRWV", "DKNG", "HIMS", "COST", "LLY", "BIRD", "BX", "LITE", "GME",
-      "RKLB", "MRVL", "ZM", "EBAY", "CBRS", "PURRDAT", "ARM", "BB", "ASML", "DELL", "SOFTBANK",
-      "KIOXIA", "MINIMAX", "H100", "VOL", "SPCX", "QNT",
-      // KM
-      "RTX", "BMNR", "TENCENT", "XIAOMI",
-    ];
-    const indices = [
-      "SPY", "QQQ", "IWM", "XYZ100", "EWY", "EWJ", "MAG7", "SEMIS", "INFOTECH",
-      "SP500", "JP225", "KR200", "NIFTY", "IBOV", "DXY", "VIX",
-      // KM
-      "US500", "USTECH", "SMALL2000", "USENERGY", "GLDMINE", "SEMI", "JPN225",
-    ];
-    const etfs = ["DRAM", "XLE", "EWT", "EWZ", "URNM"];
-    if (stocks.includes(baseSymbol)) return "股票";
-    if (indices.includes(baseSymbol)) return "指数";
-    if (etfs.includes(baseSymbol)) return "ETF";
-    
-    // 商品
-    const commodities = [
-      "SILVER", "GOLD", "PLATINUM", "COPPER", "ALUMINIUM", "CL", "NATGAS", "TTF",
-      "BRENTOIL", "PALLADIUM", "URANIUM", "CORN", "WHEAT", "USOIL",
-      "GLD", "SLV", "TLT", "UVXY",
-    ];
-    if (commodities.includes(baseSymbol)) {
-      return "商品";
-    }
-    
-    // FX
-    const fx = ["JPY", "EUR", "GBP", "KRW"];
-    if (fx.includes(baseSymbol)) {
-      return "FX";
-    }
-    
-    // 债券
-    const rates = ["USBOND"];
-    if (rates.includes(baseSymbol)) {
-      return "债券";
-    }
-    
-    // 其他 HIP-3
-    return "其他";
-  }
-  
-  // 永续合约默认为 Crypto
-  return "Crypto";
-}
-
 // ==================== 标准化函数 ====================
 
 /**
@@ -193,7 +98,7 @@ export function normalizeHyperliquidPerpRates(
 export function normalizeHyperliquidHip3Rates(
   markets: HyperliquidMarketInfo[],
   contexts: HyperliquidAssetContext[],
-  dex: "xyz" | "vntl" | "km"
+  dex: "xyz" | "para" | "cash" | "hyna"
 ): NormalizedFundingRate[] {
   return markets.map((market, index) => {
     const ctx = contexts[index];
@@ -217,7 +122,7 @@ export function normalizeHyperliquidHip3Rates(
       volume24h: dayVolume,
       fundingIntervalSeconds: 3600,
       fundingIntervalsPerDay: 24,
-      assetCategory: getAssetCategory(symbol),
+      assetCategory: dex,
       isHip3: true,
       raw: { market, ctx, dex },
     };
