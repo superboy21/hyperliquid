@@ -25,6 +25,7 @@
     "@types/node": "^24.10.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "eslint": "^9.39.1",
     "eslint-config-next": "^16.0.0",
     "https-proxy-agent": "^9.0.0",
