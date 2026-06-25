@@ -45,6 +45,7 @@ type SortField =
   | "price"
   | "indexPrice"
   | "change24h"
+  | "premium"
   | "fundingRate"
   | "volume"
   | "notionalValue"
@@ -144,6 +145,10 @@ function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field
       return rate.indexPrice ?? -1;
     case "change24h":
       return rate.change24h;
+    case "premium":
+      return rate.indexPrice != null && rate.indexPrice > 0
+        ? rate.lastPrice / rate.indexPrice - 1
+        : Number.NEGATIVE_INFINITY;
     case "fundingRate":
       return Math.abs(rate.fundingRate);
     case "volume":
@@ -789,6 +794,15 @@ export default function CrossExchangeSearch() {
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
+                onClick={() => handleSort("premium")}
+              >
+                <span className="flex items-center justify-end whitespace-nowrap">
+                  折溢价
+                  <SortIcon field="premium" />
+                </span>
+              </th>
+              <th
+                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
                 onClick={() => handleSort("fundingRate")}
               >
                 <span className="flex items-center justify-end whitespace-nowrap">
@@ -929,6 +943,28 @@ export default function CrossExchangeSearch() {
                       {rate.change24h >= 0 ? "+" : ""}
                       {rate.change24h.toFixed(2)}%
                     </span>
+                  </td>
+                  {/* Premium: (lastPrice / indexPrice) - 1 */}
+                  <td className="px-2 py-2 text-right xl:px-2.5">
+                    {rate.indexPrice != null && rate.indexPrice > 0 ? (() => {
+                      const premium = rate.lastPrice / rate.indexPrice - 1;
+                      return (
+                        <span
+                          className={`whitespace-nowrap font-mono text-xs ${
+                            premium > 0
+                              ? "text-green-400"
+                              : premium < 0
+                                ? "text-red-400"
+                                : "text-gray-400"
+                          }`}
+                        >
+                          {premium >= 0 ? "+" : ""}
+                          {(premium * 100).toFixed(4)}%
+                        </span>
+                      );
+                    })() : (
+                      <span className="text-xs text-gray-600">--</span>
+                    )}
                   </td>
                   {/* Funding Rate */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
