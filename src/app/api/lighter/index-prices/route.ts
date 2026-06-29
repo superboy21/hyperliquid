@@ -4,7 +4,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const LIGHTER_WS = "wss://mainnet.zklighter.elliot.ai/stream?readonly=true";
-const WS_TIMEOUT_MS = 6_000;
+// Connection budget: if WS doesn't open within this, give up.
+const WS_CONNECT_TIMEOUT_MS = 5_000;
+// Collection budget: hard timeout after WS opens. Starts on "open", so cold
+// start / TLS overhead no longer eats into the collection window.
+const WS_HARD_TIMEOUT_MS = 6_000;
+// Quiet period: resolve this long after the last useful message.
 const WS_COLLECT_MS = 3_000;
 
 interface LighterMarketStats {
@@ -16,6 +21,12 @@ interface LighterMarketStats {
 /**
  * Serverless-friendly WebSocket snapshot for Lighter index prices.
  * Uses Node.js native WebSocket (no external ws dependency).
+ *
+ * Timeout design (fixes "sometimes empty" on cold serverless):
+ *   t=0            route starts → connect countdown begins
+ *   t=open         WS connected → connect countdown cleared, hard countdown begins
+ *   t=first msg    collection window begins (reset on every useful message)
+ *   t=first+3s  or  t=open+6s  or  t=5s (no open)   → resolve with whatever collected
  */
 export async function GET() {
   const startedAt = Date.now();
@@ -31,23 +42,27 @@ export async function GET() {
       const ws = new globalThis.WebSocket(LIGHTER_WS);
       const result: Record<string, number> = {};
       let collectTimer: ReturnType<typeof setTimeout> | null = null;
+      let hardTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const timeout = setTimeout(() => {
+      // Connection timeout: if WS doesn't open in time, give up with whatever we have.
+      const connectTimeout = setTimeout(() => {
         if (settled) return;
         settled = true;
         if (collectTimer) clearTimeout(collectTimer);
+        if (hardTimer) clearTimeout(hardTimer);
         try {
           ws.close();
         } catch {
           // ignore
         }
         resolve(result);
-      }, WS_TIMEOUT_MS);
+      }, WS_CONNECT_TIMEOUT_MS);
 
       function finish() {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        clearTimeout(connectTimeout);
+        if (hardTimer) clearTimeout(hardTimer);
         if (collectTimer) clearTimeout(collectTimer);
         try {
           ws.close();
@@ -58,6 +73,9 @@ export async function GET() {
       }
 
       ws.addEventListener("open", () => {
+        // Connection established — switch from connect budget to collection budget.
+        clearTimeout(connectTimeout);
+        hardTimer = setTimeout(finish, WS_HARD_TIMEOUT_MS);
         ws.send(
           JSON.stringify({
             type: "subscribe",

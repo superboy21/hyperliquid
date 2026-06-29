@@ -378,7 +378,7 @@ export default function CrossExchangeSearch() {
 
   const hydrateLighterIndexPrices = useCallback(async () => {
     const map = await fetchLighterIndexPrices();
-    if (map.size === 0) return;
+    if (map.size === 0) return; // Don't set loaded flag — allow retry on next search
     setAllRates((prev) =>
       prev.map((rate) => {
         if (rate.exchange !== "Lighter") return rate;
@@ -388,6 +388,7 @@ export default function CrossExchangeSearch() {
           : rate;
       }),
     );
+    setLighterIndexPricesLoaded(true); // Only lock out retry after a successful hydration
   }, []);
 
   useEffect(() => {
@@ -395,7 +396,6 @@ export default function CrossExchangeSearch() {
     if (lighterIndexPricesLoaded) return;
     const hasLighter = filteredRates.some((r) => r.exchange === "Lighter");
     if (!hasLighter) return;
-    setLighterIndexPricesLoaded(true);
     void hydrateLighterIndexPrices();
   }, [debouncedSearchTerm, loading, filteredRates, lighterIndexPricesLoaded, hydrateLighterIndexPrices]);
 
