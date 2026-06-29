@@ -14,7 +14,7 @@ export interface ExchangeTransportFlags {
 
 export function getExchangeTransportFlags(): ExchangeTransportFlags {
   return {
-    binance: parseMode(process.env.NEXT_PUBLIC_BINANCE_TRANSPORT_MODE, "ccxt"),
+    binance: parseMode(process.env.NEXT_PUBLIC_BINANCE_TRANSPORT_MODE, "native"),
     gateio: parseMode(process.env.NEXT_PUBLIC_GATE_TRANSPORT_MODE, "native"),
     hyperliquid: parseMode(process.env.NEXT_PUBLIC_HYPERLIQUID_TRANSPORT_MODE, "native"),
     lighter: parseMode(process.env.NEXT_PUBLIC_LIGHTER_TRANSPORT_MODE, "native"),
