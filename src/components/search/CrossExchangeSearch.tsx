@@ -8,6 +8,7 @@ import {
   fetchLighterIndexPrices,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
+  type DetailResult,
 } from "@/lib/search";
 import {
   fetchSearchCandles,
@@ -313,6 +314,10 @@ export default function CrossExchangeSearch() {
   }, [comboChartData, chartRange]);
 
   // Auto-load all detail for the filtered set after debounce (concurrency 4)
+  const DEFAULT_DETAIL_CONCURRENCY = 4;
+  const LIGHTER_DETAIL_CONCURRENCY = 1;
+  const LIGHTER_DETAIL_DELAY_MS = 200;
+
   const startDetailFetching = useCallback(
     (rates: SearchExchangeRate[]) => {
       if (abortRef.current) {
@@ -324,32 +329,37 @@ export default function CrossExchangeSearch() {
       setDetailCache(new Map());
       setDetailLoading(new Set(rates.map((r) => getDetailKey(r.exchange, r.symbol))));
 
-      batchFetchDetails(
-        rates,
-        (rate, detail) => {
-          if (signal.aborted) return;
-          const key = getDetailKey(rate.exchange, rate.symbol);
-          setDetailCache((prev) => {
-            const next = new Map(prev);
-            next.set(key, {
-              historicalVolatility: detail.historicalVolatility,
-              bidAskSpread: detail.bidAskSpread,
-              latestSettlementRate: detail.lastSettlementRate,
-              avgFundingRate2d: detail.avgFundingRate2d,
-              avgFundingRate7d: detail.avgFundingRate7d,
-              avgFundingRate30d: detail.avgFundingRate30d,
-            });
-            return next;
+      const onUpdate = (rate: SearchExchangeRate, detail: DetailResult) => {
+        if (signal.aborted) return;
+        const key = getDetailKey(rate.exchange, rate.symbol);
+        setDetailCache((prev) => {
+          const next = new Map(prev);
+          next.set(key, {
+            historicalVolatility: detail.historicalVolatility,
+            bidAskSpread: detail.bidAskSpread,
+            latestSettlementRate: detail.lastSettlementRate,
+            avgFundingRate2d: detail.avgFundingRate2d,
+            avgFundingRate7d: detail.avgFundingRate7d,
+            avgFundingRate30d: detail.avgFundingRate30d,
           });
-          setDetailLoading((prev) => {
-            const next = new Set(prev);
-            next.delete(key);
-            return next;
-          });
-        },
-        signal,
-        4,
-      );
+          return next;
+        });
+        setDetailLoading((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      };
+
+      const nonLighter = rates.filter((r) => r.exchange !== "Lighter");
+      const lighter = rates.filter((r) => r.exchange === "Lighter");
+
+      if (nonLighter.length > 0) {
+        batchFetchDetails(nonLighter, onUpdate, signal, DEFAULT_DETAIL_CONCURRENCY, 0);
+      }
+      if (lighter.length > 0) {
+        batchFetchDetails(lighter, onUpdate, signal, LIGHTER_DETAIL_CONCURRENCY, LIGHTER_DETAIL_DELAY_MS);
+      }
     },
     [],
   );

@@ -33,6 +33,8 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **OI-weighted average**: Current average annualized rate uses open interest weighted calculation
 - [x] **Position value weighted average**: Changed OI-weighted to position value (OI × markPrice) weighted for more accurate representation
 - [x] **Added comprehensive README.md**: Project overview, features, technology stack, and getting started guide
+- [x] **Lighter rate-limit throttling on Search page**: Split detail fetching into Lighter (concurrency 1, 200ms delay) and non-Lighter (concurrency 4) queues
+- [x] **Lighter pagination delays**: Added 100ms sleep between pages in candle and funding history pagination
 
 ## Current Structure
 
@@ -130,3 +132,4 @@ export async function GET() {
 | 2026-03-01 | Added all 41 HIP-3 assets from specification list including XYZ100, PLATINUM, COPPER, CL, NATGAS, JPY, EUR, URNM, INTC, MU, PLTR, ORCL, HOOD, CRCL, SNDK, RIVN, USAR, TSM, SKHX, SMSN, HYUNDAI |
 | 2026-03-01 | Added market data columns: Mark price, 24h change %, 24h volume, open interest with sorting support |
 | 2026-03-01 | Changed weighted average calculation from OI-weighted to position value (OI × markPrice) weighted for more accurate representation |
+| 2026-07-02 | Fixed Lighter 429 errors on Search page: throttled Lighter detail fetching (concurrency 1, 200ms delay) and added 100ms pagination delays for candles/funding history |

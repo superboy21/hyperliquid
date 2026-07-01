@@ -77,7 +77,7 @@ export interface SearchExchangeRate {
   detailError?: boolean;
 }
 
-interface DetailResult {
+export interface DetailResult {
   lastSettlementRate: number | null;
   avgFundingRate2d: number | null;
   historicalVolatility: number | null;
@@ -760,6 +760,7 @@ export async function batchFetchDetails(
   onUpdate: (rate: SearchExchangeRate, detail: DetailResult) => void,
   signal?: AbortSignal,
   concurrency: number = 4,
+  delayMs: number = 0,
 ): Promise<void> {
   const queue = [...rates];
   const inFlight: Promise<void>[] = [];
@@ -775,6 +776,10 @@ export async function batchFetchDetails(
         avgFundingRate7d: null,
         avgFundingRate30d: null,
       });
+
+      if (delayMs > 0 && !signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
 
       const detail = await fetchDetailForSymbol(rate, signal);
 

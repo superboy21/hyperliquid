@@ -468,6 +468,7 @@ async function fetchLighterCandles(
     // Lighter launched ~2024, don't request data before that
     const lighterLaunchMs = new Date("2024-01-01T00:00:00Z").getTime();
     const batchSize = 500; // Max candles per Lighter API request
+    const PAGE_DELAY_MS = 100;
 
     // Paginate backwards: start from now, request batches until we have enough
     // or until we reach data before the exchange existed
@@ -517,6 +518,10 @@ async function fetchLighterCandles(
       const earliestTime = Math.min(...batch.map((c) => c.openTime));
       if (earliestTime <= lighterLaunchMs) break; // Don't go before exchange launch
       endTimestamp = earliestTime;
+
+      if (PAGE_DELAY_MS > 0 && !signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
+      }
     }
 
     // Sort chronologically (oldest first)

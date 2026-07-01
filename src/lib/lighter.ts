@@ -423,6 +423,7 @@ export async function getFundingHistoryAll(
   const batchSize = 500;
   const maxLoops = 20;
   const lighterLaunchSec = Math.floor(new Date("2024-01-01T00:00:00Z").getTime() / 1000);
+  const PAGE_DELAY_MS = 100;
 
   for (let i = 0; i < maxLoops; i++) {
     throwIfAborted(signal);
@@ -461,6 +462,10 @@ export async function getFundingHistoryAll(
     currentEndTime = Math.floor(earliestTime / 1000) - 1;
 
     if (currentEndTime <= lighterLaunchSec) break;
+
+    if (PAGE_DELAY_MS > 0 && i + 1 < maxLoops && !signal?.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
+    }
   }
 
   return allHistory.sort((a, b) => a.time - b.time);
