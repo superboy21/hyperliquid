@@ -7,35 +7,78 @@ import { isAbortLikeError, throwIfAborted } from "./utils/abort";
 const LIGHTER_DIRECT_BASE = "https://mainnet.zklighter.elliot.ai/api/v1";
 const LIGHTER_PROXY_BASE = "/api/lighter";
 
+// ==================== Global Request Throttle ====================
+// Lighter's standard tier caps unweighted requests at 60/minute. Concurrent
+// callers (e.g. the search page firing detail fetches for many symbols at
+// once) can easily burst past that and trip 429. We serialize every Lighter
+// HTTP attempt behind a single promise chain with a minimum interval so
+// bursts are smoothed into a steady trickle regardless of caller.
+
+const LIGHTER_MIN_INTERVAL_MS = 300;
+let lighterFetchQueue: Promise<unknown> = Promise.resolve();
+let lastLighterFetchAt = 0;
+
+async function throttleLighterFetch<T>(
+  task: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const run = async (): Promise<T> => {
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const now = Date.now();
+    const elapsed = now - lastLighterFetchAt;
+    const wait = Math.max(0, LIGHTER_MIN_INTERVAL_MS - elapsed);
+    if (wait > 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    lastLighterFetchAt = Date.now();
+    return task();
+  };
+  const next = lighterFetchQueue.then(run, run);
+  // Keep the queue alive even if a task rejects, so subsequent callers
+  // don't stall. Each caller still observes its own rejection.
+  lighterFetchQueue = next.catch(() => undefined);
+  return next;
+}
+
 /**
  * Fetch from Lighter API with automatic fallback:
  * 1. Try direct connection first (faster, no server roundtrip)
  * 2. If direct fails (network/CORS), fall back to Next.js API proxy
+ *
+ * All calls are routed through a global throttle to prevent bursts from
+ * triggering 429 Too Many Requests.
  */
 export async function lighterFetch(endpoint: string, params: string = "", init?: RequestInit): Promise<Response> {
-  const paramPrefix = params ? `?${params}` : "";
-  const directUrl = `${LIGHTER_DIRECT_BASE}/${endpoint}${paramPrefix}`;
-  const proxyUrl = `${LIGHTER_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
+  return throttleLighterFetch(async () => {
+    const paramPrefix = params ? `?${params}` : "";
+    const directUrl = `${LIGHTER_DIRECT_BASE}/${endpoint}${paramPrefix}`;
+    const proxyUrl = `${LIGHTER_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
 
-  // Try direct first
-  try {
-    const response = await fetch(directUrl, init);
-    if (response.ok) return response;
-    // If rate-limited, wait and retry direct once
-    if (response.status === 429) {
-      console.warn(`[lighterFetch] Direct 429 for ${endpoint}, retrying in 1s...`);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      const retryResponse = await fetch(directUrl, init);
-      if (retryResponse.ok) return retryResponse;
-      console.warn(`[lighterFetch] Direct retry also failed (${retryResponse.status}), falling back to proxy`);
+    // Try direct first
+    try {
+      const response = await fetch(directUrl, init);
+      if (response.ok) return response;
+      // If rate-limited, wait and retry direct once
+      if (response.status === 429) {
+        console.warn(`[lighterFetch] Direct 429 for ${endpoint}, retrying in 1s...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const retryResponse = await fetch(directUrl, init);
+        if (retryResponse.ok) return retryResponse;
+        console.warn(`[lighterFetch] Direct retry also failed (${retryResponse.status}), falling back to proxy`);
+      }
+    } catch (e) {
+      console.warn(`[lighterFetch] Direct fetch error for ${endpoint}:`, e);
     }
-  } catch (e) {
-    console.warn(`[lighterFetch] Direct fetch error for ${endpoint}:`, e);
-  }
 
-  // Fallback to proxy
-  console.warn(`[lighterFetch] Using proxy for ${endpoint}`);
-  return fetch(proxyUrl, { ...init, cache: "no-store" });
+    // Fallback to proxy
+    console.warn(`[lighterFetch] Using proxy for ${endpoint}`);
+    return fetch(proxyUrl, { ...init, cache: "no-store" });
+  }, init?.signal ?? undefined);
 }
 
 // ==================== 类型定义 ====================

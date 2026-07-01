@@ -22,7 +22,6 @@ import {
 import { calculateHistoricalVolatility } from "./utils/funding";
 import {
   lighterFetch,
-  getLatestSettledFundingRate as lighterGetLatestSettledFundingRate,
   getFundingHistoryForDays as lighterGetFundingHistoryForDays,
   getCandleSnapshot as lighterGetCandleSnapshot,
 } from "./lighter";
@@ -677,11 +676,10 @@ async function fetchLighterDetail(
   const nowMs = Date.now();
   const thirtyDaysAgoMs = nowMs - 30 * 24 * 60 * 60 * 1000;
 
-  const [candlesRes, fundingRes, orderBookRes, latestSettledRate] = await Promise.allSettled([
+  const [candlesRes, fundingRes, orderBookRes] = await Promise.allSettled([
     lighterFetch("candles", `market_id=${resolvedMarketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`, { signal }),
     lighterFetch("fundings", `market_id=${resolvedMarketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`, { signal }),
     lighterFetch("orderBookOrders", `market_id=${resolvedMarketId}&limit=1`, { signal }),
-    lighterGetLatestSettledFundingRate(resolvedMarketId, 6, signal),
   ]);
 
   if (signal?.aborted) {
@@ -701,7 +699,7 @@ async function fetchLighterDetail(
   }
 
   // Parse funding history
-  let fundingHistory: { time: number; fundingRate: string }[] = [];
+  let fundingHistory: { time: number; fundingRate: string; rate: number; timestamp: number; direction: string }[] = [];
   if (fundingRes.status === "fulfilled" && fundingRes.value.ok) {
     const fundingData = await fundingRes.value.json();
     const fundingArray: LighterFundingEntryRaw[] = fundingData.fundings || fundingData;
@@ -713,6 +711,9 @@ async function fetchLighterDetail(
         return {
           time: item.timestamp * 1000,
           fundingRate: String(signedRate),
+          rate: signedRate,
+          timestamp: item.timestamp,
+          direction,
         };
       });
     }
@@ -737,10 +738,16 @@ async function fetchLighterDetail(
   const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
   const avg2d = computeAvgFundingRate2d(fundingHistory);
 
-  // Extract latest settled rate from Promise.allSettled result
+  // Derive latest settled rate from the funding history we already fetched
+  // (matches the normalization in fetchLatestSettledFundingRateInWindow: /12.5).
+  // Avoids a separate /fundings round-trip per symbol.
   let lastSettlementRateValue: number | null = null;
-  if (latestSettledRate.status === "fulfilled" && Number.isFinite(latestSettledRate.value)) {
-    lastSettlementRateValue = latestSettledRate.value;
+  if (fundingHistory.length > 0) {
+    const latest = fundingHistory.reduce((acc, item) => (item.timestamp > acc.timestamp ? item : acc));
+    const normalized = latest.rate / 12.5;
+    if (Number.isFinite(normalized)) {
+      lastSettlementRateValue = normalized;
+    }
   }
 
   return {
