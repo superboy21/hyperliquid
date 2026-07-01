@@ -4,7 +4,7 @@
 
 import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as hlGetFundingHistoryForDays } from "./hyperliquid";
 import { getFundingHistoryAll as gateGetFundingHistoryAll } from "./gateio";
-import { getFundingHistoryAll as lighterGetFundingHistoryAll } from "./lighter";
+import { getFundingHistoryAll as lighterGetFundingHistoryAll, lighterFetch } from "./lighter";
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical } from "./adapters/okx";
 import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
@@ -445,7 +445,7 @@ async function fetchLighterCandles(
     let resolvedMarketId = marketId ?? null;
     if (resolvedMarketId === null) {
       try {
-        const fundingRes = await fetch("/api/lighter?endpoint=funding-rates", { signal });
+        const fundingRes = await lighterFetch("funding-rates", "", { signal });
         if (fundingRes.ok) {
           const fundingData = await fundingRes.json();
           const entry = (fundingData.funding_rates || []).find(
@@ -478,14 +478,12 @@ async function fetchLighterCandles(
 
     while (fetchedCount < limit) {
       const startTimestamp = Math.max(Math.floor(endTimestamp - batchSize * intervalMs), Math.floor(lighterLaunchMs));
-      const url = `/api/lighter?endpoint=candles&market_id=${resolvedMarketId}&resolution=${resolution}&start_timestamp=${startTimestamp}&end_timestamp=${endTimestamp}&count_back=${batchSize}`;
 
-      const response = await fetch(url, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        signal,
-      });
+      const response = await lighterFetch(
+        "candles",
+        `market_id=${resolvedMarketId}&resolution=${resolution}&start_timestamp=${startTimestamp}&end_timestamp=${endTimestamp}&count_back=${batchSize}`,
+        { signal },
+      );
 
       if (!response.ok) break;
 
@@ -652,7 +650,7 @@ async function fetchLighterFundingHistory(
     let resolvedMarketId = marketId ?? null;
     if (resolvedMarketId === null) {
       try {
-        const fundingRes = await fetch("/api/lighter?endpoint=funding-rates", { signal });
+        const fundingRes = await lighterFetch("funding-rates", "", { signal });
         if (fundingRes.ok) {
           const fundingData = await fundingRes.json();
           const entry = (fundingData.funding_rates || []).find(

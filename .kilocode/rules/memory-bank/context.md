@@ -35,6 +35,8 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Added comprehensive README.md**: Project overview, features, technology stack, and getting started guide
 - [x] **Lighter rate-limit throttling on Search page**: Split detail fetching into Lighter (concurrency 1, 200ms delay) and non-Lighter (concurrency 4) queues
 - [x] **Lighter pagination delays**: Added 100ms sleep between pages in candle and funding history pagination
+- [x] **Lighter global request throttle (300ms)**: `lighterFetch` now serialized through a global promise chain with 300ms minimum interval between any two Lighter HTTP attempts — prevents 429s under burst regardless of caller
+- [x] **fetchLighterDetail removed redundant fundings call**: latest settlement rate now derived from the already-fetched 30-day funding history (3 calls per symbol instead of 4)
 
 ## Current Structure
 
@@ -133,3 +135,4 @@ export async function GET() {
 | 2026-03-01 | Added market data columns: Mark price, 24h change %, 24h volume, open interest with sorting support |
 | 2026-03-01 | Changed weighted average calculation from OI-weighted to position value (OI × markPrice) weighted for more accurate representation |
 | 2026-07-02 | Fixed Lighter 429 errors on Search page: throttled Lighter detail fetching (concurrency 1, 200ms delay) and added 100ms pagination delays for candles/funding history |
+| 2026-07-02 | Added global Lighter request throttle (300ms min interval) in `lighter.ts` and removed redundant `fundings` call in `fetchLighterDetail` (4→3 calls per symbol) |

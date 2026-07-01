@@ -382,9 +382,9 @@ async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
 
 async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
   const [fundingRes, statsRes, orderBookRes] = await Promise.allSettled([
-    fetch("/api/lighter?endpoint=funding-rates"),
-    fetch("/api/lighter?endpoint=exchangeStats"),
-    fetch("/api/lighter?endpoint=orderBookDetails&filter=perp"),
+    lighterFetch("funding-rates"),
+    lighterFetch("exchangeStats"),
+    lighterFetch("orderBookDetails", "filter=perp"),
   ]);
 
   if (fundingRes.status !== "fulfilled" || !fundingRes.value.ok) {
@@ -645,9 +645,9 @@ async function fetchLighterDetail(
 ): Promise<DetailResult> {
   let resolvedMarketId = marketId ?? null;
 
-  if (resolvedMarketId === null) {
+if (resolvedMarketId === null) {
     try {
-      const fundingRes = await fetch("/api/lighter?endpoint=funding-rates", { signal });
+      const fundingRes = await lighterFetch("funding-rates", "", { signal });
       if (fundingRes.ok) {
         const fundingData = await fundingRes.json();
         const entry = (fundingData.funding_rates || []).find(
