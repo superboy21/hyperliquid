@@ -12,6 +12,7 @@ import ExchangeFundingMonitor, {
   type HydrationPolicy,
 } from "@/components/funding/ExchangeFundingMonitor";
 import {
+  fetchL2BookBestBidAsk,
   formatAnnualizedRate,
   formatFundingRate,
   formatPrice,
@@ -190,7 +191,7 @@ export default function FundingMonitor() {
         if (filterType === "standard") return rate.assetCategory === "standard";
         return true;
       },
-      fetchDetailData: async (symbol: string, interval: ChartInterval): Promise<DetailData> => {
+      fetchDetailData: async (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]): Promise<DetailData> => {
         const apiSymbol = toApiSymbol(symbol);
         const [candleData, fundingHistory] = await Promise.all([
           getCandleSnapshot(apiSymbol, interval, 30),
@@ -221,12 +222,32 @@ export default function FundingMonitor() {
           ? Number.parseFloat(latestFundingEntry.fundingRate ?? "")
           : Number.NaN;
 
+        // Compute spread from impactPxs (fetched in initial rates load)
+        let bidAskSpread: number | null = null;
+        const currentRate = rates.find((r) => r.symbol === symbol);
+        if (currentRate?.bestBid && currentRate?.bestAsk) {
+          const midPrice = (currentRate.bestBid + currentRate.bestAsk) / 2;
+          if (midPrice > 0) {
+            bidAskSpread = ((currentRate.bestAsk - currentRate.bestBid) / midPrice) * 100;
+          }
+        }
+
         return {
           candles: visibleCandles,
           intervalFundingRates: visibleFundingRates,
           hourlyFundingRates30d: hourlyFundingRates,
           latestSettlementRate: Number.isFinite(latestSettlementRate) ? latestSettlementRate : null,
+          bidAskSpread,
+          impactBidAskSpread: bidAskSpread,
         };
+      },
+      fetchL2BookSpread: async (symbol: string): Promise<number | null> => {
+        const apiSymbol = toApiSymbol(symbol);
+        const l2Book = await fetchL2BookBestBidAsk(apiSymbol);
+        if (!l2Book) return null;
+        const midPrice = (l2Book.bestBid + l2Book.bestAsk) / 2;
+        if (midPrice <= 0) return null;
+        return ((l2Book.bestAsk - l2Book.bestBid) / midPrice) * 100;
       },
       renderExchangeBadge: (symbol: string) => (
         <>

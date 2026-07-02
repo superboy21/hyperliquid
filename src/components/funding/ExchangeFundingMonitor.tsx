@@ -67,6 +67,7 @@ export interface DetailData {
   intervalFundingRates: IntervalFundingRateItem[];
   hourlyFundingRates30d: IntervalFundingRateItem[];
   bidAskSpread?: number | null;
+  impactBidAskSpread?: number | null;
   latestSettlementRate?: number | null;
 }
 
@@ -106,6 +107,7 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
   fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
+  fetchL2BookSpread?: (symbol: string) => Promise<number | null>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
@@ -203,6 +205,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     hydrateRates,
     hydrateOI,
     fetchDetailData,
+    fetchL2BookSpread,
     renderExchangeBadge,
     renderInfoSection,
     renderExtraStatsCard,
@@ -227,6 +230,11 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [intervalFundingRates, setIntervalFundingRates] = useState<IntervalFundingRateItem[]>([]);
   const [hourlyFundingRates30d, setHourlyFundingRates30d] = useState<IntervalFundingRateItem[]>([]);
   const [detailBidAskSpread, setDetailBidAskSpread] = useState<number | null>(null);
+  const [impactBidAskSpread, setImpactBidAskSpread] = useState<number | null>(null);
+  const [spreadSource, setSpreadSource] = useState<"l2book" | "impact">("l2book");
+  const [l2BookSpread, setL2BookSpread] = useState<number | null>(null);
+  const [l2BookLoading, setL2BookLoading] = useState(false);
+  const l2BookAbortRef = useRef<AbortController | null>(null);
   const [hydrationTargetSymbols, setHydrationTargetSymbols] = useState<string[]>([]);
   const [hydrationKey, setHydrationKey] = useState(0);
   const fundingRatesRef = useRef<ExchangeFundingRate[]>([]);
@@ -323,6 +331,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       setIntervalFundingRates([]);
       setHourlyFundingRates30d([]);
       setDetailBidAskSpread(null);
+      setImpactBidAskSpread(null);
 
       try {
         const currentRates = fundingRatesRef.current;
@@ -335,6 +344,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         setIntervalFundingRates(detailData.intervalFundingRates);
         setHourlyFundingRates30d(detailData.hourlyFundingRates30d);
         setDetailBidAskSpread(detailData.bidAskSpread ?? null);
+        setImpactBidAskSpread(detailData.impactBidAskSpread ?? null);
         if (Number.isFinite(detailData.latestSettlementRate)) {
           setFundingRates((prev) => {
             const next = prev.map((rate) => {
@@ -365,6 +375,41 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       handleFetchDetail(selectedCoin, selectedInterval);
     }
   }, [handleFetchDetail, selectedCoin, selectedInterval]);
+
+  // Lazy-load l2Book spread when toggle switches to "l2book"
+  useEffect(() => {
+    if (spreadSource !== "l2book" || !selectedCoin || !fetchL2BookSpread) {
+      return;
+    }
+
+    if (l2BookAbortRef.current) {
+      l2BookAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    l2BookAbortRef.current = controller;
+
+    setL2BookSpread(null);
+    setL2BookLoading(true);
+    fetchL2BookSpread(selectedCoin).then((spread) => {
+      if (!controller.signal.aborted) {
+        setL2BookSpread(spread);
+        setL2BookLoading(false);
+      }
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setL2BookLoading(false);
+      }
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [spreadSource, selectedCoin, fetchL2BookSpread]);
+
+  // Clear l2Book spread when coin changes
+  useEffect(() => {
+    setL2BookSpread(null);
+  }, [selectedCoin]);
 
   // Filter and sort
   const filteredAndSortedRates = useMemo(() => {
@@ -612,7 +657,11 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
     // Bid-ask spread: use detail data if available, otherwise compute from fundingRates
     let bidAskSpread: number | null = null;
-    if (detailBidAskSpread !== null) {
+    if (spreadSource === "l2book" && l2BookSpread !== null) {
+      bidAskSpread = l2BookSpread;
+    } else if (spreadSource === "impact" && impactBidAskSpread !== null) {
+      bidAskSpread = impactBidAskSpread;
+    } else if (detailBidAskSpread !== null) {
       bidAskSpread = detailBidAskSpread;
     } else if (selectedCoin) {
       const selectedRate = fundingRates.find((r) => r.symbol === selectedCoin);
@@ -631,7 +680,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       historicalVolatility,
       bidAskSpread,
     };
-  }, [candles, selectedInterval, selectedCoin, fundingRates, detailBidAskSpread]);
+  }, [candles, selectedInterval, selectedCoin, fundingRates, detailBidAskSpread, impactBidAskSpread, spreadSource, l2BookSpread]);
 
   const selectedFundingInterval = useMemo(() => {
     if (!selectedCoin) return 28800;
@@ -1018,9 +1067,28 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                       <p className="mt-1 text-xs text-gray-500">年化</p>
                     </div>
                     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-                      <p className="text-xs text-gray-400">当前买卖价差</p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-gray-400">当前买卖价差</p>
+                        {exchangeName === "Hyperliquid" && impactBidAskSpread !== null && (
+                          <button
+                            type="button"
+                            onClick={() => setSpreadSource((prev) => (prev === "l2book" ? "impact" : "l2book"))}
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                              spreadSource === "l2book"
+                                ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                                : "bg-orange-500/20 text-orange-400 hover:bg-orange-500/30"
+                            }`}
+                          >
+                            {spreadSource === "l2book" ? "L2Book" : "Impact"}
+                          </button>
+                        )}
+                      </div>
                       <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
-                        {selectedSummary.bidAskSpread !== null ? `${selectedSummary.bidAskSpread.toFixed(4)}%` : "--"}
+                        {spreadSource === "l2book" && l2BookLoading ? (
+                          <span className="inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-yellow-400" />
+                        ) : selectedSummary.bidAskSpread !== null ? (
+                          `${selectedSummary.bidAskSpread.toFixed(4)}%`
+                        ) : "--"}
                       </p>
                       <p className="mt-1 text-xs text-gray-500">(Ask-Bid)/Mid</p>
                     </div>

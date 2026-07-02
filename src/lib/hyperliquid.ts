@@ -120,6 +120,50 @@ async function fetchHyperliquidInfo<T>(
   return null;
 }
 
+/**
+ * Fetch the real top-of-book best bid/ask from the l2Book endpoint.
+ * Returns { bestBid, bestAsk } or null if the request fails.
+ * Unlike impactPxs (which are depth-weighted prices), this gives the true
+ * top-of-book prices matching what the Hyperliquid website displays.
+ */
+export async function fetchL2BookBestBidAsk(
+  coin: string,
+  signal?: AbortSignal,
+): Promise<{ bestBid: number; bestAsk: number } | null> {
+  try {
+    const data = await fetchHyperliquidInfo<{
+      coin: string;
+      levels: Array<Array<{ px: string; sz: string; n: number }>>;
+    }>({ type: "l2Book", coin }, 3, signal);
+
+    if (!data?.levels || data.levels.length < 2) {
+      return null;
+    }
+
+    const bestBidStr = data.levels[0]?.[0]?.px;
+    const bestAskStr = data.levels[1]?.[0]?.px;
+
+    if (!bestBidStr || !bestAskStr) {
+      return null;
+    }
+
+    const bestBid = Number.parseFloat(bestBidStr);
+    const bestAsk = Number.parseFloat(bestAskStr);
+
+    if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk) || bestBid <= 0 || bestAsk <= 0) {
+      return null;
+    }
+
+    return { bestBid, bestAsk };
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return null;
+    }
+    console.error(`Error fetching l2Book for ${coin}:`, error);
+    return null;
+  }
+}
+
 // HIP-3 assets are now discovered dynamically from the API response.
 // No hardcoded list needed — all assets returned by metaAndAssetCtxs are included automatically.
 

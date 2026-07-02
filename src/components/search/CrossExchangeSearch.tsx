@@ -6,6 +6,7 @@ import {
   filterByKeyword,
   batchFetchDetails,
   fetchLighterIndexPrices,
+  fetchHyperliquidL2BookSpread,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
   type DetailResult,
@@ -65,6 +66,7 @@ interface SortConfig {
 interface DetailCache {
   historicalVolatility: number | null;
   bidAskSpread: number | null;
+  impactBidAskSpread: number | null;
   latestSettlementRate: number | null;
   avgFundingRate2d: number | null;
   avgFundingRate7d: number | null;
@@ -134,7 +136,12 @@ function formatSearchSettlementPeriodRate(rate: number, exchange: string): strin
 
 // ==================== Utility ====================
 
-function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field: SortField): number | string {
+function getSortValue(
+  rate: SearchExchangeRate & { detail?: DetailCache },
+  field: SortField,
+  spreadSource?: "l2book" | "impact",
+  l2BookCache?: Map<string, number | null>,
+): number | string {
   switch (field) {
     case "symbol":
       return rate.symbol;
@@ -158,8 +165,16 @@ function getSortValue(rate: SearchExchangeRate & { detail?: DetailCache }, field
       return rate.notionalValue;
     case "volatility":
       return rate.detail?.historicalVolatility ?? -1;
-    case "spread":
+    case "spread": {
+      if (spreadSource === "l2book" && l2BookCache) {
+        const l2 = l2BookCache.get(getDetailKey(rate.exchange, rate.symbol));
+        if (l2 != null) return l2;
+      }
+      if (spreadSource === "impact" && rate.detail?.impactBidAskSpread != null) {
+        return rate.detail.impactBidAskSpread;
+      }
       return rate.detail?.bidAskSpread ?? -1;
+    }
     case "latestSettlement":
       return rate.detail?.latestSettlementRate ?? -999;
     case "avg2d":
@@ -188,6 +203,9 @@ export default function CrossExchangeSearch() {
   const [sortConfig, setSortConfig] = useState<SortConfig>({ field: "fundingRate", descending: true });
   const [detailCache, setDetailCache] = useState<Map<string, DetailCache>>(new Map());
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
+  const [spreadSource, setSpreadSource] = useState<"l2book" | "impact">("l2book");
+  const [l2BookCache, setL2BookCache] = useState<Map<string, number | null>>(new Map());
+  const l2BookAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -262,10 +280,14 @@ export default function CrossExchangeSearch() {
       const aVal = getSortValue(
         { ...a, detail: detailCache.get(getDetailKey(a.exchange, a.symbol)) },
         sortConfig.field,
+        spreadSource,
+        l2BookCache,
       );
       const bVal = getSortValue(
         { ...b, detail: detailCache.get(getDetailKey(b.exchange, b.symbol)) },
         sortConfig.field,
+        spreadSource,
+        l2BookCache,
       );
 
       let cmp = 0;
@@ -277,7 +299,7 @@ export default function CrossExchangeSearch() {
       return sortConfig.descending ? -cmp : cmp;
     });
     return sorted;
-  }, [filteredRates, sortConfig, detailCache]);
+  }, [filteredRates, sortConfig, detailCache, spreadSource, l2BookCache]);
 
   // Filter chart data by selected time range
   const filteredChartData = useMemo(() => {
@@ -337,6 +359,7 @@ export default function CrossExchangeSearch() {
           next.set(key, {
             historicalVolatility: detail.historicalVolatility,
             bidAskSpread: detail.bidAskSpread,
+            impactBidAskSpread: detail.impactBidAskSpread ?? null,
             latestSettlementRate: detail.lastSettlementRate,
             avgFundingRate2d: detail.avgFundingRate2d,
             avgFundingRate7d: detail.avgFundingRate7d,
@@ -381,6 +404,61 @@ export default function CrossExchangeSearch() {
       }
     };
   }, [filteredRates, loading, debouncedSearchTerm, startDetailFetching]);
+
+  // Lazy-load l2Book spreads for Hyperliquid results when searching
+  useEffect(() => {
+    if (filteredRates.length === 0 || loading || !debouncedSearchTerm.trim()) {
+      if (l2BookAbortRef.current) {
+        l2BookAbortRef.current.abort();
+      }
+      setL2BookCache(new Map());
+      return;
+    }
+
+    const hlRates = filteredRates.filter((r) => r.exchange === "Hyperliquid");
+    if (hlRates.length === 0) return;
+
+    if (l2BookAbortRef.current) {
+      l2BookAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    l2BookAbortRef.current = controller;
+    const { signal } = controller;
+
+    const CONCURRENCY = 2;
+    const DELAY_MS = 150;
+
+    (async () => {
+      let index = 0;
+      const worker = async () => {
+        while (index < hlRates.length) {
+          if (signal.aborted) return;
+          const rate = hlRates[index++];
+          const symbol = rate.rawSymbol ?? rate.symbol;
+          try {
+            const spread = await fetchHyperliquidL2BookSpread(symbol, signal);
+            if (!signal.aborted) {
+              setL2BookCache((prev) => {
+                const next = new Map(prev);
+                next.set(getDetailKey(rate.exchange, rate.symbol), spread);
+                return next;
+              });
+            }
+          } catch {
+            // ignore individual failures
+          }
+          if (DELAY_MS > 0) {
+            await new Promise((r) => setTimeout(r, DELAY_MS));
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, hlRates.length) }, () => worker()));
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [filteredRates, loading, debouncedSearchTerm]);
 
   // Lazily fetch Lighter index prices on first search that returns Lighter matches.
   // The endpoint returns all 163 Lighter markets in one call, so we fetch once per session.
@@ -876,13 +954,28 @@ export default function CrossExchangeSearch() {
                 </span>
               </th>
                 <th
-                className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
-                onClick={() => handleSort("spread")}
+                className="px-2 py-2 text-right text-[11px] font-medium text-gray-400 xl:px-2.5"
               >
-                <span className="flex items-center justify-end whitespace-nowrap">
-                  买卖价差
-                  <SortIcon field="spread" />
-                </span>
+                <div className="flex items-center justify-end gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setSpreadSource((prev) => (prev === "l2book" ? "impact" : "l2book"))}
+                    className={`rounded px-1 py-0.5 text-[9px] font-medium transition-colors ${
+                      spreadSource === "l2book"
+                        ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                        : "bg-orange-500/20 text-orange-400 hover:bg-orange-500/30"
+                    }`}
+                  >
+                    {spreadSource === "l2book" ? "L2" : "Imp"}
+                  </button>
+                  <span
+                    className="cursor-pointer whitespace-nowrap hover:text-gray-200"
+                    onClick={() => handleSort("spread")}
+                  >
+                    买卖价差
+                    <SortIcon field="spread" />
+                  </span>
+                </div>
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
@@ -1049,13 +1142,27 @@ export default function CrossExchangeSearch() {
                   <td className="px-2 py-2 text-right xl:px-2.5">
                     {isLoading ? (
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                      ) : detail?.bidAskSpread != null ? (
-                      <span className="whitespace-nowrap font-mono text-xs text-gray-300">
-                        {detail.bidAskSpread.toFixed(4)}%
-                      </span>
-                    ) : (
-                      <span className="text-xs text-gray-600">--</span>
-                    )}
+                      ) : (() => {
+                        const detailKey = getDetailKey(rate.exchange, rate.symbol);
+                        let effectiveSpread: number | null | undefined;
+                        if (spreadSource === "l2book") {
+                          const l2 = l2BookCache.get(detailKey);
+                          effectiveSpread = l2 ?? detail?.bidAskSpread;
+                        } else {
+                          effectiveSpread = detail?.impactBidAskSpread ?? detail?.bidAskSpread;
+                        }
+                        const isL2Pending = spreadSource === "l2book" && rate.exchange === "Hyperliquid" && !l2BookCache.has(detailKey);
+                        if (isL2Pending) {
+                          return <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />;
+                        }
+                        return effectiveSpread != null ? (
+                          <span className="whitespace-nowrap font-mono text-xs text-gray-300">
+                            {effectiveSpread.toFixed(4)}%
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-600">--</span>
+                        );
+                      })()}
                   </td>
                   {/* Latest Settlement Rate */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
