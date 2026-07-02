@@ -17,7 +17,7 @@ import {
   hydrateOkxLatestSettlementRates,
   mapOkxDetailToMetrics,
 } from "@/lib/adapters/okx";
-import { fetchImpactSpread } from "@/lib/impact-price";
+import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
 import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume } from "@/lib/types";
 
 const categoryConfig: Record<string, CategoryConfig> = {

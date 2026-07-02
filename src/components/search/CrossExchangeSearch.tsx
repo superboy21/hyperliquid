@@ -10,7 +10,7 @@ import {
   type SearchExchangeRate,
   type DetailResult,
 } from "@/lib/search";
-import { fetchImpactSpread, DEFAULT_IMPACT_NOTIONAL, IMPACT_NOTIONAL_PRESETS } from "@/lib/impact-price";
+import { fetchImpactSpread, DEFAULT_IMPACT_NOTIONAL, IMPACT_NOTIONAL_PRESETS, type ImpactSpreadResult } from "@/lib/impact-price";
 import {
   fetchSearchCandles,
   type SearchChartInterval,
@@ -139,7 +139,7 @@ function getSortValue(
   rate: SearchExchangeRate & { detail?: DetailCache },
   field: SortField,
   spreadSource?: "top" | "impact",
-  impactPriceCache?: Map<string, number | "insufficient" | null>,
+  impactPriceCache?: Map<string, ImpactSpreadResult>,
 ): number | string {
   switch (field) {
     case "symbol":
@@ -167,7 +167,7 @@ function getSortValue(
     case "spread": {
       if (spreadSource === "impact" && impactPriceCache) {
         const impact = impactPriceCache.get(getDetailKey(rate.exchange, rate.symbol));
-        if (impact === null || impact === "insufficient") return Number.NEGATIVE_INFINITY;
+        if (impact === null || impact === "insufficient" || impact === "no_ctVal") return Number.NEGATIVE_INFINITY;
         if (impact != null) return impact;
       }
       return rate.detail?.bidAskSpread ?? -1;
@@ -203,7 +203,7 @@ export default function CrossExchangeSearch() {
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
   const [impactNotional, setImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
-  const [impactPriceCache, setImpactPriceCache] = useState<Map<string, number | "insufficient" | null>>(new Map());
+  const [impactPriceCache, setImpactPriceCache] = useState<Map<string, ImpactSpreadResult>>(new Map());
   const impactAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -437,7 +437,7 @@ export default function CrossExchangeSearch() {
     const DELAY_MS = 150;
     const notional = impactNotional;
 
-    const writeResult = (key: string, value: number | "insufficient" | null) => {
+    const writeResult = (key: string, value: ImpactSpreadResult) => {
       if (signal.aborted) return;
       setImpactPriceCache((prev) => {
         const next = new Map(prev);
@@ -1194,7 +1194,7 @@ export default function CrossExchangeSearch() {
                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
                        ) : (() => {
                          const detailKey = getDetailKey(rate.exchange, rate.symbol);
-                         let effectiveSpread: number | "insufficient" | null | undefined;
+                         let effectiveSpread: ImpactSpreadResult | undefined;
                          if (spreadSource === "top") {
                            effectiveSpread = detail?.bidAskSpread;
                          } else {
@@ -1208,6 +1208,9 @@ export default function CrossExchangeSearch() {
                          }
                          if (effectiveSpread === "insufficient") {
                            return <span className="text-xs text-yellow-500">深度不足</span>;
+                         }
+                         if (effectiveSpread === "no_ctVal") {
+                           return <span className="text-xs text-red-400">No ctVal</span>;
                          }
                          return effectiveSpread != null ? (
                            <span className="whitespace-nowrap font-mono text-xs text-gray-300">

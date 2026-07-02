@@ -11,6 +11,9 @@ export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
 
 // ==================== Types ====================
 
+/** Result of an impact spread computation. */
+export type ImpactSpreadResult = number | "insufficient" | "no_ctVal" | null;
+
 interface BookLevel {
   price: number;
   qty: number; // in base asset units
@@ -92,6 +95,47 @@ export function cacheGateMultipliers(
       gateMultiplierCache.set(t.contract, mult);
     }
   }
+}
+
+// ==================== OKX ctVal Cache ====================
+
+const okxCtValCache = new Map<string, number>();
+let okxCtValFetchPromise: Promise<void> | null = null;
+
+async function getOkxCtVal(instId: string, signal?: AbortSignal): Promise<number | null> {
+  // Check cache first
+  if (okxCtValCache.has(instId)) {
+    return okxCtValCache.get(instId)!;
+  }
+
+  // Dedup concurrent fetches — only one flight at a time
+  if (!okxCtValFetchPromise) {
+    okxCtValFetchPromise = (async () => {
+      try {
+        const response = await fetch(
+          "/api/okx?endpoint=public/instruments&instType=SWAP",
+          { signal, cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          data?: Array<{ instId: string; ctVal: string }>;
+        };
+        for (const inst of payload.data ?? []) {
+          const ctVal = Number.parseFloat(inst.ctVal ?? "");
+          if (Number.isFinite(ctVal) && ctVal > 0) {
+            okxCtValCache.set(inst.instId, ctVal);
+          }
+        }
+      } catch {
+        // ignore — cache stays empty, individual lookups will return null
+      } finally {
+        okxCtValFetchPromise = null;
+      }
+    })();
+  }
+
+  await okxCtValFetchPromise;
+  return okxCtValCache.get(instId) ?? null;
 }
 
 // ==================== Per-Exchange Fetchers ====================
@@ -213,6 +257,7 @@ async function fetchBinanceBook(
 
 async function fetchOkxBook(
   instId: string,
+  ctVal: number,
   signal?: AbortSignal,
 ): Promise<NormalizedBook | null> {
   try {
@@ -233,14 +278,15 @@ async function fetchOkxBook(
     const book = payload.data?.[0];
     if (!book) return null;
 
+    // OKX order book sz is in contracts — multiply by ctVal to get base asset qty
     const bids: BookLevel[] = (book.bids ?? []).map(([px, sz]) => ({
       price: Number.parseFloat(px),
-      qty: Number.parseFloat(sz),
+      qty: Number.parseFloat(sz) * ctVal,
     })).filter((l) => l.price > 0 && l.qty > 0);
 
     const asks: BookLevel[] = (book.asks ?? []).map(([px, sz]) => ({
       price: Number.parseFloat(px),
-      qty: Number.parseFloat(sz),
+      qty: Number.parseFloat(sz) * ctVal,
     })).filter((l) => l.price > 0 && l.qty > 0);
 
     return { bids, asks };
@@ -304,15 +350,16 @@ async function fetchLighterBook(
  * Fetch order book depth and compute impact spread for any exchange.
  *
  * @returns spread percentage (number), "insufficient" if book is available
- *          but total depth < notionalUsd on either side, or null if the
- *          book could not be fetched at all.
+ *          but total depth < notionalUsd on either side, "no_ctVal" if the
+ *          OKX contract multiplier is unavailable, or null if the book could
+ *          not be fetched at all.
  */
 export async function fetchImpactSpread(
   exchange: string,
   rawSymbol: string,
   signal?: AbortSignal,
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
-): Promise<number | "insufficient" | null> {
+): Promise<ImpactSpreadResult> {
   let book: NormalizedBook | null = null;
 
   switch (exchange) {
@@ -325,9 +372,13 @@ export async function fetchImpactSpread(
     case "Binance":
       book = await fetchBinanceBook(rawSymbol, signal);
       break;
-    case "OKX":
-      book = await fetchOkxBook(rawSymbol, signal);
+    case "OKX": {
+      // OKX order book sz is in contracts — need ctVal to convert to base qty
+      const ctVal = await getOkxCtVal(rawSymbol, signal);
+      if (ctVal === null) return "no_ctVal";
+      book = await fetchOkxBook(rawSymbol, ctVal, signal);
       break;
+    }
     case "Lighter":
       book = await fetchLighterBook(rawSymbol, signal);
       break;

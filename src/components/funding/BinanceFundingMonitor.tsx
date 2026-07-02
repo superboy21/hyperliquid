@@ -18,7 +18,7 @@ import ExchangeFundingMonitor, {
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
 } from "@/components/funding/ExchangeFundingMonitor";
-import { fetchImpactSpread } from "@/lib/impact-price";
+import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
 
 // ==================== Helpers ====================
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { ComponentType, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ImpactSpreadResult } from "@/lib/impact-price";
 
 // ==================== Types ====================
 
@@ -106,7 +107,7 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
   fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
-  fetchImpactSpread?: (symbol: string, notional?: number) => Promise<number | "insufficient" | null>;
+  fetchImpactSpread?: (symbol: string, notional?: number) => Promise<ImpactSpreadResult>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
@@ -232,7 +233,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
   const [impactNotional, setImpactNotional] = useState(1000);
   const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
-  const [impactSpread, setImpactSpread] = useState<number | "insufficient" | null>(null);
+  const [impactSpread, setImpactSpread] = useState<ImpactSpreadResult>(null);
   const [impactLoading, setImpactLoading] = useState(false);
   const impactAbortRef = useRef<AbortController | null>(null);
   const [hydrationTargetSymbols, setHydrationTargetSymbols] = useState<string[]>([]);
@@ -656,7 +657,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     }
 
     // Bid-ask spread: use detail data if available, otherwise compute from fundingRates
-    let bidAskSpread: number | "insufficient" | null = null;
+    let bidAskSpread: ImpactSpreadResult = null;
     if (spreadSource === "top") {
       if (detailBidAskSpread !== null) {
         bidAskSpread = detailBidAskSpread;
@@ -1120,8 +1121,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                          </div>
                        )}
                         <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
-                         {spreadSource === "impact" && impactLoading ? (
+                          {spreadSource === "impact" && impactLoading ? (
                            <span className="inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-yellow-400" />
+                         ) : selectedSummary.bidAskSpread === "no_ctVal" ? (
+                           "No ctVal"
                          ) : selectedSummary.bidAskSpread === "insufficient" ? (
                            "深度不足"
                          ) : typeof selectedSummary.bidAskSpread === "number" ? (

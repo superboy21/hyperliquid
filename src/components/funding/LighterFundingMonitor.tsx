@@ -13,7 +13,7 @@ import ExchangeFundingMonitor, {
   type IntervalFundingRateItem,
 } from "@/components/funding/ExchangeFundingMonitor";
 import { lighterFetch, getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
-import { fetchImpactSpread } from "@/lib/impact-price";
+import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
 
 // ==================== Lighter-specific Types ====================
 

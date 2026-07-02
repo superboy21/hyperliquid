@@ -27,7 +27,7 @@ import {
   type FundingRate,
   type IntervalFundingRateItem as HyperliquidIntervalRate,
 } from "@/lib/hyperliquid";
-import { fetchImpactSpread } from "@/lib/impact-price";
+import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
 
 // ==================== Helpers ====================
 
@@ -249,7 +249,7 @@ export default function FundingMonitor() {
           bidAskSpread,
         };
       },
-      fetchImpactSpread: async (symbol: string, notional = 1000): Promise<number | "insufficient" | null> => {
+      fetchImpactSpread: async (symbol: string, notional = 1000): Promise<ImpactSpreadResult> => {
         const apiSymbol = toApiSymbol(symbol);
         return fetchImpactSpread("Hyperliquid", apiSymbol, undefined, notional);
       },
