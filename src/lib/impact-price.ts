@@ -217,7 +217,7 @@ async function fetchOkxBook(
 ): Promise<NormalizedBook | null> {
   try {
     const response = await fetch(
-      `/api/okx?endpoint=market/books&instId=${encodeURIComponent(instId)}&sz=5`,
+      `/api/okx?endpoint=market/books&instId=${encodeURIComponent(instId)}&sz=20`,
       { signal, cache: "no-store" },
     );
 
