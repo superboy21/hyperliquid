@@ -185,7 +185,7 @@ export default function BinanceFundingMonitor() {
         resetOnFilterChange: true,
       },
       fetchDetailData,
-      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("Binance", symbol),
+      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("Binance", symbol, undefined, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

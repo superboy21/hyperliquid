@@ -249,9 +249,9 @@ export default function FundingMonitor() {
           bidAskSpread,
         };
       },
-      fetchImpactSpread: async (symbol: string): Promise<number | null> => {
+      fetchImpactSpread: async (symbol: string, notional = 1000): Promise<number | "insufficient" | null> => {
         const apiSymbol = toApiSymbol(symbol);
-        return fetchImpactSpread("Hyperliquid", apiSymbol);
+        return fetchImpactSpread("Hyperliquid", apiSymbol, undefined, notional);
       },
       renderExchangeBadge: (symbol: string) => (
         <>

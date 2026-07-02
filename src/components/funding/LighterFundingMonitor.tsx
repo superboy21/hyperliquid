@@ -482,7 +482,7 @@ export default function LighterFundingMonitor() {
         resetOnFilterChange: true,
       } satisfies HydrationPolicy,
       fetchDetailData,
-      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("Lighter", symbol),
+      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("Lighter", symbol, undefined, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

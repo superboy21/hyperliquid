@@ -145,7 +145,7 @@ export default function GateFundingMonitor() {
       fetchRates,
       hydrateRates,
       fetchDetailData: buildDetailData,
-      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("Gate.io", `${symbol}_USDT`),
+      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("Gate.io", `${symbol}_USDT`, undefined, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">Gate.io 永续合约</p>

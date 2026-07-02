@@ -10,7 +10,7 @@ import {
   type SearchExchangeRate,
   type DetailResult,
 } from "@/lib/search";
-import { fetchImpactSpread } from "@/lib/impact-price";
+import { fetchImpactSpread, DEFAULT_IMPACT_NOTIONAL, IMPACT_NOTIONAL_PRESETS } from "@/lib/impact-price";
 import {
   fetchSearchCandles,
   type SearchChartInterval,
@@ -139,7 +139,7 @@ function getSortValue(
   rate: SearchExchangeRate & { detail?: DetailCache },
   field: SortField,
   spreadSource?: "top" | "impact",
-  impactPriceCache?: Map<string, number | null>,
+  impactPriceCache?: Map<string, number | "insufficient" | null>,
 ): number | string {
   switch (field) {
     case "symbol":
@@ -167,7 +167,7 @@ function getSortValue(
     case "spread": {
       if (spreadSource === "impact" && impactPriceCache) {
         const impact = impactPriceCache.get(getDetailKey(rate.exchange, rate.symbol));
-        if (impact === null) return Number.NEGATIVE_INFINITY;
+        if (impact === null || impact === "insufficient") return Number.NEGATIVE_INFINITY;
         if (impact != null) return impact;
       }
       return rate.detail?.bidAskSpread ?? -1;
@@ -201,10 +201,10 @@ export default function CrossExchangeSearch() {
   const [detailCache, setDetailCache] = useState<Map<string, DetailCache>>(new Map());
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
-  const [impactPriceCache, setImpactPriceCache] = useState<Map<string, number | null>>(new Map());
+  const [impactNotional, setImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
+  const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
+  const [impactPriceCache, setImpactPriceCache] = useState<Map<string, number | "insufficient" | null>>(new Map());
   const impactAbortRef = useRef<AbortController | null>(null);
-  // Track which keys we've already requested to avoid re-fetching on every cache update.
-  const impactRequestedRef = useRef<Set<string>>(new Set());
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -408,7 +408,6 @@ export default function CrossExchangeSearch() {
       if (impactAbortRef.current) {
         impactAbortRef.current.abort();
       }
-      impactRequestedRef.current = new Set();
       setImpactPriceCache(new Map());
       return;
     }
@@ -420,15 +419,11 @@ export default function CrossExchangeSearch() {
       return;
     }
 
-    const ratesToFetch = filteredRates.filter(
-      (rate) => !impactRequestedRef.current.has(getDetailKey(rate.exchange, rate.symbol)),
-    );
-    if (ratesToFetch.length === 0) {
+    const pendingKeys = filteredRates
+      .map((rate) => getDetailKey(rate.exchange, rate.symbol))
+      .filter((key) => !impactPriceCache.has(key));
+    if (pendingKeys.length === 0) {
       return;
-    }
-
-    for (const rate of ratesToFetch) {
-      impactRequestedRef.current.add(getDetailKey(rate.exchange, rate.symbol));
     }
 
     if (impactAbortRef.current) {
@@ -440,38 +435,44 @@ export default function CrossExchangeSearch() {
 
     const CONCURRENCY = 2;
     const DELAY_MS = 150;
+    const notional = impactNotional;
+
+    const writeResult = (key: string, value: number | "insufficient" | null) => {
+      if (signal.aborted) return;
+      setImpactPriceCache((prev) => {
+        const next = new Map(prev);
+        next.set(key, value);
+        return next;
+      });
+    };
 
     (async () => {
       let index = 0;
       const worker = async () => {
-        while (index < ratesToFetch.length) {
+        while (index < pendingKeys.length) {
           if (signal.aborted) return;
-          const rate = ratesToFetch[index++];
+          const key = pendingKeys[index++];
+          const rate = filteredRates.find((r) => getDetailKey(r.exchange, r.symbol) === key);
+          if (!rate) continue;
           const symbol = rate.rawSymbol ?? rate.symbol;
           try {
-            const spread = await fetchImpactSpread(rate.exchange, symbol, signal);
-            if (!signal.aborted) {
-              setImpactPriceCache((prev) => {
-                const next = new Map(prev);
-                next.set(getDetailKey(rate.exchange, rate.symbol), spread);
-                return next;
-              });
-            }
+            const spread = await fetchImpactSpread(rate.exchange, symbol, signal, notional);
+            writeResult(key, spread);
           } catch {
-            // ignore individual failures
+            writeResult(key, null);
           }
           if (DELAY_MS > 0) {
             await new Promise((r) => setTimeout(r, DELAY_MS));
           }
         }
       };
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ratesToFetch.length) }, () => worker()));
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pendingKeys.length) }, () => worker()));
     })();
 
     return () => {
       controller.abort();
     };
-  }, [filteredRates, loading, debouncedSearchTerm, spreadSource]);
+  }, [filteredRates, loading, debouncedSearchTerm, spreadSource, impactNotional]);
 
   // Lazily fetch Lighter index prices on first search that returns Lighter matches.
   // The endpoint returns all 163 Lighter markets in one call, so we fetch once per session.
@@ -989,6 +990,42 @@ export default function CrossExchangeSearch() {
                     <SortIcon field="spread" />
                   </span>
                 </div>
+                {spreadSource === "impact" && (
+                  <div className="mt-1 flex items-center justify-end gap-1">
+                    <select
+                      value={impactNotionalCustom ? "custom" : String(impactNotional)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "custom") {
+                          setImpactNotionalCustom(true);
+                        } else {
+                          setImpactNotionalCustom(false);
+                          setImpactNotional(Number(v) || DEFAULT_IMPACT_NOTIONAL);
+                        }
+                      }}
+                      className="rounded border border-gray-600 bg-gray-800 px-1 py-0.5 text-[9px] text-gray-300"
+                    >
+                      {[...IMPACT_NOTIONAL_PRESETS].map((n) => (
+                        <option key={n} value={String(n)}>${n}</option>
+                      ))}
+                      <option value="custom">自定义</option>
+                    </select>
+                    {impactNotionalCustom && (
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={impactNotional}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          if (v > 0) setImpactNotional(v);
+                        }}
+                        className="w-16 rounded border border-gray-600 bg-gray-800 px-1 py-0.5 text-[9px] text-gray-300"
+                        placeholder="USD"
+                      />
+                    )}
+                  </div>
+                )}
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
@@ -1151,30 +1188,33 @@ export default function CrossExchangeSearch() {
                       <span className="text-xs text-gray-600">--</span>
                     )}
                   </td>
-                  {/* Bid-Ask Spread */}
-                  <td className="px-2 py-2 text-right xl:px-2.5">
-                    {isLoading ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
-                      ) : (() => {
-                        const detailKey = getDetailKey(rate.exchange, rate.symbol);
-                        let effectiveSpread: number | null | undefined;
-                        if (spreadSource === "top") {
-                          effectiveSpread = detail?.bidAskSpread;
-                        } else {
-                          effectiveSpread = impactPriceCache.has(detailKey)
-                            ? impactPriceCache.get(detailKey) ?? null
-                            : undefined;
-                        }
-                        const isImpactPending = spreadSource === "impact" && !impactPriceCache.has(detailKey);
-                        if (isImpactPending) {
-                          return <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />;
-                        }
-                        return effectiveSpread != null ? (
-                          <span className="whitespace-nowrap font-mono text-xs text-gray-300">
-                            {effectiveSpread.toFixed(4)}%
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-600">--</span>
+                   {/* Bid-Ask Spread */}
+                   <td className="px-2 py-2 text-right xl:px-2.5">
+                     {isLoading ? (
+                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />
+                       ) : (() => {
+                         const detailKey = getDetailKey(rate.exchange, rate.symbol);
+                         let effectiveSpread: number | "insufficient" | null | undefined;
+                         if (spreadSource === "top") {
+                           effectiveSpread = detail?.bidAskSpread;
+                         } else {
+                           effectiveSpread = impactPriceCache.has(detailKey)
+                             ? impactPriceCache.get(detailKey)
+                             : undefined;
+                         }
+                         const isImpactPending = spreadSource === "impact" && !impactPriceCache.has(detailKey);
+                         if (isImpactPending) {
+                           return <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />;
+                         }
+                         if (effectiveSpread === "insufficient") {
+                           return <span className="text-xs text-yellow-500">深度不足</span>;
+                         }
+                         return effectiveSpread != null ? (
+                           <span className="whitespace-nowrap font-mono text-xs text-gray-300">
+                             {effectiveSpread.toFixed(4)}%
+                           </span>
+                         ) : (
+                           <span className="text-xs text-gray-600">--</span>
                         );
                       })()}
                   </td>

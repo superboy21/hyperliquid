@@ -106,7 +106,7 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
   fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
-  fetchImpactSpread?: (symbol: string) => Promise<number | null>;
+  fetchImpactSpread?: (symbol: string, notional?: number) => Promise<number | "insufficient" | null>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
@@ -230,7 +230,9 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [hourlyFundingRates30d, setHourlyFundingRates30d] = useState<IntervalFundingRateItem[]>([]);
   const [detailBidAskSpread, setDetailBidAskSpread] = useState<number | null>(null);
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
-  const [impactSpread, setImpactSpread] = useState<number | null>(null);
+  const [impactNotional, setImpactNotional] = useState(1000);
+  const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
+  const [impactSpread, setImpactSpread] = useState<number | "insufficient" | null>(null);
   const [impactLoading, setImpactLoading] = useState(false);
   const impactAbortRef = useRef<AbortController | null>(null);
   const [hydrationTargetSymbols, setHydrationTargetSymbols] = useState<string[]>([]);
@@ -387,7 +389,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
     setImpactSpread(null);
     setImpactLoading(true);
-    fetchImpactSpread(selectedCoin).then((spread) => {
+    fetchImpactSpread(selectedCoin, impactNotional).then((spread) => {
       if (!controller.signal.aborted) {
         setImpactSpread(spread);
         setImpactLoading(false);
@@ -401,7 +403,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     return () => {
       controller.abort();
     };
-  }, [spreadSource, selectedCoin, fetchImpactSpread]);
+  }, [spreadSource, selectedCoin, fetchImpactSpread, impactNotional]);
 
   // Clear impact spread when coin changes
   useEffect(() => {
@@ -654,7 +656,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     }
 
     // Bid-ask spread: use detail data if available, otherwise compute from fundingRates
-    let bidAskSpread: number | null = null;
+    let bidAskSpread: number | "insufficient" | null = null;
     if (spreadSource === "top") {
       if (detailBidAskSpread !== null) {
         bidAskSpread = detailBidAskSpread;
@@ -1065,29 +1067,69 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                       <p className="mt-1 text-xs text-gray-500">年化</p>
                     </div>
                     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs text-gray-400">当前买卖价差</p>
-                        {fetchImpactSpread && (
-                          <button
-                            type="button"
-                            onClick={() => setSpreadSource((prev) => (prev === "top" ? "impact" : "top"))}
-                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                              spreadSource === "top"
-                                ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
-                                : "bg-orange-500/20 text-orange-400 hover:bg-orange-500/30"
-                            }`}
-                          >
-                            {spreadSource === "top" ? "Top" : "Impact"}
-                          </button>
-                        )}
-                      </div>
-                      <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
-                        {spreadSource === "impact" && impactLoading ? (
-                          <span className="inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-yellow-400" />
-                        ) : selectedSummary.bidAskSpread !== null ? (
-                          `${selectedSummary.bidAskSpread.toFixed(4)}%`
-                        ) : "--"}
-                      </p>
+                       <div className="flex items-center justify-between">
+                         <p className="text-xs text-gray-400">当前买卖价差</p>
+                         {fetchImpactSpread && (
+                           <button
+                             type="button"
+                             onClick={() => setSpreadSource((prev) => (prev === "top" ? "impact" : "top"))}
+                             className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                               spreadSource === "top"
+                                 ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                                 : "bg-orange-500/20 text-orange-400 hover:bg-orange-500/30"
+                             }`}
+                           >
+                             {spreadSource === "top" ? "Top" : "Impact"}
+                           </button>
+                         )}
+                       </div>
+                       {spreadSource === "impact" && (
+                         <div className="mt-2 flex items-center gap-1">
+                           <select
+                             value={impactNotionalCustom ? "custom" : String(impactNotional)}
+                             onChange={(e) => {
+                               const v = e.target.value;
+                               if (v === "custom") {
+                                 setImpactNotionalCustom(true);
+                               } else {
+                                 setImpactNotionalCustom(false);
+                                 setImpactNotional(Number(v) || 1000);
+                               }
+                             }}
+                             className="rounded border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+                           >
+                             {[200, 1000, 5000, 10000].map((n) => (
+                               <option key={n} value={String(n)}>${n}</option>
+                             ))}
+                             <option value="custom">自定义</option>
+                           </select>
+                           {impactNotionalCustom && (
+                             <input
+                               type="number"
+                               min={1}
+                               step={1}
+                               value={impactNotional}
+                               onChange={(e) => {
+                                 const v = parseInt(e.target.value, 10);
+                                 if (v > 0) setImpactNotional(v);
+                               }}
+                               className="w-20 rounded border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+                               placeholder="USD"
+                             />
+                           )}
+                         </div>
+                       )}
+                        <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
+                         {spreadSource === "impact" && impactLoading ? (
+                           <span className="inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-yellow-400" />
+                         ) : selectedSummary.bidAskSpread === "insufficient" ? (
+                           "深度不足"
+                         ) : typeof selectedSummary.bidAskSpread === "number" ? (
+                           `${selectedSummary.bidAskSpread.toFixed(4)}%`
+                         ) : (
+                           "--"
+                         )}
+                       </p>
                       <p className="mt-1 text-xs text-gray-500">(Ask-Bid)/Mid</p>
                     </div>
                   </div>

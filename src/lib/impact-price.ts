@@ -1,12 +1,13 @@
 // ==================== Impact Price (VWAP) Calculation ====================
-// Computes volume-weighted average price for a $1000 notional sweep
-// across order book depth for all 5 exchanges.
+// Computes volume-weighted average price by sweeping order book depth
+// across a configurable notional threshold (default $1000) for all 5 exchanges.
 
 import { fetchL2Book } from "./hyperliquid";
 import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
 
-const IMPACT_NOTIONAL_USD = 1000;
+export const DEFAULT_IMPACT_NOTIONAL = 1000;
+export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
 
 // ==================== Types ====================
 
@@ -24,12 +25,12 @@ interface NormalizedBook {
 
 /**
  * Compute VWAP impact price by sweeping order book levels
- * until cumulative notional >= $1000.
- * Returns null if total depth < $1000.
+ * until cumulative notional >= notionalUsd.
+ * Returns null if total depth < notionalUsd.
  */
-function computeImpactPrice(book: NormalizedBook, side: "bid" | "ask"): number | null {
+function computeImpactPrice(book: NormalizedBook, side: "bid" | "ask", notionalUsd: number): number | null {
   const levels = side === "bid" ? book.bids : book.asks;
-  if (levels.length === 0) return null;
+  if (levels.length === 0 || notionalUsd <= 0) return null;
 
   let cumulativeNotional = 0;
   let cumulativeQty = 0;
@@ -37,11 +38,11 @@ function computeImpactPrice(book: NormalizedBook, side: "bid" | "ask"): number |
   for (const level of levels) {
     const levelNotional = level.price * level.qty;
 
-    if (cumulativeNotional + levelNotional >= IMPACT_NOTIONAL_USD) {
-      const remaining = IMPACT_NOTIONAL_USD - cumulativeNotional;
+    if (cumulativeNotional + levelNotional >= notionalUsd) {
+      const remaining = notionalUsd - cumulativeNotional;
       const partialQty = remaining / level.price;
       cumulativeQty += partialQty;
-      cumulativeNotional = IMPACT_NOTIONAL_USD;
+      cumulativeNotional = notionalUsd;
       break;
     }
 
@@ -49,20 +50,20 @@ function computeImpactPrice(book: NormalizedBook, side: "bid" | "ask"): number |
     cumulativeNotional += levelNotional;
   }
 
-  if (cumulativeNotional < IMPACT_NOTIONAL_USD || cumulativeQty <= 0) {
+  if (cumulativeNotional < notionalUsd || cumulativeQty <= 0) {
     return null; // insufficient depth
   }
 
-  return IMPACT_NOTIONAL_USD / cumulativeQty;
+  return notionalUsd / cumulativeQty;
 }
 
 /**
  * Compute impact spread from a normalized book.
  * Returns spread percentage, or null if insufficient depth on either side.
  */
-function computeImpactSpread(book: NormalizedBook): number | null {
-  const impactBid = computeImpactPrice(book, "bid");
-  const impactAsk = computeImpactPrice(book, "ask");
+function computeImpactSpread(book: NormalizedBook, notionalUsd: number): number | null {
+  const impactBid = computeImpactPrice(book, "bid", notionalUsd);
+  const impactAsk = computeImpactPrice(book, "ask", notionalUsd);
 
   if (impactBid == null || impactAsk == null || impactBid <= 0 || impactAsk <= 0) {
     return null;
@@ -301,17 +302,17 @@ async function fetchLighterBook(
 
 /**
  * Fetch order book depth and compute impact spread for any exchange.
- * Returns spread percentage, or null if insufficient depth (< $1000).
  *
- * @param exchange - Exchange name: "Hyperliquid", "Gate.io", "Binance", "OKX", "Lighter"
- * @param rawSymbol - Raw API symbol: e.g. "BTC", "BTC_USDT", "BTCUSDT", "BTC-USDT-SWAP"
- * @param signal - Optional abort signal
+ * @returns spread percentage (number), "insufficient" if book is available
+ *          but total depth < notionalUsd on either side, or null if the
+ *          book could not be fetched at all.
  */
 export async function fetchImpactSpread(
   exchange: string,
   rawSymbol: string,
   signal?: AbortSignal,
-): Promise<number | null> {
+  notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
+): Promise<number | "insufficient" | null> {
   let book: NormalizedBook | null = null;
 
   switch (exchange) {
@@ -334,6 +335,8 @@ export async function fetchImpactSpread(
       return null;
   }
 
-  if (!book) return null;
-  return computeImpactSpread(book);
+  if (!book) return null; // fetch error
+  const spread = computeImpactSpread(book, notionalUsd);
+  if (spread === null) return "insufficient"; // book ok, depth < notional
+  return spread;
 }
