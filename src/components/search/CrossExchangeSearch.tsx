@@ -992,11 +992,13 @@ export default function CrossExchangeSearch() {
                   </span>
                 </div>
                 {spreadSource === "impact" && (() => {
-                    const isCustomNotional = impactNotionalCustom || !((IMPACT_NOTIONAL_PRESETS as readonly number[]).includes(impactNotional));
+                    const presets = IMPACT_NOTIONAL_PRESETS as readonly number[];
+                    const isEditing = impactNotionalCustom;
+                    const isCustomValue = !presets.includes(impactNotional);
                     return (
                   <div className="mt-1 flex items-center justify-end gap-1">
                     <select
-                      value={isCustomNotional ? "custom" : String(impactNotional)}
+                      value={isEditing ? "custom" : String(impactNotional)}
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v === "custom") {
@@ -1010,12 +1012,15 @@ export default function CrossExchangeSearch() {
                       }}
                       className="rounded border border-gray-600 bg-gray-800 px-1 py-0.5 text-[9px] text-gray-300"
                     >
-                      {[...IMPACT_NOTIONAL_PRESETS].map((n) => (
+                      {presets.map((n) => (
                         <option key={n} value={String(n)}>${n}</option>
                       ))}
+                      {!isEditing && isCustomValue && (
+                        <option key="customVal" value={String(impactNotional)}>${impactNotional}</option>
+                      )}
                       <option value="custom">自定义</option>
                     </select>
-                    {impactNotionalCustom && (
+                    {isEditing && (
                       <>
                         <input
                           type="number"
