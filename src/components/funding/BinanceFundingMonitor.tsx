@@ -18,6 +18,7 @@ import ExchangeFundingMonitor, {
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
 } from "@/components/funding/ExchangeFundingMonitor";
+import { fetchImpactSpread } from "@/lib/impact-price";
 
 // ==================== Helpers ====================
 
@@ -184,6 +185,7 @@ export default function BinanceFundingMonitor() {
         resetOnFilterChange: true,
       },
       fetchDetailData,
+      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("Binance", symbol),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

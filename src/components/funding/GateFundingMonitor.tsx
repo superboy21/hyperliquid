@@ -16,7 +16,8 @@ import ExchangeFundingMonitor, {
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
 } from "@/components/funding/ExchangeFundingMonitor";
-import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume, type CandleSnapshotItem as GateCandle, type IntervalFundingRateItem as GateIntervalRate } from "@/lib/gateio";
+import { fetchImpactSpread, cacheGateMultipliers } from "@/lib/impact-price";
+import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume, getAllGateTickers, type CandleSnapshotItem as GateCandle, type IntervalFundingRateItem as GateIntervalRate } from "@/lib/gateio";
 
 // ==================== Category Config ====================
 
@@ -95,7 +96,12 @@ export default function GateFundingMonitor() {
   }, []);
 
   const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
-    return fetchGateFundingMonitorRates();
+    const [rates, tickers] = await Promise.all([
+      fetchGateFundingMonitorRates(),
+      getAllGateTickers(),
+    ]);
+    cacheGateMultipliers(tickers);
+    return rates;
   }, []);
 
   const hydrateRates = useCallback(async (
@@ -136,6 +142,7 @@ export default function GateFundingMonitor() {
       fetchRates,
       hydrateRates,
       fetchDetailData: buildDetailData,
+      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("Gate.io", `${symbol}_USDT`),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">Gate.io 永续合约</p>

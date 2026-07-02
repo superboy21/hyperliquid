@@ -17,6 +17,7 @@ import {
   hydrateOkxLatestSettlementRates,
   mapOkxDetailToMetrics,
 } from "@/lib/adapters/okx";
+import { fetchImpactSpread } from "@/lib/impact-price";
 import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume } from "@/lib/types";
 
 const categoryConfig: Record<string, CategoryConfig> = {
@@ -120,6 +121,7 @@ export default function OkxFundingMonitor() {
         resetOnFilterChange: true,
       },
       fetchDetailData,
+      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("OKX", `${symbol}-USDT-SWAP`),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">OKX 永续合约</p>

@@ -67,7 +67,6 @@ export interface DetailData {
   intervalFundingRates: IntervalFundingRateItem[];
   hourlyFundingRates30d: IntervalFundingRateItem[];
   bidAskSpread?: number | null;
-  impactBidAskSpread?: number | null;
   latestSettlementRate?: number | null;
 }
 
@@ -107,7 +106,7 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
   fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
-  fetchL2BookSpread?: (symbol: string) => Promise<number | null>;
+  fetchImpactSpread?: (symbol: string) => Promise<number | null>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
@@ -205,7 +204,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     hydrateRates,
     hydrateOI,
     fetchDetailData,
-    fetchL2BookSpread,
+    fetchImpactSpread,
     renderExchangeBadge,
     renderInfoSection,
     renderExtraStatsCard,
@@ -230,11 +229,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [intervalFundingRates, setIntervalFundingRates] = useState<IntervalFundingRateItem[]>([]);
   const [hourlyFundingRates30d, setHourlyFundingRates30d] = useState<IntervalFundingRateItem[]>([]);
   const [detailBidAskSpread, setDetailBidAskSpread] = useState<number | null>(null);
-  const [impactBidAskSpread, setImpactBidAskSpread] = useState<number | null>(null);
-  const [spreadSource, setSpreadSource] = useState<"l2book" | "impact">("l2book");
-  const [l2BookSpread, setL2BookSpread] = useState<number | null>(null);
-  const [l2BookLoading, setL2BookLoading] = useState(false);
-  const l2BookAbortRef = useRef<AbortController | null>(null);
+  const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
+  const [impactSpread, setImpactSpread] = useState<number | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const impactAbortRef = useRef<AbortController | null>(null);
   const [hydrationTargetSymbols, setHydrationTargetSymbols] = useState<string[]>([]);
   const [hydrationKey, setHydrationKey] = useState(0);
   const fundingRatesRef = useRef<ExchangeFundingRate[]>([]);
@@ -331,7 +329,6 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       setIntervalFundingRates([]);
       setHourlyFundingRates30d([]);
       setDetailBidAskSpread(null);
-      setImpactBidAskSpread(null);
 
       try {
         const currentRates = fundingRatesRef.current;
@@ -344,7 +341,6 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         setIntervalFundingRates(detailData.intervalFundingRates);
         setHourlyFundingRates30d(detailData.hourlyFundingRates30d);
         setDetailBidAskSpread(detailData.bidAskSpread ?? null);
-        setImpactBidAskSpread(detailData.impactBidAskSpread ?? null);
         if (Number.isFinite(detailData.latestSettlementRate)) {
           setFundingRates((prev) => {
             const next = prev.map((rate) => {
@@ -376,39 +372,39 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     }
   }, [handleFetchDetail, selectedCoin, selectedInterval]);
 
-  // Lazy-load l2Book spread when toggle switches to "l2book"
+  // Lazy-load impact spread when toggle switches to "impact"
   useEffect(() => {
-    if (spreadSource !== "l2book" || !selectedCoin || !fetchL2BookSpread) {
+    if (spreadSource !== "impact" || !selectedCoin || !fetchImpactSpread) {
       return;
     }
 
-    if (l2BookAbortRef.current) {
-      l2BookAbortRef.current.abort();
+    if (impactAbortRef.current) {
+      impactAbortRef.current.abort();
     }
     const controller = new AbortController();
-    l2BookAbortRef.current = controller;
+    impactAbortRef.current = controller;
 
-    setL2BookSpread(null);
-    setL2BookLoading(true);
-    fetchL2BookSpread(selectedCoin).then((spread) => {
+    setImpactSpread(null);
+    setImpactLoading(true);
+    fetchImpactSpread(selectedCoin).then((spread) => {
       if (!controller.signal.aborted) {
-        setL2BookSpread(spread);
-        setL2BookLoading(false);
+        setImpactSpread(spread);
+        setImpactLoading(false);
       }
     }).catch(() => {
       if (!controller.signal.aborted) {
-        setL2BookLoading(false);
+        setImpactLoading(false);
       }
     });
 
     return () => {
       controller.abort();
     };
-  }, [spreadSource, selectedCoin, fetchL2BookSpread]);
+  }, [spreadSource, selectedCoin, fetchImpactSpread]);
 
-  // Clear l2Book spread when coin changes
+  // Clear impact spread when coin changes
   useEffect(() => {
-    setL2BookSpread(null);
+    setImpactSpread(null);
   }, [selectedCoin]);
 
   // Filter and sort
@@ -657,10 +653,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
     // Bid-ask spread: use detail data if available, otherwise compute from fundingRates
     let bidAskSpread: number | null = null;
-    if (spreadSource === "l2book" && l2BookSpread !== null) {
-      bidAskSpread = l2BookSpread;
-    } else if (spreadSource === "impact" && impactBidAskSpread !== null) {
-      bidAskSpread = impactBidAskSpread;
+    if (spreadSource === "top") {
+      bidAskSpread = detailBidAskSpread;
+    } else if (spreadSource === "impact" && impactSpread !== null) {
+      bidAskSpread = impactSpread;
     } else if (detailBidAskSpread !== null) {
       bidAskSpread = detailBidAskSpread;
     } else if (selectedCoin) {
@@ -680,7 +676,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       historicalVolatility,
       bidAskSpread,
     };
-  }, [candles, selectedInterval, selectedCoin, fundingRates, detailBidAskSpread, impactBidAskSpread, spreadSource, l2BookSpread]);
+  }, [candles, selectedInterval, selectedCoin, fundingRates, detailBidAskSpread, impactSpread, spreadSource]);
 
   const selectedFundingInterval = useMemo(() => {
     if (!selectedCoin) return 28800;
@@ -1069,22 +1065,22 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
                       <div className="flex items-center justify-between">
                         <p className="text-xs text-gray-400">当前买卖价差</p>
-                        {exchangeName === "Hyperliquid" && impactBidAskSpread !== null && (
+                        {(impactSpread !== null || impactLoading) && (
                           <button
                             type="button"
-                            onClick={() => setSpreadSource((prev) => (prev === "l2book" ? "impact" : "l2book"))}
+                            onClick={() => setSpreadSource((prev) => (prev === "top" ? "impact" : "top"))}
                             className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                              spreadSource === "l2book"
+                              spreadSource === "top"
                                 ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
                                 : "bg-orange-500/20 text-orange-400 hover:bg-orange-500/30"
                             }`}
                           >
-                            {spreadSource === "l2book" ? "L2Book" : "Impact"}
+                            {spreadSource === "top" ? "Top" : "Impact"}
                           </button>
                         )}
                       </div>
                       <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
-                        {spreadSource === "l2book" && l2BookLoading ? (
+                        {spreadSource === "impact" && impactLoading ? (
                           <span className="inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-yellow-400" />
                         ) : selectedSummary.bidAskSpread !== null ? (
                           `${selectedSummary.bidAskSpread.toFixed(4)}%`

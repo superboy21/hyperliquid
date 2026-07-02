@@ -12,7 +12,6 @@ import ExchangeFundingMonitor, {
   type HydrationPolicy,
 } from "@/components/funding/ExchangeFundingMonitor";
 import {
-  fetchL2BookBestBidAsk,
   formatAnnualizedRate,
   formatFundingRate,
   formatPrice,
@@ -27,6 +26,7 @@ import {
   type FundingRate,
   type IntervalFundingRateItem as HyperliquidIntervalRate,
 } from "@/lib/hyperliquid";
+import { fetchImpactSpread } from "@/lib/impact-price";
 
 // ==================== Helpers ====================
 
@@ -238,16 +238,11 @@ export default function FundingMonitor() {
           hourlyFundingRates30d: hourlyFundingRates,
           latestSettlementRate: Number.isFinite(latestSettlementRate) ? latestSettlementRate : null,
           bidAskSpread,
-          impactBidAskSpread: bidAskSpread,
         };
       },
-      fetchL2BookSpread: async (symbol: string): Promise<number | null> => {
+      fetchImpactSpread: async (symbol: string): Promise<number | null> => {
         const apiSymbol = toApiSymbol(symbol);
-        const l2Book = await fetchL2BookBestBidAsk(apiSymbol);
-        if (!l2Book) return null;
-        const midPrice = (l2Book.bestBid + l2Book.bestAsk) / 2;
-        if (midPrice <= 0) return null;
-        return ((l2Book.bestAsk - l2Book.bestBid) / midPrice) * 100;
+        return fetchImpactSpread("Hyperliquid", apiSymbol);
       },
       renderExchangeBadge: (symbol: string) => (
         <>

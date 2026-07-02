@@ -13,6 +13,7 @@ import ExchangeFundingMonitor, {
   type IntervalFundingRateItem,
 } from "@/components/funding/ExchangeFundingMonitor";
 import { lighterFetch, getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
+import { fetchImpactSpread } from "@/lib/impact-price";
 
 // ==================== Lighter-specific Types ====================
 
@@ -481,6 +482,7 @@ export default function LighterFundingMonitor() {
         resetOnFilterChange: true,
       } satisfies HydrationPolicy,
       fetchDetailData,
+      fetchImpactSpread: async (symbol: string) => fetchImpactSpread("Lighter", symbol),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

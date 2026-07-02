@@ -3,7 +3,6 @@
 // Hyperliquid, Gate.io, Binance, and Lighter exchanges.
 
 import {
-  fetchL2BookBestBidAsk,
   getAllFundingRatesWithHistory,
   getCandleSnapshot as hlGetCandleSnapshot,
   getFundingHistoryForDays as hlGetFundingHistoryForDays,
@@ -82,7 +81,6 @@ export interface DetailResult {
   avgFundingRate2d: number | null;
   historicalVolatility: number | null;
   bidAskSpread: number | null;
-  impactBidAskSpread?: number | null;
   avgFundingRate7d: number | null;
   avgFundingRate30d: number | null;
 }
@@ -533,23 +531,9 @@ async function fetchHyperliquidDetail(
     avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
-    impactBidAskSpread: computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
     avgFundingRate30d: avg30d,
   };
-}
-
-/**
- * Fetch only the l2Book top-of-book spread for a Hyperliquid symbol.
- * Used for lazy loading when the user toggles to L2Book mode.
- */
-export async function fetchHyperliquidL2BookSpread(
-  symbol: string,
-  signal?: AbortSignal,
-): Promise<number | null> {
-  const l2Book = await fetchL2BookBestBidAsk(symbol, signal);
-  if (!l2Book) return null;
-  return computeBidAskSpread(l2Book.bestBid, l2Book.bestAsk);
 }
 
 // ==================== Gate.io Detail ====================

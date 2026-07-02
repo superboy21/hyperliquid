@@ -6,11 +6,11 @@ import {
   filterByKeyword,
   batchFetchDetails,
   fetchLighterIndexPrices,
-  fetchHyperliquidL2BookSpread,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
   type DetailResult,
 } from "@/lib/search";
+import { fetchImpactSpread } from "@/lib/impact-price";
 import {
   fetchSearchCandles,
   type SearchChartInterval,
@@ -66,7 +66,6 @@ interface SortConfig {
 interface DetailCache {
   historicalVolatility: number | null;
   bidAskSpread: number | null;
-  impactBidAskSpread: number | null;
   latestSettlementRate: number | null;
   avgFundingRate2d: number | null;
   avgFundingRate7d: number | null;
@@ -139,8 +138,8 @@ function formatSearchSettlementPeriodRate(rate: number, exchange: string): strin
 function getSortValue(
   rate: SearchExchangeRate & { detail?: DetailCache },
   field: SortField,
-  spreadSource?: "l2book" | "impact",
-  l2BookCache?: Map<string, number | null>,
+  spreadSource?: "top" | "impact",
+  impactPriceCache?: Map<string, number | null>,
 ): number | string {
   switch (field) {
     case "symbol":
@@ -166,12 +165,9 @@ function getSortValue(
     case "volatility":
       return rate.detail?.historicalVolatility ?? -1;
     case "spread": {
-      if (spreadSource === "l2book" && l2BookCache) {
-        const l2 = l2BookCache.get(getDetailKey(rate.exchange, rate.symbol));
-        if (l2 != null) return l2;
-      }
-      if (spreadSource === "impact" && rate.detail?.impactBidAskSpread != null) {
-        return rate.detail.impactBidAskSpread;
+      if (spreadSource === "impact" && impactPriceCache) {
+        const impact = impactPriceCache.get(getDetailKey(rate.exchange, rate.symbol));
+        if (impact != null) return impact;
       }
       return rate.detail?.bidAskSpread ?? -1;
     }
@@ -203,9 +199,9 @@ export default function CrossExchangeSearch() {
   const [sortConfig, setSortConfig] = useState<SortConfig>({ field: "fundingRate", descending: true });
   const [detailCache, setDetailCache] = useState<Map<string, DetailCache>>(new Map());
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
-  const [spreadSource, setSpreadSource] = useState<"l2book" | "impact">("l2book");
-  const [l2BookCache, setL2BookCache] = useState<Map<string, number | null>>(new Map());
-  const l2BookAbortRef = useRef<AbortController | null>(null);
+  const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
+  const [impactPriceCache, setImpactPriceCache] = useState<Map<string, number | null>>(new Map());
+  const impactAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -281,13 +277,13 @@ export default function CrossExchangeSearch() {
         { ...a, detail: detailCache.get(getDetailKey(a.exchange, a.symbol)) },
         sortConfig.field,
         spreadSource,
-        l2BookCache,
+        impactPriceCache,
       );
       const bVal = getSortValue(
         { ...b, detail: detailCache.get(getDetailKey(b.exchange, b.symbol)) },
         sortConfig.field,
         spreadSource,
-        l2BookCache,
+        impactPriceCache,
       );
 
       let cmp = 0;
@@ -299,7 +295,7 @@ export default function CrossExchangeSearch() {
       return sortConfig.descending ? -cmp : cmp;
     });
     return sorted;
-  }, [filteredRates, sortConfig, detailCache, spreadSource, l2BookCache]);
+  }, [filteredRates, sortConfig, detailCache, spreadSource, impactPriceCache]);
 
   // Filter chart data by selected time range
   const filteredChartData = useMemo(() => {
@@ -359,7 +355,6 @@ export default function CrossExchangeSearch() {
           next.set(key, {
             historicalVolatility: detail.historicalVolatility,
             bidAskSpread: detail.bidAskSpread,
-            impactBidAskSpread: detail.impactBidAskSpread ?? null,
             latestSettlementRate: detail.lastSettlementRate,
             avgFundingRate2d: detail.avgFundingRate2d,
             avgFundingRate7d: detail.avgFundingRate7d,
@@ -405,24 +400,23 @@ export default function CrossExchangeSearch() {
     };
   }, [filteredRates, loading, debouncedSearchTerm, startDetailFetching]);
 
-  // Lazy-load l2Book spreads for Hyperliquid results when searching
+  // Lazy-load impact spreads for ALL exchange results when searching
   useEffect(() => {
     if (filteredRates.length === 0 || loading || !debouncedSearchTerm.trim()) {
-      if (l2BookAbortRef.current) {
-        l2BookAbortRef.current.abort();
+      if (impactAbortRef.current) {
+        impactAbortRef.current.abort();
       }
-      setL2BookCache(new Map());
+      setImpactPriceCache(new Map());
       return;
     }
 
-    const hlRates = filteredRates.filter((r) => r.exchange === "Hyperliquid");
-    if (hlRates.length === 0) return;
+    const ratesToFetch = filteredRates;
 
-    if (l2BookAbortRef.current) {
-      l2BookAbortRef.current.abort();
+    if (impactAbortRef.current) {
+      impactAbortRef.current.abort();
     }
     const controller = new AbortController();
-    l2BookAbortRef.current = controller;
+    impactAbortRef.current = controller;
     const { signal } = controller;
 
     const CONCURRENCY = 2;
@@ -431,14 +425,14 @@ export default function CrossExchangeSearch() {
     (async () => {
       let index = 0;
       const worker = async () => {
-        while (index < hlRates.length) {
+        while (index < ratesToFetch.length) {
           if (signal.aborted) return;
-          const rate = hlRates[index++];
+          const rate = ratesToFetch[index++];
           const symbol = rate.rawSymbol ?? rate.symbol;
           try {
-            const spread = await fetchHyperliquidL2BookSpread(symbol, signal);
+            const spread = await fetchImpactSpread(rate.exchange, symbol, signal);
             if (!signal.aborted) {
-              setL2BookCache((prev) => {
+              setImpactPriceCache((prev) => {
                 const next = new Map(prev);
                 next.set(getDetailKey(rate.exchange, rate.symbol), spread);
                 return next;
@@ -452,7 +446,7 @@ export default function CrossExchangeSearch() {
           }
         }
       };
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, hlRates.length) }, () => worker()));
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ratesToFetch.length) }, () => worker()));
     })();
 
     return () => {
@@ -959,14 +953,14 @@ export default function CrossExchangeSearch() {
                 <div className="flex items-center justify-end gap-1">
                   <button
                     type="button"
-                    onClick={() => setSpreadSource((prev) => (prev === "l2book" ? "impact" : "l2book"))}
+                    onClick={() => setSpreadSource((prev) => (prev === "top" ? "impact" : "top"))}
                     className={`rounded px-1 py-0.5 text-[9px] font-medium transition-colors ${
-                      spreadSource === "l2book"
+                      spreadSource === "top"
                         ? "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
                         : "bg-orange-500/20 text-orange-400 hover:bg-orange-500/30"
                     }`}
                   >
-                    {spreadSource === "l2book" ? "L2" : "Imp"}
+                    {spreadSource === "top" ? "Top" : "Impact"}
                   </button>
                   <span
                     className="cursor-pointer whitespace-nowrap hover:text-gray-200"
@@ -1145,14 +1139,15 @@ export default function CrossExchangeSearch() {
                       ) : (() => {
                         const detailKey = getDetailKey(rate.exchange, rate.symbol);
                         let effectiveSpread: number | null | undefined;
-                        if (spreadSource === "l2book") {
-                          const l2 = l2BookCache.get(detailKey);
-                          effectiveSpread = l2 ?? detail?.bidAskSpread;
+                        if (spreadSource === "top") {
+                          effectiveSpread = detail?.bidAskSpread;
                         } else {
-                          effectiveSpread = detail?.impactBidAskSpread ?? detail?.bidAskSpread;
+                          effectiveSpread = impactPriceCache.has(detailKey)
+                            ? impactPriceCache.get(detailKey) ?? null
+                            : undefined;
                         }
-                        const isL2Pending = spreadSource === "l2book" && rate.exchange === "Hyperliquid" && !l2BookCache.has(detailKey);
-                        if (isL2Pending) {
+                        const isImpactPending = spreadSource === "impact" && !impactPriceCache.has(detailKey);
+                        if (isImpactPending) {
                           return <span className="inline-block h-3 w-3 animate-spin rounded-full border-b border-blue-500" />;
                         }
                         return effectiveSpread != null ? (
