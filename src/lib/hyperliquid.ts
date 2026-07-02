@@ -121,6 +121,33 @@ async function fetchHyperliquidInfo<T>(
 }
 
 /**
+ * Fetch the full L2 order book for a coin.
+ */
+export async function fetchL2Book(
+  coin: string,
+  signal?: AbortSignal,
+): Promise<{ levels: Array<Array<{ px: string; sz: string; n: number }>> } | null> {
+  try {
+    const data = await fetchHyperliquidInfo<{
+      coin: string;
+      levels: Array<Array<{ px: string; sz: string; n: number }>>;
+    }>({ type: "l2Book", coin }, 3, signal);
+
+    if (!data?.levels || data.levels.length < 2) {
+      return null;
+    }
+
+    return { levels: data.levels };
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return null;
+    }
+    console.error(`Error fetching full l2Book for ${coin}:`, error);
+    return null;
+  }
+}
+
+/**
  * Fetch the real top-of-book best bid/ask from the l2Book endpoint.
  * Returns { bestBid, bestAsk } or null if the request fails.
  * Unlike impactPxs (which are depth-weighted prices), this gives the true
@@ -131,10 +158,7 @@ export async function fetchL2BookBestBidAsk(
   signal?: AbortSignal,
 ): Promise<{ bestBid: number; bestAsk: number } | null> {
   try {
-    const data = await fetchHyperliquidInfo<{
-      coin: string;
-      levels: Array<Array<{ px: string; sz: string; n: number }>>;
-    }>({ type: "l2Book", coin }, 3, signal);
+    const data = await fetchL2Book(coin, signal);
 
     if (!data?.levels || data.levels.length < 2) {
       return null;

@@ -375,6 +375,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   // Lazy-load impact spread when toggle switches to "impact"
   useEffect(() => {
     if (spreadSource !== "impact" || !selectedCoin || !fetchImpactSpread) {
+      setImpactLoading(false);
       return;
     }
 
@@ -405,6 +406,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   // Clear impact spread when coin changes
   useEffect(() => {
     setImpactSpread(null);
+    setImpactLoading(false);
   }, [selectedCoin]);
 
   // Filter and sort
@@ -654,19 +656,19 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     // Bid-ask spread: use detail data if available, otherwise compute from fundingRates
     let bidAskSpread: number | null = null;
     if (spreadSource === "top") {
-      bidAskSpread = detailBidAskSpread;
-    } else if (spreadSource === "impact" && impactSpread !== null) {
-      bidAskSpread = impactSpread;
-    } else if (detailBidAskSpread !== null) {
-      bidAskSpread = detailBidAskSpread;
-    } else if (selectedCoin) {
-      const selectedRate = fundingRates.find((r) => r.symbol === selectedCoin);
-      if (selectedRate?.bestBid && selectedRate?.bestAsk) {
-        const midPrice = (selectedRate.bestBid + selectedRate.bestAsk) / 2;
-        if (midPrice > 0) {
-          bidAskSpread = ((selectedRate.bestAsk - selectedRate.bestBid) / midPrice) * 100;
+      if (detailBidAskSpread !== null) {
+        bidAskSpread = detailBidAskSpread;
+      } else if (selectedCoin) {
+        const selectedRate = fundingRates.find((r) => r.symbol === selectedCoin);
+        if (selectedRate?.bestBid && selectedRate?.bestAsk) {
+          const midPrice = (selectedRate.bestBid + selectedRate.bestAsk) / 2;
+          if (midPrice > 0) {
+            bidAskSpread = ((selectedRate.bestAsk - selectedRate.bestBid) / midPrice) * 100;
+          }
         }
       }
+    } else if (spreadSource === "impact") {
+      bidAskSpread = impactSpread;
     }
 
     return {
@@ -1065,7 +1067,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
                       <div className="flex items-center justify-between">
                         <p className="text-xs text-gray-400">当前买卖价差</p>
-                        {(impactSpread !== null || impactLoading) && (
+                        {fetchImpactSpread && (
                           <button
                             type="button"
                             onClick={() => setSpreadSource((prev) => (prev === "top" ? "impact" : "top"))}

@@ -2,7 +2,7 @@
 // Computes volume-weighted average price for a $1000 notional sweep
 // across order book depth for all 5 exchanges.
 
-import { fetchL2BookBestBidAsk } from "./hyperliquid";
+import { fetchL2Book } from "./hyperliquid";
 import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
 
@@ -99,26 +99,9 @@ async function fetchHyperliquidBook(
   coin: string,
   signal?: AbortSignal,
 ): Promise<NormalizedBook | null> {
-  const data = await fetchL2BookBestBidAsk(coin, signal);
-  if (!data) return null;
-
-  // fetchL2BookBestBidAsk only returns top level, but we need full depth
-  // Re-fetch with full levels
   try {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "l2Book", coin }),
-      signal,
-    });
-
-    if (!response.ok) return null;
-
-    const fullData = (await response.json()) as {
-      levels: Array<Array<{ px: string; sz: string }>>;
-    };
-
-    if (!fullData.levels || fullData.levels.length < 2) return null;
+    const fullData = await fetchL2Book(coin, signal);
+    if (!fullData?.levels || fullData.levels.length < 2) return null;
 
     const bids: BookLevel[] = fullData.levels[0].map((l) => ({
       price: Number.parseFloat(l.px),
@@ -131,6 +114,28 @@ async function fetchHyperliquidBook(
     })).filter((l) => l.price > 0 && l.qty > 0);
 
     return { bids, asks };
+  } catch {
+    return null;
+  }
+}
+
+async function getGateMultiplier(contract: string, signal?: AbortSignal): Promise<number | null> {
+  try {
+    const response = await fetch(
+      `/api/gate/futures/usdt/tickers?contract=${encodeURIComponent(contract)}`,
+      { signal, cache: "no-store" },
+    );
+    if (!response.ok) return null;
+
+    const rows = (await response.json()) as Array<{ contract?: string; quanto_multiplier?: string }>;
+    const row = Array.isArray(rows) ? rows.find((item) => item.contract === contract) : null;
+    const multiplier = row?.quanto_multiplier ? Number.parseFloat(row.quanto_multiplier) : Number.NaN;
+    if (!Number.isFinite(multiplier) || multiplier <= 0) {
+      return null;
+    }
+
+    gateMultiplierCache.set(contract, multiplier);
+    return multiplier;
   } catch {
     return null;
   }
@@ -153,7 +158,7 @@ async function fetchGateioBook(
       asks: Array<{ p: string; s: number }>;
     };
 
-    const multiplier = gateMultiplierCache.get(contract) ?? 1;
+    const multiplier = gateMultiplierCache.get(contract) ?? (await getGateMultiplier(contract, signal)) ?? 1;
 
     const bids: BookLevel[] = (data.bids ?? []).map((l) => ({
       price: Number.parseFloat(l.p),
@@ -269,19 +274,22 @@ async function fetchLighterBook(
     if (!response.ok) return null;
 
     const data = (await response.json()) as {
-      bids: Array<{ price: string; size: string }>;
-      asks: Array<{ price: string; size: string }>;
+      bids?: Array<Record<string, unknown>>;
+      asks?: Array<Record<string, unknown>>;
     };
 
-    const bids: BookLevel[] = (data.bids ?? []).map((l) => ({
-      price: Number.parseFloat(l.price),
-      qty: Number.parseFloat(l.size),
-    })).filter((l) => l.price > 0 && l.qty > 0);
+    const parseLevel = (l: Record<string, unknown>): BookLevel | null => {
+      const price = Number.parseFloat(String(l.price ?? ""));
+      const qtyRaw = l.remaining_base_amount ?? l.size ?? l.base_amount ?? 0;
+      const qty = Number.parseFloat(String(qtyRaw));
+      if (!Number.isFinite(price) || !Number.isFinite(qty) || price <= 0 || qty <= 0) {
+        return null;
+      }
+      return { price, qty };
+    };
 
-    const asks: BookLevel[] = (data.asks ?? []).map((l) => ({
-      price: Number.parseFloat(l.price),
-      qty: Number.parseFloat(l.size),
-    })).filter((l) => l.price > 0 && l.qty > 0);
+    const bids: BookLevel[] = (data.bids ?? []).map(parseLevel).filter((l): l is BookLevel => l !== null);
+    const asks: BookLevel[] = (data.asks ?? []).map(parseLevel).filter((l): l is BookLevel => l !== null);
 
     return { bids, asks };
   } catch {

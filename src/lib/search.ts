@@ -4,6 +4,7 @@
 
 import {
   getAllFundingRatesWithHistory,
+  fetchL2BookBestBidAsk,
   getCandleSnapshot as hlGetCandleSnapshot,
   getFundingHistoryForDays as hlGetFundingHistoryForDays,
   getAverageFundingRatesByInterval as hlGetAverageFundingRatesByInterval,
@@ -510,9 +511,10 @@ async function fetchHyperliquidDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<DetailResult> {
-  const [candles, fundingHistory] = await Promise.all([
+  const [candles, fundingHistory, l2Top] = await Promise.all([
     hlGetCandleSnapshot(symbol, "1d", 30, signal),
     hlGetFundingHistoryForDays(symbol, 30, signal),
+    fetchL2BookBestBidAsk(symbol, signal),
   ]);
 
   if (signal?.aborted) {
@@ -530,7 +532,7 @@ async function fetchHyperliquidDetail(
     lastSettlementRate: Number.isFinite(latestSettledRate) ? latestSettledRate : null,
     avgFundingRate2d: avg2d,
     historicalVolatility,
-    bidAskSpread: computeBidAskSpread(bestBid, bestAsk),
+    bidAskSpread: computeBidAskSpread(l2Top?.bestBid, l2Top?.bestAsk) ?? computeBidAskSpread(bestBid, bestAsk),
     avgFundingRate7d: avg7d,
     avgFundingRate30d: avg30d,
   };

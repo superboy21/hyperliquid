@@ -12,6 +12,7 @@ import ExchangeFundingMonitor, {
   type HydrationPolicy,
 } from "@/components/funding/ExchangeFundingMonitor";
 import {
+  fetchL2BookBestBidAsk,
   formatAnnualizedRate,
   formatFundingRate,
   formatPrice,
@@ -193,9 +194,10 @@ export default function FundingMonitor() {
       },
       fetchDetailData: async (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]): Promise<DetailData> => {
         const apiSymbol = toApiSymbol(symbol);
-        const [candleData, fundingHistory] = await Promise.all([
+        const [candleData, fundingHistory, l2Top] = await Promise.all([
           getCandleSnapshot(apiSymbol, interval, 30),
           getFundingHistoryForDays(apiSymbol, 30),
+          fetchL2BookBestBidAsk(apiSymbol),
         ]);
 
         // Map Hyperliquid candles to shared type
@@ -224,11 +226,18 @@ export default function FundingMonitor() {
 
         // Compute spread from impactPxs (fetched in initial rates load)
         let bidAskSpread: number | null = null;
-        const currentRate = rates.find((r) => r.symbol === symbol);
-        if (currentRate?.bestBid && currentRate?.bestAsk) {
-          const midPrice = (currentRate.bestBid + currentRate.bestAsk) / 2;
+        if (l2Top?.bestBid && l2Top?.bestAsk) {
+          const midPrice = (l2Top.bestBid + l2Top.bestAsk) / 2;
           if (midPrice > 0) {
-            bidAskSpread = ((currentRate.bestAsk - currentRate.bestBid) / midPrice) * 100;
+            bidAskSpread = ((l2Top.bestAsk - l2Top.bestBid) / midPrice) * 100;
+          }
+        } else {
+          const currentRate = rates.find((r) => r.symbol === symbol);
+          if (currentRate?.bestBid && currentRate?.bestAsk) {
+            const midPrice = (currentRate.bestBid + currentRate.bestAsk) / 2;
+            if (midPrice > 0) {
+              bidAskSpread = ((currentRate.bestAsk - currentRate.bestBid) / midPrice) * 100;
+            }
           }
         }
 

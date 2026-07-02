@@ -90,41 +90,40 @@ export async function GET(request: NextRequest) {
 
   try {
     console.log(`[Gate API] Fetching from: ${baseUrl}`);
-    
-    // 先获取 tickers，再获取 contracts（避免并行请求导致限流）
-    const tickersRes = await fetch(`${baseUrl}/futures/usdt/tickers`, {
+
+    // 并行拉取 tickers 和 contracts，缩短首屏等待时间
+    const requestInit: RequestInit = {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
       signal: AbortSignal.timeout(30000),
-    });
+    };
 
-    if (!tickersRes.ok) {
-      throw new Error(`Tickers API failed: ${tickersRes.status}`);
+    const [tickersRes, contractsRes] = await Promise.allSettled([
+      fetch(`${baseUrl}/futures/usdt/tickers`, requestInit),
+      fetch(`${baseUrl}/futures/usdt/contracts`, requestInit),
+    ]);
+
+    if (tickersRes.status !== "fulfilled" || !tickersRes.value.ok) {
+      const status = tickersRes.status === "fulfilled" ? tickersRes.value.status : "rejected";
+      throw new Error(`Tickers API failed: ${status}`);
     }
 
-    const tickers = await tickersRes.json();
-    
-    // 获取 contracts 数据（可选）
+    const tickers = await tickersRes.value.json();
+
     let contracts: any[] = [];
-    try {
-      const contractsRes = await fetch(`${baseUrl}/futures/usdt/contracts`, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        signal: AbortSignal.timeout(30000),
-      });
-      if (contractsRes.ok) {
-        contracts = await contractsRes.json();
+    if (contractsRes.status === "fulfilled" && contractsRes.value.ok) {
+      try {
+        contracts = await contractsRes.value.json();
+      } catch {
+        contracts = [];
       }
-    } catch (e) {
+    } else {
       console.log("[Gate API] Contracts fetch failed, using default funding interval");
     }
-    
+
     if (!Array.isArray(tickers)) {
       throw new Error("Invalid ticker response format");
     }

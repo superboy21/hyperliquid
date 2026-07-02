@@ -16,8 +16,8 @@ import ExchangeFundingMonitor, {
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
 } from "@/components/funding/ExchangeFundingMonitor";
-import { fetchImpactSpread, cacheGateMultipliers } from "@/lib/impact-price";
-import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume, getAllGateTickers, type CandleSnapshotItem as GateCandle, type IntervalFundingRateItem as GateIntervalRate } from "@/lib/gateio";
+import { fetchImpactSpread } from "@/lib/impact-price";
+import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume, type CandleSnapshotItem as GateCandle, type IntervalFundingRateItem as GateIntervalRate } from "@/lib/gateio";
 
 // ==================== Category Config ====================
 
@@ -53,6 +53,8 @@ function GateChartWrapper({ selectedCoin, interval, candles, intervalFundingRate
 
 export default function GateFundingMonitor() {
   const detailCacheRef = useRef(new Map<string, DetailData>());
+  const ratesCacheRef = useRef<{ rates: ExchangeFundingRate[]; expiresAt: number } | null>(null);
+  const RATES_CACHE_TTL_MS = 60_000;
 
   const buildDetailData = useCallback(async (
     symbol: string,
@@ -96,11 +98,12 @@ export default function GateFundingMonitor() {
   }, []);
 
   const fetchRates = useCallback(async (): Promise<ExchangeFundingRate[]> => {
-    const [rates, tickers] = await Promise.all([
-      fetchGateFundingMonitorRates(),
-      getAllGateTickers(),
-    ]);
-    cacheGateMultipliers(tickers);
+    const cached = ratesCacheRef.current;
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.rates;
+    }
+    const rates = await fetchGateFundingMonitorRates();
+    ratesCacheRef.current = { rates, expiresAt: Date.now() + RATES_CACHE_TTL_MS };
     return rates;
   }, []);
 

@@ -194,9 +194,11 @@ export async function fetchGateCanonicalDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<CanonicalFundingDetail> {
+  // Use shorter timeout for detail so funding page never hangs on a slow Gate call.
+  const detailSignal = signal ?? AbortSignal.timeout(8_000);
   const [candles, history] = await Promise.all([
-    getCandleSnapshot(symbol, interval, 30, signal),
-    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal),
+    getCandleSnapshot(symbol, interval, 30, detailSignal),
+    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, detailSignal),
   ]);
 
   const fundingHistory: CanonicalFundingHistoryPoint[] = history.map((item) => ({

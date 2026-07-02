@@ -167,6 +167,7 @@ function getSortValue(
     case "spread": {
       if (spreadSource === "impact" && impactPriceCache) {
         const impact = impactPriceCache.get(getDetailKey(rate.exchange, rate.symbol));
+        if (impact === null) return Number.NEGATIVE_INFINITY;
         if (impact != null) return impact;
       }
       return rate.detail?.bidAskSpread ?? -1;
@@ -202,6 +203,8 @@ export default function CrossExchangeSearch() {
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
   const [impactPriceCache, setImpactPriceCache] = useState<Map<string, number | null>>(new Map());
   const impactAbortRef = useRef<AbortController | null>(null);
+  // Track which keys we've already requested to avoid re-fetching on every cache update.
+  const impactRequestedRef = useRef<Set<string>>(new Set());
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -400,17 +403,33 @@ export default function CrossExchangeSearch() {
     };
   }, [filteredRates, loading, debouncedSearchTerm, startDetailFetching]);
 
-  // Lazy-load impact spreads for ALL exchange results when searching
   useEffect(() => {
-    if (filteredRates.length === 0 || loading || !debouncedSearchTerm.trim()) {
+    if (spreadSource !== "impact") {
       if (impactAbortRef.current) {
         impactAbortRef.current.abort();
       }
+      impactRequestedRef.current = new Set();
       setImpactPriceCache(new Map());
       return;
     }
 
-    const ratesToFetch = filteredRates;
+    if (filteredRates.length === 0 || loading || !debouncedSearchTerm.trim()) {
+      if (impactAbortRef.current) {
+        impactAbortRef.current.abort();
+      }
+      return;
+    }
+
+    const ratesToFetch = filteredRates.filter(
+      (rate) => !impactRequestedRef.current.has(getDetailKey(rate.exchange, rate.symbol)),
+    );
+    if (ratesToFetch.length === 0) {
+      return;
+    }
+
+    for (const rate of ratesToFetch) {
+      impactRequestedRef.current.add(getDetailKey(rate.exchange, rate.symbol));
+    }
 
     if (impactAbortRef.current) {
       impactAbortRef.current.abort();
@@ -452,7 +471,7 @@ export default function CrossExchangeSearch() {
     return () => {
       controller.abort();
     };
-  }, [filteredRates, loading, debouncedSearchTerm]);
+  }, [filteredRates, loading, debouncedSearchTerm, spreadSource]);
 
   // Lazily fetch Lighter index prices on first search that returns Lighter matches.
   // The endpoint returns all 163 Lighter markets in one call, so we fetch once per session.

@@ -96,6 +96,10 @@ export default function OkxFundingMonitor() {
       candles: visibleCandles,
       intervalFundingRates: visibleFundingRates,
       hourlyFundingRates30d: hourlyFundingRates,
+      bidAskSpread:
+        selectedRate?.bestBid && selectedRate?.bestAsk
+          ? ((selectedRate.bestAsk - selectedRate.bestBid) / ((selectedRate.bestAsk + selectedRate.bestBid) / 2)) * 100
+          : null,
       latestSettlementRate: detail.lastSettlementRate,
     };
   }, []);
