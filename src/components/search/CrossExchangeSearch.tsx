@@ -404,14 +404,6 @@ export default function CrossExchangeSearch() {
     };
   }, [filteredRates, loading, debouncedSearchTerm, startDetailFetching]);
 
-  // Invalidate impact cache when the notional changes (preset or custom commit)
-  useEffect(() => {
-    if (impactAbortRef.current) {
-      impactAbortRef.current.abort();
-    }
-    setImpactPriceCache(new Map());
-  }, [impactNotional]);
-
   useEffect(() => {
     if (spreadSource !== "impact") {
       if (impactAbortRef.current) {
@@ -999,16 +991,19 @@ export default function CrossExchangeSearch() {
                     <SortIcon field="spread" />
                   </span>
                 </div>
-                {spreadSource === "impact" && (
+                {spreadSource === "impact" && (() => {
+                    const isCustomNotional = impactNotionalCustom || !((IMPACT_NOTIONAL_PRESETS as readonly number[]).includes(impactNotional));
+                    return (
                   <div className="mt-1 flex items-center justify-end gap-1">
                     <select
-                      value={impactNotionalCustom ? "custom" : String(impactNotional)}
+                      value={isCustomNotional ? "custom" : String(impactNotional)}
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v === "custom") {
                           setCustomInputNotional(impactNotional);
                           setImpactNotionalCustom(true);
                         } else {
+                          setImpactPriceCache(new Map());
                           setImpactNotionalCustom(false);
                           setImpactNotional(Number(v) || DEFAULT_IMPACT_NOTIONAL);
                         }
@@ -1037,6 +1032,7 @@ export default function CrossExchangeSearch() {
                         <button
                           type="button"
                           onClick={() => {
+                            setImpactPriceCache(new Map());
                             setImpactNotional(customInputNotional);
                             setImpactNotionalCustom(false);
                           }}
@@ -1047,7 +1043,7 @@ export default function CrossExchangeSearch() {
                       </>
                     )}
                   </div>
-                )}
+                    );})()}
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
