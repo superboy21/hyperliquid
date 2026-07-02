@@ -203,6 +203,7 @@ export default function CrossExchangeSearch() {
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
   const [impactNotional, setImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
+  const [customInputNotional, setCustomInputNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const [impactPriceCache, setImpactPriceCache] = useState<Map<string, ImpactSpreadResult>>(new Map());
   const impactAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
@@ -402,6 +403,14 @@ export default function CrossExchangeSearch() {
       }
     };
   }, [filteredRates, loading, debouncedSearchTerm, startDetailFetching]);
+
+  // Invalidate impact cache when the notional changes (preset or custom commit)
+  useEffect(() => {
+    if (impactAbortRef.current) {
+      impactAbortRef.current.abort();
+    }
+    setImpactPriceCache(new Map());
+  }, [impactNotional]);
 
   useEffect(() => {
     if (spreadSource !== "impact") {
@@ -997,6 +1006,7 @@ export default function CrossExchangeSearch() {
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v === "custom") {
+                          setCustomInputNotional(impactNotional);
                           setImpactNotionalCustom(true);
                         } else {
                           setImpactNotionalCustom(false);
@@ -1011,18 +1021,30 @@ export default function CrossExchangeSearch() {
                       <option value="custom">自定义</option>
                     </select>
                     {impactNotionalCustom && (
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={impactNotional}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value, 10);
-                          if (v > 0) setImpactNotional(v);
-                        }}
-                        className="w-16 rounded border border-gray-600 bg-gray-800 px-1 py-0.5 text-[9px] text-gray-300"
-                        placeholder="USD"
-                      />
+                      <>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={customInputNotional}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (v > 0) setCustomInputNotional(v);
+                          }}
+                          className="w-16 rounded border border-gray-600 bg-gray-800 px-1 py-0.5 text-[9px] text-gray-300"
+                          placeholder="USD"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImpactNotional(customInputNotional);
+                            setImpactNotionalCustom(false);
+                          }}
+                          className="text-[11px] text-green-400 hover:text-green-200"
+                        >
+                          ✓
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
