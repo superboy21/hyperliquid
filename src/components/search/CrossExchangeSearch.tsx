@@ -1031,6 +1031,13 @@ export default function CrossExchangeSearch() {
                             const v = parseInt(e.target.value, 10);
                             if (v > 0) setCustomInputNotional(v);
                           }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              setImpactPriceCache(new Map());
+                              setImpactNotional(customInputNotional);
+                              setImpactNotionalCustom(false);
+                            }
+                          }}
                           className="w-16 rounded border border-gray-600 bg-gray-800 px-1 py-0.5 text-[9px] text-gray-300"
                           placeholder="USD"
                         />
