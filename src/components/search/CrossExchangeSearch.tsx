@@ -76,6 +76,35 @@ function getDetailKey(exchange: string, symbol: string): string {
   return `${exchange}:${symbol}`;
 }
 
+function getMidPrice(rate: Pick<SearchExchangeRate, "bestBid" | "bestAsk">): number | null {
+  const { bestBid, bestAsk } = rate;
+  if (
+    bestBid == null ||
+    bestAsk == null ||
+    !Number.isFinite(bestBid) ||
+    !Number.isFinite(bestAsk) ||
+    bestBid <= 0 ||
+    bestAsk <= 0
+  ) {
+    return null;
+  }
+
+  return (bestBid + bestAsk) / 2;
+}
+
+function getPremium(
+  rate: Pick<SearchExchangeRate, "bestBid" | "bestAsk" | "indexPrice" | "lastPrice">,
+  useMidPrice: boolean,
+): number | null {
+  const { indexPrice } = rate;
+  if (indexPrice == null || !(indexPrice > 0) || (useMidPrice && !Number.isFinite(indexPrice))) {
+    return null;
+  }
+
+  const price = useMidPrice ? getMidPrice(rate) : rate.lastPrice;
+  return price == null ? null : price / indexPrice - 1;
+}
+
 // ==================== Constants ====================
 
 const EXCHANGE_DOT_COLORS: Record<string, string> = {
@@ -140,6 +169,7 @@ function getSortValue(
   field: SortField,
   spreadSource?: "top" | "impact",
   impactPriceCache?: Map<string, ImpactSpreadResult>,
+  useMidPrice = false,
 ): number | string {
   switch (field) {
     case "symbol":
@@ -147,15 +177,13 @@ function getSortValue(
     case "exchange":
       return rate.exchange;
     case "price":
-      return rate.lastPrice;
+      return useMidPrice ? getMidPrice(rate) ?? Number.NEGATIVE_INFINITY : rate.lastPrice;
     case "indexPrice":
       return rate.indexPrice ?? -1;
     case "change24h":
       return rate.change24h;
     case "premium":
-      return rate.indexPrice != null && rate.indexPrice > 0
-        ? rate.lastPrice / rate.indexPrice - 1
-        : Number.NEGATIVE_INFINITY;
+      return getPremium(rate, useMidPrice) ?? Number.NEGATIVE_INFINITY;
     case "fundingRate":
       return Math.abs(rate.fundingRate);
     case "volume":
@@ -276,6 +304,9 @@ export default function CrossExchangeSearch() {
     return filterByKeyword(allRates, debouncedSearchTerm);
   }, [allRates, debouncedSearchTerm]);
 
+  const hasSearchResults =
+    searchTerm.trim().length > 0 && debouncedSearchTerm.trim().length > 0 && filteredRates.length > 0;
+
   useEffect(() => {
     allRatesRef.current = allRates;
   }, [allRates]);
@@ -288,12 +319,14 @@ export default function CrossExchangeSearch() {
         sortConfig.field,
         spreadSource,
         impactPriceCache,
+        hasSearchResults,
       );
       const bVal = getSortValue(
         { ...b, detail: detailCache.get(getDetailKey(b.exchange, b.symbol)) },
         sortConfig.field,
         spreadSource,
         impactPriceCache,
+        hasSearchResults,
       );
 
       let cmp = 0;
@@ -305,7 +338,7 @@ export default function CrossExchangeSearch() {
       return sortConfig.descending ? -cmp : cmp;
     });
     return sorted;
-  }, [filteredRates, sortConfig, detailCache, spreadSource, impactPriceCache]);
+  }, [filteredRates, sortConfig, detailCache, spreadSource, impactPriceCache, hasSearchResults]);
 
   // Filter chart data by selected time range
   const filteredChartData = useMemo(() => {
@@ -965,7 +998,7 @@ export default function CrossExchangeSearch() {
                 onClick={() => handleSort("price")}
               >
                 <span className="flex items-center justify-end whitespace-nowrap">
-                  价格
+                  {hasSearchResults ? "中间价" : "价格"}
                   <SortIcon field="price" />
                 </span>
               </th>
@@ -1168,6 +1201,8 @@ export default function CrossExchangeSearch() {
               const isFirstSelected = isSameRate(comboSelection.first, rate);
               const isSecondSelected = isSameRate(comboSelection.second, rate);
               const isNormalSelected = isSameRate(selectedRate, rate);
+              const midPrice = hasSearchResults ? getMidPrice(rate) : null;
+              const premium = getPremium(rate, hasSearchResults);
 
               return (
                 <tr
@@ -1194,7 +1229,15 @@ export default function CrossExchangeSearch() {
                   </td>
                   {/* Price */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
+                    {hasSearchResults ? (
+                      midPrice != null ? (
+                        <span className="whitespace-nowrap font-mono text-xs text-gray-300">{formatPrice(midPrice)}</span>
+                      ) : (
+                        <span className="text-xs text-gray-600">--</span>
+                      )
+                    ) : (
                       <span className="whitespace-nowrap font-mono text-xs text-gray-300">{formatPrice(rate.lastPrice)}</span>
+                    )}
                   </td>
                   {/* Index Price */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
@@ -1219,25 +1262,22 @@ export default function CrossExchangeSearch() {
                       {rate.change24h.toFixed(2)}%
                     </span>
                   </td>
-                  {/* Premium: (lastPrice / indexPrice) - 1 */}
+                  {/* Premium */}
                   <td className="px-2 py-2 text-right xl:px-2.5">
-                    {rate.indexPrice != null && rate.indexPrice > 0 ? (() => {
-                      const premium = rate.lastPrice / rate.indexPrice - 1;
-                      return (
-                        <span
-                          className={`whitespace-nowrap font-mono text-xs ${
-                            premium > 0
-                              ? "text-green-400"
-                              : premium < 0
-                                ? "text-red-400"
-                                : "text-gray-400"
-                          }`}
-                        >
-                          {premium >= 0 ? "+" : ""}
-                          {(premium * 100).toFixed(4)}%
-                        </span>
-                      );
-                    })() : (
+                    {premium != null ? (
+                      <span
+                        className={`whitespace-nowrap font-mono text-xs ${
+                          premium > 0
+                            ? "text-green-400"
+                            : premium < 0
+                              ? "text-red-400"
+                              : "text-gray-400"
+                        }`}
+                      >
+                        {premium >= 0 ? "+" : ""}
+                        {(premium * 100).toFixed(4)}%
+                      </span>
+                    ) : (
                       <span className="text-xs text-gray-600">--</span>
                     )}
                   </td>

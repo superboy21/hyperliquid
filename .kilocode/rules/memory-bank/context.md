@@ -41,6 +41,8 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Lighter search index-price reliability**: Search now uses REST index prices first, merges market-ID keyed WebSocket snapshots, immediately starts bounded retries for unresolved visible matches, caches only complete snapshots, and can serve the last complete snapshot explicitly marked stale after a total live failure.
 - [x] **Targeted Lighter index-price completion**: Search requests unresolved market IDs, applies ID-only matching when IDs exist, and the API reports incomplete snapshots until all requested (or all discovered) markets have valid prices.
 - [x] **Target-aware Lighter collection timers**: Targeted WebSocket collection now extends only for valid changes to requested market IDs, and targeted `expected` counts match completion/missing semantics.
+- [x] **Search result midpoint pricing**: The Search price column switches to “中间价” only for non-empty searches with matches, uses valid positive best bid/ask values, and shows `--` instead of falling back to last price.
+- [x] **Search result midpoint premium**: Search-result premium display and sorting now use the validated midpoint against index price, while default and no-result views retain last-price premium.
 
 ## Current Structure
 
@@ -144,3 +146,5 @@ export async function GET() {
 | 2026-07-11 | Hardened Lighter Search index prices with REST hydration, market-ID-first WebSocket snapshots, complete-only short caching/stale fallback, completeness metadata, and immediate bounded partial retries. |
 | 2026-07-11 | Corrected targeted Lighter snapshot completion, missing-market tracking, cache eligibility, useful-update timers, and pure React hydration updates. |
 | 2026-07-11 | Restricted targeted Lighter collection timer resets to requested-market changes and aligned targeted response `expected` counts with requested IDs. |
+| 2026-07-12 | Updated Search results to display and sort by bid/ask midpoint when a search has matches, with strict invalid-data handling and unchanged default pricing. |
+| 2026-07-12 | Aligned Search premium display and sorting with midpoint pricing for matched searches, without a last-price fallback when midpoint or index data is invalid. |
