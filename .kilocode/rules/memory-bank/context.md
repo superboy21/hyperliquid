@@ -37,6 +37,10 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Lighter pagination delays**: Added 100ms sleep between pages in candle and funding history pagination
 - [x] **Lighter global request throttle (300ms)**: `lighterFetch` now serialized through a global promise chain with 300ms minimum interval between any two Lighter HTTP attempts — prevents 429s under burst regardless of caller
 - [x] **fetchLighterDetail removed redundant fundings call**: latest settlement rate now derived from the already-fetched 30-day funding history (3 calls per symbol instead of 4)
+- [x] **2026-07-11 performance review completed**: production build succeeds; identified search-page eager detail/impact requests, Binance full-market OI hydration, chart bundle size, and chart history aggregation as the primary execution-efficiency targets.
+- [x] **Lighter search index-price reliability**: Search now uses REST index prices first, merges market-ID keyed WebSocket snapshots, immediately starts bounded retries for unresolved visible matches, caches only complete snapshots, and can serve the last complete snapshot explicitly marked stale after a total live failure.
+- [x] **Targeted Lighter index-price completion**: Search requests unresolved market IDs, applies ID-only matching when IDs exist, and the API reports incomplete snapshots until all requested (or all discovered) markets have valid prices.
+- [x] **Target-aware Lighter collection timers**: Targeted WebSocket collection now extends only for valid changes to requested market IDs, and targeted `expected` counts match completion/missing semantics.
 
 ## Current Structure
 
@@ -136,3 +140,7 @@ export async function GET() {
 | 2026-03-01 | Changed weighted average calculation from OI-weighted to position value (OI × markPrice) weighted for more accurate representation |
 | 2026-07-02 | Fixed Lighter 429 errors on Search page: throttled Lighter detail fetching (concurrency 1, 200ms delay) and added 100ms pagination delays for candles/funding history |
 | 2026-07-02 | Added global Lighter request throttle (300ms min interval) in `lighter.ts` and removed redundant `fundings` call in `fetchLighterDetail` (4→3 calls per symbol) |
+| 2026-07-11 | Performance review: prioritize visible-row/on-demand detail loading with TTL cache, constrain Binance OI requests, lazily load ECharts, and replace candle-by-history filtering with a linear aggregation. |
+| 2026-07-11 | Hardened Lighter Search index prices with REST hydration, market-ID-first WebSocket snapshots, complete-only short caching/stale fallback, completeness metadata, and immediate bounded partial retries. |
+| 2026-07-11 | Corrected targeted Lighter snapshot completion, missing-market tracking, cache eligibility, useful-update timers, and pure React hydration updates. |
+| 2026-07-11 | Restricted targeted Lighter collection timer resets to requested-market changes and aligned targeted response `expected` counts with requested IDs. |

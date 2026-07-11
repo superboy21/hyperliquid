@@ -208,6 +208,8 @@ export default function CrossExchangeSearch() {
   const impactAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const allRatesRef = useRef<SearchExchangeRate[]>([]);
+  const lighterIndexRequestRef = useRef(0);
 
   // Chart state
   const [selectedRate, setSelectedRate] = useState<SearchExchangeRate | null>(null);
@@ -273,6 +275,10 @@ export default function CrossExchangeSearch() {
     }
     return filterByKeyword(allRates, debouncedSearchTerm);
   }, [allRates, debouncedSearchTerm]);
+
+  useEffect(() => {
+    allRatesRef.current = allRates;
+  }, [allRates]);
 
   // Sort
   const sortedRates = useMemo(() => {
@@ -475,32 +481,90 @@ export default function CrossExchangeSearch() {
     };
   }, [filteredRates, loading, debouncedSearchTerm, spreadSource, impactNotional]);
 
-  // Lazily fetch Lighter index prices on first search that returns Lighter matches.
-  // The endpoint returns all 163 Lighter markets in one call, so we fetch once per session.
-  const [lighterIndexPricesLoaded, setLighterIndexPricesLoaded] = useState(false);
-
-  const hydrateLighterIndexPrices = useCallback(async () => {
-    const map = await fetchLighterIndexPrices();
-    if (map.size === 0) return; // Don't set loaded flag — allow retry on next search
-    setAllRates((prev) =>
-      prev.map((rate) => {
-        if (rate.exchange !== "Lighter") return rate;
-        const price = map.get(rate.symbol);
-        return Number.isFinite(price) && (price as number) > 0
-          ? { ...rate, indexPrice: price as number }
-          : rate;
-      }),
-    );
-    setLighterIndexPricesLoaded(true); // Only lock out retry after a successful hydration
-  }, []);
-
+  // REST supplies most index prices. Retry the WebSocket snapshot only for unresolved
+  // Lighter rows in the current search, merging partial responses immediately.
   useEffect(() => {
     if (!debouncedSearchTerm.trim() || loading) return;
-    if (lighterIndexPricesLoaded) return;
-    const hasLighter = filteredRates.some((r) => r.exchange === "Lighter");
-    if (!hasLighter) return;
-    void hydrateLighterIndexPrices();
-  }, [debouncedSearchTerm, loading, filteredRates, lighterIndexPricesLoaded, hydrateLighterIndexPrices]);
+
+    const { keyword1, keyword2, mode } = parseComboSearch(debouncedSearchTerm);
+    const currentResults = mode && keyword1 && keyword2
+      ? allRatesRef.current.filter((rate) =>
+          rate.symbol.toLowerCase().includes(keyword1) ||
+          rate.symbol.toLowerCase().includes(keyword2),
+        )
+      : filterByKeyword(allRatesRef.current, debouncedSearchTerm);
+    const targets = currentResults.filter(
+      (rate) => rate.exchange === "Lighter" && !(rate.indexPrice != null && rate.indexPrice > 0),
+    );
+    if (targets.length === 0) return;
+
+    const requestId = ++lighterIndexRequestRef.current;
+    const controller = new AbortController();
+    const targetKeys = new Set(targets.map((rate) =>
+      rate.marketId != null ? `id:${rate.marketId}` : `symbol:${rate.rawSymbol ?? rate.symbol}`,
+    ));
+    const targetMarketIds = [...new Set(targets.flatMap((rate) => rate.marketId == null ? [] : [rate.marketId]))];
+    const retryDelays = [0, 500, 1_500];
+
+    const wait = (delayMs: number) => new Promise<void>((resolve) => {
+      const timer = window.setTimeout(resolve, delayMs);
+      controller.signal.addEventListener("abort", () => {
+        window.clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+
+    void (async () => {
+      for (const delayMs of retryDelays) {
+        if (delayMs > 0) await wait(delayMs);
+        if (controller.signal.aborted || requestId !== lighterIndexRequestRef.current || targetKeys.size === 0) return;
+
+        try {
+          const snapshot = await fetchLighterIndexPrices(targetMarketIds, controller.signal);
+          if (controller.signal.aborted || requestId !== lighterIndexRequestRef.current) return;
+
+          const byMarketId = new Map(snapshot.prices
+            .filter((item) => item.marketId != null)
+            .map((item) => [item.marketId as number, item.price]));
+          const bySymbol = new Map(snapshot.prices
+            .filter((item) => item.symbol)
+            .map((item) => [item.symbol as string, item.price]));
+
+          const currentRates = allRatesRef.current;
+          const resolvedPrices = new Map<string, number>();
+          for (const rate of currentRates) {
+            if (rate.exchange !== "Lighter" || (rate.indexPrice != null && rate.indexPrice > 0)) continue;
+            const key = rate.marketId != null ? `id:${rate.marketId}` : `symbol:${rate.rawSymbol ?? rate.symbol}`;
+            if (!targetKeys.has(key)) continue;
+            const price = rate.marketId != null
+              ? byMarketId.get(rate.marketId)
+              : bySymbol.get(rate.rawSymbol ?? "") ?? bySymbol.get(rate.symbol);
+            if (price != null && Number.isFinite(price) && price > 0) resolvedPrices.set(key, price);
+          }
+          for (const key of resolvedPrices.keys()) targetKeys.delete(key);
+
+          if (resolvedPrices.size > 0) {
+            setAllRates((prev) => prev.map((rate) => {
+              if (rate.exchange !== "Lighter" || (rate.indexPrice != null && rate.indexPrice > 0)) return rate;
+              const key = rate.marketId != null ? `id:${rate.marketId}` : `symbol:${rate.rawSymbol ?? rate.symbol}`;
+              const price = resolvedPrices.get(key);
+              if (price === undefined) return rate;
+              return { ...rate, indexPrice: price };
+            }));
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            console.warn("[Search] Lighter index price hydration failed:", error);
+          }
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (requestId === lighterIndexRequestRef.current) lighterIndexRequestRef.current += 1;
+    };
+  }, [debouncedSearchTerm, loading]);
 
   // Hydrate Binance OI for current search results only.
   // Initial notionalValue may use quoteVolume placeholder; replace it with OI * price progressively.

@@ -106,6 +106,24 @@ interface LighterOrderBookDetail {
   market_id: number;
   open_interest: number | string;
   last_trade_price: number | string;
+  index_price?: number | string;
+}
+
+export interface LighterIndexPrice {
+  marketId: number | null;
+  symbol: string | null;
+  price: number;
+}
+
+export interface LighterIndexPriceSnapshot {
+  prices: LighterIndexPrice[];
+  complete: boolean;
+  received: number;
+  expected: number | null;
+  missingMarketIds: number[];
+  fetchedAt: string;
+  source: string;
+  stale?: boolean;
 }
 
 interface LighterCandle {
@@ -407,15 +425,17 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
     statsMap.set(stat.symbol, stat);
   }
 
-  const orderBookDetailsMap = new Map<number, { openInterest: number; lastPrice: number }>();
+  const orderBookDetailsMap = new Map<number, { openInterest: number; lastPrice: number; indexPrice: number | null }>();
   if (orderBookRes.status === "fulfilled" && orderBookRes.value.ok) {
     try {
       const orderBookData = await orderBookRes.value.json();
       const details: LighterOrderBookDetail[] = orderBookData.order_book_details || [];
       for (const item of details) {
+        const indexPrice = Number.parseFloat(String(item.index_price ?? ""));
         orderBookDetailsMap.set(item.market_id, {
           openInterest: parseFloat(String(item.open_interest || "0")),
           lastPrice: parseFloat(String(item.last_trade_price || "0")),
+          indexPrice: Number.isFinite(indexPrice) && indexPrice > 0 ? indexPrice : null,
         });
       }
     } catch {
@@ -438,7 +458,7 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       marketId: entry.market_id,
       fundingRate: parseFloat(entry.rate || "0"),
       markPrice: lastPrice,
-      indexPrice: null, // Lazily hydrated after first search via fetchLighterIndexPrices()
+      indexPrice: orderDetails?.indexPrice ?? null,
       lastPrice,
       change24h: parseFloat(String(stat?.daily_price_change || "0")),
       quoteVolume: parseFloat(String(stat?.daily_quote_token_volume || "0")),
@@ -452,24 +472,65 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
 
 /**
  * Fetch Lighter index prices from the serverless WebSocket snapshot endpoint.
- * Returns a map of symbol -> index price. Only valid (> 0) prices are included.
- * Used to lazily populate `indexPrice` on Lighter rates after the user first searches.
+ * Preserves market IDs and snapshot completeness so callers can safely merge partial data.
+ * Legacy symbol-price responses are accepted during rolling deployments.
  */
-export async function fetchLighterIndexPrices(): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
+export async function fetchLighterIndexPrices(
+  marketIds: readonly number[] = [],
+  signal?: AbortSignal,
+): Promise<LighterIndexPriceSnapshot> {
+  const emptySnapshot = (): LighterIndexPriceSnapshot => ({
+    prices: [],
+    complete: false,
+    received: 0,
+    expected: null,
+    missingMarketIds: [],
+    fetchedAt: new Date().toISOString(),
+    source: "unavailable",
+  });
+
   try {
-    const res = await fetch("/api/lighter/index-prices");
-    if (!res.ok) return map;
-    const prices: Record<string, number> = await res.json();
-    for (const [symbol, price] of Object.entries(prices)) {
-      if (Number.isFinite(price) && price > 0) {
-        map.set(symbol, price);
+    const params = new URLSearchParams();
+    const uniqueMarketIds = [...new Set(marketIds)];
+    if (uniqueMarketIds.length > 0) params.set("marketIds", uniqueMarketIds.join(","));
+    const query = params.toString();
+    const res = await fetch(`/api/lighter/index-prices${query ? `?${query}` : ""}`, { signal });
+    if (!res.ok) return emptySnapshot();
+    const payload: unknown = await res.json();
+
+    if (payload && typeof payload === "object" && Array.isArray((payload as LighterIndexPriceSnapshot).prices)) {
+      const snapshot = payload as LighterIndexPriceSnapshot;
+      return {
+        ...snapshot,
+        prices: snapshot.prices.filter((item) =>
+          item != null && Number.isFinite(item.price) && item.price > 0,
+        ),
+      };
+    }
+
+    const prices: LighterIndexPrice[] = [];
+    if (payload && typeof payload === "object") {
+      for (const [symbol, value] of Object.entries(payload as Record<string, unknown>)) {
+        const price = Number(value);
+        if (Number.isFinite(price) && price > 0) {
+          prices.push({ marketId: null, symbol, price });
+        }
       }
     }
+    return {
+      prices,
+      complete: false,
+      received: prices.length,
+      expected: null,
+      missingMarketIds: [],
+      fetchedAt: new Date().toISOString(),
+      source: "legacy",
+    };
   } catch (error) {
+    if (signal?.aborted) throw error;
     console.warn("[Search] Lighter index prices fetch failed:", error);
+    return emptySnapshot();
   }
-  return map;
 }
 
 // ==================== Filter by Keyword ====================
