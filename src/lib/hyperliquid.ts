@@ -239,7 +239,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-async function getHip3MarketData(dex: "xyz" | "para" | "cash" | "hyna"): Promise<Map<string, Partial<FundingRate>>> {
+async function getHip3MarketData(dex: "xyz" | "para" | "hyna"): Promise<Map<string, Partial<FundingRate>>> {
   try {
     const data = await fetchHyperliquidInfo<any[]>(
       { type: "metaAndAssetCtxs", dex },
@@ -284,7 +284,7 @@ async function getHip3MarketData(dex: "xyz" | "para" | "cash" | "hyna"): Promise
   }
 }
 
-async function getDexFundingRates(dex: "xyz" | "para" | "cash" | "hyna"): Promise<FundingRate[]> {
+async function getDexFundingRates(dex: "xyz" | "para" | "hyna"): Promise<FundingRate[]> {
   const marketData = await getHip3MarketData(dex);
   const rates: FundingRate[] = [];
 
@@ -313,11 +313,9 @@ export async function getHip3FundingRates(): Promise<FundingRate[]> {
   await sleep(150);
   const paraRates = await getDexFundingRates("para");
   await sleep(150);
-  const cashRates = await getDexFundingRates("cash");
-  await sleep(150);
   const hynaRates = await getDexFundingRates("hyna");
 
-  return [...xyzRates, ...paraRates, ...cashRates, ...hynaRates];
+  return [...xyzRates, ...paraRates, ...hynaRates];
 }
 
 export async function getSpotFundingRates(): Promise<FundingRate[]> {

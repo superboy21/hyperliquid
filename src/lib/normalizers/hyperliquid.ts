@@ -98,7 +98,7 @@ export function normalizeHyperliquidPerpRates(
 export function normalizeHyperliquidHip3Rates(
   markets: HyperliquidMarketInfo[],
   contexts: HyperliquidAssetContext[],
-  dex: "xyz" | "para" | "cash" | "hyna"
+  dex: "xyz" | "para" | "hyna"
 ): NormalizedFundingRate[] {
   return markets.map((market, index) => {
     const ctx = contexts[index];
