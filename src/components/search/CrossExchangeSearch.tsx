@@ -66,6 +66,8 @@ interface SortConfig {
 interface DetailCache {
   historicalVolatility: number | null;
   bidAskSpread: number | null;
+  bestBid?: number;
+  bestAsk?: number;
   latestSettlementRate: number | null;
   avgFundingRate2d: number | null;
   avgFundingRate7d: number | null;
@@ -76,8 +78,12 @@ function getDetailKey(exchange: string, symbol: string): string {
   return `${exchange}:${symbol}`;
 }
 
-function getMidPrice(rate: Pick<SearchExchangeRate, "bestBid" | "bestAsk">): number | null {
-  const { bestBid, bestAsk } = rate;
+function getMidPrice(
+  rate: Pick<SearchExchangeRate, "bestBid" | "bestAsk">,
+  detail?: Pick<DetailCache, "bestBid" | "bestAsk">,
+): number | null {
+  const bestBid = detail?.bestBid ?? rate.bestBid;
+  const bestAsk = detail?.bestAsk ?? rate.bestAsk;
   if (
     bestBid == null ||
     bestAsk == null ||
@@ -95,13 +101,14 @@ function getMidPrice(rate: Pick<SearchExchangeRate, "bestBid" | "bestAsk">): num
 function getPremium(
   rate: Pick<SearchExchangeRate, "bestBid" | "bestAsk" | "indexPrice" | "lastPrice">,
   useMidPrice: boolean,
+  detail?: Pick<DetailCache, "bestBid" | "bestAsk">,
 ): number | null {
   const { indexPrice } = rate;
   if (indexPrice == null || !(indexPrice > 0) || (useMidPrice && !Number.isFinite(indexPrice))) {
     return null;
   }
 
-  const price = useMidPrice ? getMidPrice(rate) : rate.lastPrice;
+  const price = useMidPrice ? getMidPrice(rate, detail) : rate.lastPrice;
   return price == null ? null : price / indexPrice - 1;
 }
 
@@ -177,13 +184,13 @@ function getSortValue(
     case "exchange":
       return rate.exchange;
     case "price":
-      return useMidPrice ? getMidPrice(rate) ?? Number.NEGATIVE_INFINITY : rate.lastPrice;
+      return useMidPrice ? getMidPrice(rate, rate.detail) ?? Number.NEGATIVE_INFINITY : rate.lastPrice;
     case "indexPrice":
       return rate.indexPrice ?? -1;
     case "change24h":
       return rate.change24h;
     case "premium":
-      return getPremium(rate, useMidPrice) ?? Number.NEGATIVE_INFINITY;
+      return getPremium(rate, useMidPrice, rate.detail) ?? Number.NEGATIVE_INFINITY;
     case "fundingRate":
       return Math.abs(rate.fundingRate);
     case "volume":
@@ -398,6 +405,8 @@ export default function CrossExchangeSearch() {
           next.set(key, {
             historicalVolatility: detail.historicalVolatility,
             bidAskSpread: detail.bidAskSpread,
+            bestBid: detail.bestBid,
+            bestAsk: detail.bestAsk,
             latestSettlementRate: detail.lastSettlementRate,
             avgFundingRate2d: detail.avgFundingRate2d,
             avgFundingRate7d: detail.avgFundingRate7d,
@@ -1201,8 +1210,8 @@ export default function CrossExchangeSearch() {
               const isFirstSelected = isSameRate(comboSelection.first, rate);
               const isSecondSelected = isSameRate(comboSelection.second, rate);
               const isNormalSelected = isSameRate(selectedRate, rate);
-              const midPrice = hasSearchResults ? getMidPrice(rate) : null;
-              const premium = getPremium(rate, hasSearchResults);
+              const midPrice = hasSearchResults ? getMidPrice(rate, detail) : null;
+              const premium = getPremium(rate, hasSearchResults, detail);
 
               return (
                 <tr

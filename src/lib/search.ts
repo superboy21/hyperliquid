@@ -82,6 +82,8 @@ export interface DetailResult {
   avgFundingRate2d: number | null;
   historicalVolatility: number | null;
   bidAskSpread: number | null;
+  bestBid?: number;
+  bestAsk?: number;
   avgFundingRate7d: number | null;
   avgFundingRate30d: number | null;
 }
@@ -782,12 +784,20 @@ if (resolvedMarketId === null) {
     }
   }
 
+  let liveBestBid: number | undefined;
+  let liveBestAsk: number | undefined;
   let bidAskSpread = computeBidAskSpread(bestBid, bestAsk);
   if (orderBookRes.status === "fulfilled" && orderBookRes.value.ok) {
     try {
       const orderBookData = await orderBookRes.value.json();
-      const liveBestAsk = orderBookData.asks?.[0]?.price ? parseFloat(orderBookData.asks[0].price) : null;
-      const liveBestBid = orderBookData.bids?.[0]?.price ? parseFloat(orderBookData.bids[0].price) : null;
+      const parsedBestAsk = orderBookData.asks?.[0]?.price ? parseFloat(orderBookData.asks[0].price) : null;
+      const parsedBestBid = orderBookData.bids?.[0]?.price ? parseFloat(orderBookData.bids[0].price) : null;
+      liveBestAsk = parsedBestAsk != null && Number.isFinite(parsedBestAsk) && parsedBestAsk > 0
+        ? parsedBestAsk
+        : undefined;
+      liveBestBid = parsedBestBid != null && Number.isFinite(parsedBestBid) && parsedBestBid > 0
+        ? parsedBestBid
+        : undefined;
       const liveSpread = computeBidAskSpread(liveBestBid, liveBestAsk);
       if (liveSpread !== null) {
         bidAskSpread = liveSpread;
@@ -818,6 +828,8 @@ if (resolvedMarketId === null) {
     avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread,
+    bestBid: liveBestBid,
+    bestAsk: liveBestAsk,
     avgFundingRate7d: avg7d,
     avgFundingRate30d: avg30d,
   };

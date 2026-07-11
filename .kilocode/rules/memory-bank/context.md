@@ -43,6 +43,7 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Target-aware Lighter collection timers**: Targeted WebSocket collection now extends only for valid changes to requested market IDs, and targeted `expected` counts match completion/missing semantics.
 - [x] **Search result midpoint pricing**: The Search price column switches to “中间价” only for non-empty searches with matches, uses valid positive best bid/ask values, and shows `--` instead of falling back to last price.
 - [x] **Search result midpoint premium**: Search-result premium display and sorting now use the validated midpoint against index price, while default and no-result views retain last-price premium.
+- [x] **Lighter live midpoint hydration**: Lighter detail results retain the live top bid/ask already fetched for spread calculation, allowing Search midpoint and premium display/sorting to consume detail-cache quotes without restarting rate filtering.
 
 ## Current Structure
 
@@ -148,3 +149,4 @@ export async function GET() {
 | 2026-07-11 | Restricted targeted Lighter collection timer resets to requested-market changes and aligned targeted response `expected` counts with requested IDs. |
 | 2026-07-12 | Updated Search results to display and sort by bid/ask midpoint when a search has matches, with strict invalid-data handling and unchanged default pricing. |
 | 2026-07-12 | Aligned Search premium display and sorting with midpoint pricing for matched searches, without a last-price fallback when midpoint or index data is invalid. |
+| 2026-07-12 | Preserved Lighter order-book top quotes in Search detail cache and prioritized them for midpoint-based price, premium, and sorting calculations. |
