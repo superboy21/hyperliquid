@@ -163,6 +163,27 @@ describe("Bitget candles and books", () => {
     expect(actions).toEqual(["candles", ...Array.from({ length: 14 }, () => "history-candles")]);
   });
 
+  test("keeps the first 1d candles request within the 90-day-safe window", async () => {
+    const day = 86_400_000;
+    const endTime = Date.UTC(2026, 6, 15);
+    let firstCall: { action: string; params: Record<string, string> } | undefined;
+    const request: BitgetRequest = async (action, params) => {
+      firstCall ??= { action, params };
+      if (action === "history-candles") return [];
+      const start = Number(params.startTime);
+      const end = Number(params.endTime);
+      return Array.from({ length: Math.floor((end - start) / day) + 1 }, (_, index) => [end - index * day, "1", "1", "1", "1", "1"]);
+    };
+
+    await fetchBitgetCandles("BTCUSDT", "1d", { endTime, request });
+
+    expect(firstCall?.action).toBe("candles");
+    const firstSpan = Number(firstCall?.params.endTime) - Number(firstCall?.params.startTime);
+    expect(firstSpan).toBe(89 * day);
+    expect(firstSpan).toBeLessThanOrEqual(90 * day);
+    expect(firstSpan).not.toBe(99 * day);
+  });
+
   test("continues after a complete 90-row 1d window and stops on a genuinely short page", async () => {
     const day = 86_400_000;
     const endTime = Date.UTC(2026, 6, 15);
@@ -181,7 +202,7 @@ describe("Bitget candles and books", () => {
     const rows = await fetchBitgetCandles("BTCUSDT", "1d", { endTime, request });
 
     expect(actions).toEqual(["candles", "history-candles", "history-candles"]);
-    expect(rows).toHaveLength(202);
+    expect(rows).toHaveLength(192);
     expect(rows.at(-1)?.openTime).toBe(endTime);
   });
 

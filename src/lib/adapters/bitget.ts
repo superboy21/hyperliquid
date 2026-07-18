@@ -461,7 +461,11 @@ export async function fetchBitgetCandles(
   // V3's recent endpoint is always the first and exactly one request. Its
   // explicit aligned window also makes a supplied historical end deterministic.
   throwIfAborted(options.signal);
-  const recentStart = Math.min(alignedEnd, Math.max(1, alignedRequestedStart ?? alignedEnd - 99 * config.ms));
+  const recentStart = Math.min(alignedEnd, Math.max(
+    1,
+    alignedRequestedStart ?? alignedEnd - 99 * config.ms,
+    alignedEnd - MAX_HISTORY_WINDOW + config.ms,
+  ));
   const recentPayload = await request("candles", {
     symbol: rawSymbol, interval: config.api, type: "market", limit: "100",
     startTime: String(Math.floor(recentStart / config.ms) * config.ms), endTime: String(alignedEnd),

@@ -49,7 +49,8 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 - [x] **Bitget Phase 1 review fixes**: Aligned history with V3 `resultList`/`fundingRateTimestamp`, made recent candles the single first request with bounded history fallback, added one-request latest settlement loading, and expanded deterministic scheduler/proxy tests.
 - [x] **Bitget semantics**: Scope is online `USDT-FUTURES` perpetuals; each contract's dynamic 1/2/4/8-hour funding interval drives annualization; official turnover and open interest semantics are preserved; `rawSymbol` is mandatory for transport; order-book sizes are base quantities; weekly candles aggregate UTC Monday-based daily candles.
 - [x] **Bitget request control**: Browser calls Bitget V3 public endpoints directly because Bitget rejects Cloudflare Workers egress IPs with HTTP 403. The shared FIFO scheduler validates Bitget envelopes and enforces single concurrency, 250ms minimum starts plus jitter, bounded timeout/retries, API error mapping, and abort propagation.
-- [x] **2026-07-18 validation**: 80 tests, TypeScript typecheck, ESLint, and production build all pass; an Origin-header probe confirmed Bitget responds with `Access-Control-Allow-Origin: *`.
+- [x] **Bitget daily candle window fix**: The initial V3 `candles` request is now clamped to the same inclusive-safe 90-day maximum as history requests, preventing daily/weekly requests from sending the former 99-day span rejected by Bitget.
+- [x] **2026-07-18 validation**: 81 tests, TypeScript typecheck, ESLint, and production build all pass; live Origin-header probes confirmed Bitget CORS and the corrected XAUUSDT daily request return HTTP 200.
 
 ## Current Structure
 
@@ -161,3 +162,4 @@ export async function GET() {
 | 2026-07-18 | Fixed Bitget Phase 1 review findings for official V3 history/list fields, recent-first candle pagination, one-request latest settlement, and deterministic abort/retry/proxy coverage. |
 | 2026-07-18 | Completed Bitget Funding and Search integration with exact raw-symbol dispatch, dynamic funding intervals, progressive detail lanes, on-demand charts, server proxy scheduling, and six-exchange documentation; validation passed with 62 tests, typecheck, lint, and build. |
 | 2026-07-18 | Fixed production Bitget 502 responses caused by upstream HTTP 403 against Cloudflare Workers: switched the browser adapter to direct CORS-enabled Bitget V3 requests, added strict envelope/error handling and direct-URL coverage; validation passed with 80 tests, typecheck, lint, and build. |
+| 2026-07-18 | Fixed Bitget daily/weekly candle requests exceeding the V3 90-day window by clamping the initial recent request to 90 aligned candles; the reported XAUUSDT request now returns HTTP 200 and validation passes with 81 tests. |
