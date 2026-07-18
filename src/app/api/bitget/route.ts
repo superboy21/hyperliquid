@@ -95,7 +95,15 @@ export async function GET(request: NextRequest) {
   request.signal.addEventListener("abort", onAbort, { once: true });
 
   try {
-    const response = await proxyFetch(upstream, { cache: "no-store", signal: controller.signal, timeout: TIMEOUT_MS });
+    const response = await proxyFetch(upstream, {
+      cache: "no-store",
+      signal: controller.signal,
+      timeout: TIMEOUT_MS,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+      },
+    });
     let envelope: unknown;
     try { envelope = await response.json(); } catch { envelope = null; }
     const object = envelope && typeof envelope === "object" ? envelope as Record<string, unknown> : null;
@@ -105,15 +113,18 @@ export async function GET(request: NextRequest) {
     if (success) return NextResponse.json(object.data);
 
     const status = mappedBitgetStatus(response.status, code);
+    console.error(`[Bitget API] Upstream error: HTTP ${response.status}, code=${code}, action=${action}`);
     const headers = new Headers();
     if (status === 429) {
       const retryAfter = response.headers.get("retry-after");
       if (retryAfter) headers.set("Retry-After", retryAfter);
     }
     return NextResponse.json({ error: status === 429 ? "Rate limited" : status === 404 ? "Symbol not found" : "Bitget upstream request failed" }, { status, headers });
-  } catch {
+  } catch (error) {
     if (request.signal.aborted) return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
     if (timedOut) return NextResponse.json({ error: "Bitget upstream timed out" }, { status: 504 });
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[Bitget API] Proxy error: ${message}, action=${action}`);
     return NextResponse.json({ error: "Bitget upstream request failed" }, { status: 502 });
   } finally {
     clearTimeout(timer);
