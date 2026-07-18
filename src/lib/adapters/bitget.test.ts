@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   aggregateBitgetWeeklyCandles,
   buildBitgetUrl,
@@ -6,6 +6,7 @@ import {
   computeBitgetImpactSpread,
   createBitgetScheduler,
   fetchBitgetCandles,
+  fetchBitgetCanonicalDetail,
   fetchBitgetFundingHistory,
   fetchLatestBitgetSettlement,
   latestBitgetFundingPoint,
@@ -152,9 +153,11 @@ describe("Bitget candles and books", () => {
     const request: BitgetRequest = async (action, params) => {
       calls += 1;
       actions.push(action);
-      expect(Number(params.endTime) % 60_000).toBe(0);
-      expect(Number(params.endTime) - Number(params.startTime)).toBeLessThanOrEqual(90 * 86_400_000);
+      const start = Number(params.startTime);
       const end = Number(params.endTime);
+      expect(start).toBeLessThan(end);
+      expect(end % 60_000).toBe(0);
+      expect(end - start).toBeLessThanOrEqual(90 * 86_400_000);
       return Array.from({ length: 100 }, (_, index) => [end - index * 60_000, "1", "1", "1", "1", "1", "1"]);
     };
     const rows = await fetchBitgetCandles("BTCUSDT", "1m", { endTime: 2_000_000_000_000, request });
@@ -182,6 +185,75 @@ describe("Bitget candles and books", () => {
     expect(firstSpan).toBe(89 * day);
     expect(firstSpan).toBeLessThanOrEqual(90 * day);
     expect(firstSpan).not.toBe(99 * day);
+  });
+
+  test("stops before an ineligible zero-width history boundary for an unaligned cutoff", async () => {
+    const hour = 3_600_000;
+    const boundary = Date.UTC(2026, 6, 1);
+    const calls: Array<{ action: string; params: Record<string, string> }> = [];
+    const request: BitgetRequest = async (action, params) => {
+      calls.push({ action, params });
+      return [[boundary + hour, "1", "1", "1", "1", "1"]];
+    };
+
+    const rows = await fetchBitgetCandles("BTCUSDT", "1h", {
+      startTime: boundary + 1,
+      endTime: boundary + hour,
+      request,
+    });
+
+    expect(rows.map((row) => row.openTime)).toEqual([boundary + hour]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].action).toBe("candles");
+    expect(Number(calls[0].params.startTime)).toBeLessThan(Number(calls[0].params.endTime));
+  });
+
+  test("widens an eligible aligned history boundary and recovers its candle", async () => {
+    const hour = 3_600_000;
+    const boundary = Date.UTC(2026, 6, 1);
+    const calls: Array<{ action: string; params: Record<string, string> }> = [];
+    const request: BitgetRequest = async (action, params) => {
+      calls.push({ action, params });
+      return action === "candles"
+        ? [[boundary + hour, "2", "2", "2", "2", "2"]]
+        : [[boundary, "1", "1", "1", "1", "1"], [boundary - hour, "0", "0", "0", "0", "0"]];
+    };
+
+    const rows = await fetchBitgetCandles("BTCUSDT", "1h", {
+      startTime: boundary,
+      endTime: boundary + hour,
+      request,
+    });
+
+    expect(rows.map((row) => row.openTime)).toEqual([boundary, boundary + hour]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({
+      action: "history-candles",
+      params: expect.objectContaining({ startTime: String(boundary - hour), endTime: String(boundary) }),
+    });
+  });
+
+  test("widens a same-bucket initial range backward and filters the transport-only row", async () => {
+    const hour = 3_600_000;
+    const boundary = Date.UTC(2026, 6, 1);
+    const calls: Array<{ action: string; params: Record<string, string> }> = [];
+    const request: BitgetRequest = async (action, params) => {
+      calls.push({ action, params });
+      return [[boundary, "1", "1", "1", "1", "1"], [boundary - hour, "0", "0", "0", "0", "0"]];
+    };
+
+    const rows = await fetchBitgetCandles("BTCUSDT", "1h", {
+      startTime: boundary,
+      endTime: boundary + hour / 2,
+      request,
+    });
+
+    expect(calls).toEqual([{
+      action: "candles",
+      params: expect.objectContaining({ startTime: String(boundary - hour), endTime: String(boundary) }),
+    }]);
+    expect(Number(calls[0].params.startTime)).toBeLessThan(Number(calls[0].params.endTime));
+    expect(rows.map((row) => row.openTime)).toEqual([boundary]);
   });
 
   test("continues after a complete 90-row 1d window and stops on a genuinely short page", async () => {
@@ -267,6 +339,60 @@ describe("Bitget candles and books", () => {
       bids: [{ price: 99, baseQty: 1 }],
       asks: [{ price: 101, baseQty: 20 }],
     }, 1000)).toBe("insufficient");
+  });
+});
+
+describe("Bitget canonical detail degradation", () => {
+  const now = Date.UTC(2026, 6, 15);
+  const row = {
+    symbol: "BTC",
+    rawSymbol: "BTCUSDT",
+    marketKey: "BTCUSDT",
+    fundingIntervalSeconds: 8 * 3600,
+    bestBid: 99,
+    bestAsk: 101,
+  };
+
+  test("preserves funding, settlement, and BBO when candles fail ordinarily", async () => {
+    const candleFailure = new Error("candles unavailable");
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+    const request: BitgetRequest = async (action) => {
+      if (action === "history-fund-rate") {
+        return { resultList: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] };
+      }
+      throw candleFailure;
+    };
+
+    try {
+      const detail = await fetchBitgetCanonicalDetail(row, "1d", { now, request });
+      expect(detail.candles).toEqual([]);
+      expect(detail.fundingHistory).toEqual([{ timestamp: now - 1000, fundingRate: 0.001 }]);
+      expect(detail.lastSettlementRate).toBe(0.001);
+      expect(detail.bidAskSpread).toBe(2);
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  test("still rejects candle aborts", async () => {
+    const abort = new DOMException("caller canceled", "AbortError");
+    const request: BitgetRequest = async (action) => {
+      if (action === "history-fund-rate") return { resultList: [] };
+      throw abort;
+    };
+
+    await expect(fetchBitgetCanonicalDetail(row, "1d", { now, request })).rejects.toBe(abort);
+  });
+
+  test("still rejects required funding history failures", async () => {
+    const fundingFailure = new Error("funding unavailable");
+    const request: BitgetRequest = async (action) => {
+      if (action === "history-fund-rate") throw fundingFailure;
+      return [];
+    };
+
+    await expect(fetchBitgetCanonicalDetail(row, "1d", { now, request })).rejects.toBe(fundingFailure);
   });
 });
 

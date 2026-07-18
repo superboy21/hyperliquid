@@ -1,4 +1,5 @@
 import type { AssetCategory, CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
+import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
 
 export type BitgetCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
 export type BitgetAction = "instruments" | "tickers" | "current-fund-rate" | "history-fund-rate" | "candles" | "history-candles" | "orderbook";
@@ -461,14 +462,18 @@ export async function fetchBitgetCandles(
   // V3's recent endpoint is always the first and exactly one request. Its
   // explicit aligned window also makes a supplied historical end deterministic.
   throwIfAborted(options.signal);
-  const recentStart = Math.min(alignedEnd, Math.max(
+  const alignedRecentStart = Math.floor(Math.min(alignedEnd, Math.max(
     1,
     alignedRequestedStart ?? alignedEnd - 99 * config.ms,
     alignedEnd - MAX_HISTORY_WINDOW + config.ms,
-  ));
+  )) / config.ms) * config.ms;
+  const recentStart = alignedRecentStart === alignedEnd
+    ? Math.max(0, alignedEnd - config.ms)
+    : alignedRecentStart;
+  if (recentStart >= alignedEnd) return [];
   const recentPayload = await request("candles", {
     symbol: rawSymbol, interval: config.api, type: "market", limit: "100",
-    startTime: String(Math.floor(recentStart / config.ms) * config.ms), endTime: String(alignedEnd),
+    startTime: String(recentStart), endTime: String(alignedEnd),
   }, options.signal);
   const recentRows = normalizePayload(recentPayload);
   addRows(recentRows);
@@ -486,13 +491,16 @@ export async function fetchBitgetCandles(
     if (end <= 0) break;
     const start = Math.max(1, alignedRequestedStart ?? 1, end - MAX_HISTORY_WINDOW + config.ms);
     const alignedStart = Math.floor(start / config.ms) * config.ms;
+    if (alignedStart > end || (alignedStart === end && requestedStart !== undefined && end < requestedStart)) break;
+    const transportStart = alignedStart === end ? Math.max(0, end - config.ms) : alignedStart;
+    if (transportStart >= end) break;
     const maximumRowsForWindow = Math.min(100, Math.max(0, Math.floor((end - alignedStart) / config.ms) + 1));
     const payload = await request("history-candles", {
       symbol: rawSymbol, interval: config.api, type: "market", limit: "100",
-      startTime: String(alignedStart), endTime: String(end),
+      startTime: String(transportStart), endTime: String(end),
     }, options.signal);
     const rows = normalizePayload(payload);
-    addRows(rows);
+    addRows(rows.filter((row) => row.openTime >= alignedStart));
     oldest = rows.length ? rows[0].openTime : Number.POSITIVE_INFINITY;
     const rawRowCount = (payload as unknown[]).length;
     if (rawRowCount === 0 || rawRowCount < maximumRowsForWindow || oldest >= previousOldest || (requestedStart !== undefined && oldest <= requestedStart)) break;
@@ -585,6 +593,11 @@ export async function fetchBitgetCanonicalDetail(
       endTime: now,
       signal: options.signal,
       request: options.request,
+    }).catch((error): CanonicalCandlePoint[] => {
+      if (options.signal?.aborted) throw getAbortReason(options.signal);
+      if (isAbortLikeError(error)) throw error;
+      console.warn(`Bitget candle detail request failed for ${row.rawSymbol}; returning funding-only detail`, error);
+      return [];
     }),
   ]);
 

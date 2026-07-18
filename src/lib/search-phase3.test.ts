@@ -100,6 +100,32 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
     expect(() => requireBitgetRawSymbol(rate({ rawSymbol: undefined }))).toThrow("rawSymbol");
   });
 
+  test("maps funding-only canonical detail without losing settlement or BBO metrics", async () => {
+    const now = Date.now();
+    const result = await fetchDetailForSymbol(rate(), undefined, {
+      fetchBitgetCanonicalDetail: async (row) => ({
+        exchange: "bitget",
+        transportMode: "native",
+        symbol: row.symbol,
+        rawSymbol: row.rawSymbol,
+        marketKey: row.marketKey,
+        fundingHistory: [{ timestamp: now - 3_600_000, fundingRate: 0.001 }],
+        candles: [],
+        lastSettlementRate: 0.001,
+        bidAskSpread: 2,
+      }),
+    });
+
+    expect(result).toEqual({
+      lastSettlementRate: 0.001,
+      avgFundingRate2d: 0.001,
+      historicalVolatility: null,
+      bidAskSpread: 2,
+      avgFundingRate7d: 0.001,
+      avgFundingRate30d: 0.001,
+    });
+  });
+
   test("impact dispatch uses exact rawSymbol and fails before its fetcher", async () => {
     const calls: string[] = [];
     const fetcher = async (_exchange: string, rawSymbol: string) => {
