@@ -80,10 +80,51 @@ function waitForTurn(turn: Promise<void>, signal?: AbortSignal): Promise<void> {
 }
 
 class BitgetHttpError extends Error {
-  constructor(public status: number, public retryAfterMs: number | null) { super(`Bitget request failed (${status})`); }
+  constructor(
+    public status: number,
+    public retryAfterMs: number | null,
+    public apiCode?: string,
+    public apiMessage?: string,
+  ) {
+    const diagnostic = apiCode ? `; API code ${apiCode}${apiMessage ? `: ${apiMessage}` : ""}` : "";
+    super(`Bitget request failed (${status}${diagnostic})`);
+  }
   get transient() { return this.status === 429 || this.status >= 500; }
 }
 class BitgetTimeoutError extends Error { constructor() { super("Bitget client request timed out"); this.name = "TimeoutError"; } }
+
+function statusForBitgetCode(code: string): number {
+  if (code === "25004") return 429;
+  if (code === "25100") return 404;
+  if (["25000", "25001", "25003", "25101", "25102", "25104", "25108", "40725"].includes(code)) return 503;
+  if (["25200", "40017", "40034"].includes(code)) return 400;
+  return 502;
+}
+
+function unwrapBitgetEnvelope(payload: unknown, retryAfter: number | null): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || !("code" in payload)) {
+    throw new TypeError("Malformed Bitget response envelope");
+  }
+  const envelope = payload as { code?: unknown; data?: unknown; msg?: unknown; message?: unknown };
+  if (envelope.code === "00000") {
+    if (!("data" in envelope)) throw new TypeError("Malformed Bitget success envelope");
+    return envelope.data;
+  }
+  const code = String(envelope.code);
+  const rawMessage = envelope.msg ?? envelope.message;
+  const message = typeof rawMessage === "string" ? rawMessage : undefined;
+  throw new BitgetHttpError(statusForBitgetCode(code), retryAfter, code, message);
+}
+
+function bitgetEnvelopeDiagnostics(payload: unknown): { apiCode?: string; apiMessage?: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || !("code" in payload)) return {};
+  const envelope = payload as { code?: unknown; msg?: unknown; message?: unknown };
+  const rawMessage = envelope.msg ?? envelope.message;
+  return {
+    ...(envelope.code === undefined ? {} : { apiCode: String(envelope.code) }),
+    ...(typeof rawMessage === "string" ? { apiMessage: rawMessage } : {}),
+  };
+}
 
 function retryAfterMs(response: Response, now: number): number | null {
   const value = response.headers.get("retry-after");
@@ -124,12 +165,13 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
         callerSignal?.addEventListener("abort", callerAbort, { once: true });
         try {
           const response = await fetchImpl(url, { ...init, cache: "no-store", signal: controller.signal });
-          if (!response.ok) throw new BitgetHttpError(response.status, retryAfterMs(response, now()));
-          const payload: unknown = await response.json();
-          if (payload && typeof payload === "object" && "code" in payload) {
-            throw new TypeError("Unexpected Bitget envelope from proxy");
+          const retryAfter = response.status === 429 ? retryAfterMs(response, now()) : null;
+          const payload: unknown = await response.json().catch(() => undefined);
+          if (!response.ok) {
+            const diagnostics = bitgetEnvelopeDiagnostics(payload);
+            throw new BitgetHttpError(response.status, retryAfter, diagnostics.apiCode, diagnostics.apiMessage);
           }
-          return payload;
+          return unwrapBitgetEnvelope(payload, retryAfter);
         } catch (error) {
           if (callerSignal?.aborted) throw abortError();
           const failure = timedOut ? new BitgetTimeoutError() : error;
@@ -236,9 +278,33 @@ export function normalizeBitgetFundingRows(
 }
 
 export type BitgetRequest = (action: BitgetAction, params: Record<string, string>, signal?: AbortSignal) => Promise<unknown>;
+
+const BITGET_API_ORIGIN = "https://api.bitget.com";
+const BITGET_ACTION_PATHS: Record<BitgetAction, string> = {
+  instruments: "/api/v3/market/instruments",
+  tickers: "/api/v3/market/tickers",
+  "current-fund-rate": "/api/v3/market/current-fund-rate",
+  "history-fund-rate": "/api/v3/market/history-fund-rate",
+  candles: "/api/v3/market/candles",
+  "history-candles": "/api/v3/market/history-candles",
+  orderbook: "/api/v3/market/orderbook",
+};
+const BITGET_ACTION_DEFAULTS: Partial<Record<BitgetAction, Record<string, string>>> = {
+  "history-fund-rate": { cursor: "1", limit: "100" },
+  candles: { type: "market", limit: "100" },
+  "history-candles": { type: "market", limit: "100" },
+  orderbook: { limit: "100" },
+};
+
+export function buildBitgetUrl(action: BitgetAction, params: Record<string, string> = {}): string {
+  const url = new URL(BITGET_ACTION_PATHS[action], BITGET_API_ORIGIN);
+  const merged = { ...BITGET_ACTION_DEFAULTS[action], ...params, category: "USDT-FUTURES" };
+  for (const [key, value] of Object.entries(merged)) url.searchParams.set(key, value);
+  return url.toString();
+}
+
 export const requestBitget: BitgetRequest = (action, params, signal) => {
-  const search = new URLSearchParams({ action, ...params });
-  return bitgetScheduler.fetchJson(`/api/bitget?${search.toString()}`, { signal });
+  return bitgetScheduler.fetchJson(buildBitgetUrl(action, params), { signal });
 };
 
 export async function fetchBitgetCanonicalRates(signal?: AbortSignal, request: BitgetRequest = requestBitget) {

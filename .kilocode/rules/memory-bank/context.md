@@ -45,11 +45,11 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 - [x] **Search result midpoint pricing**: The Search price column switches to “中间价” only for non-empty searches with matches, uses valid positive best bid/ask values, and shows `--` instead of falling back to last price.
 - [x] **Search result midpoint premium**: Search-result premium display and sorting now use the validated midpoint against index price, while default and no-result views retain last-price premium.
 - [x] **Lighter live midpoint hydration**: Lighter detail results retain the live top bid/ask already fetched for spread calculation, allowing Search midpoint and premium display/sorting to consume detail-cache quotes without restarting rate filtering.
-- [x] **Bitget funding and Search architecture completed**: Added the allowlisted V3 UTA proxy, canonical list/history/candle/order-book normalization, bounded shared scheduling/retries, exact raw-symbol identity, Funding UI integration, Search result/detail/chart integration, and progressive Bitget request lanes.
+- [x] **Bitget funding and Search architecture completed**: Added canonical V3 UTA list/history/candle/order-book normalization, bounded shared scheduling/retries, exact raw-symbol identity, Funding UI integration, Search result/detail/chart integration, and progressive Bitget request lanes.
 - [x] **Bitget Phase 1 review fixes**: Aligned history with V3 `resultList`/`fundingRateTimestamp`, made recent candles the single first request with bounded history fallback, added one-request latest settlement loading, and expanded deterministic scheduler/proxy tests.
 - [x] **Bitget semantics**: Scope is online `USDT-FUTURES` perpetuals; each contract's dynamic 1/2/4/8-hour funding interval drives annualization; official turnover and open interest semantics are preserved; `rawSymbol` is mandatory for transport; order-book sizes are base quantities; weekly candles aggregate UTC Monday-based daily candles.
-- [x] **Bitget request control**: Browser calls use `/api/bitget`; the server proxy allowlists V3 public actions/parameters and maps upstream status; one shared FIFO scheduler enforces single concurrency, 250ms minimum starts plus jitter, bounded timeout/retries, and abort propagation.
-- [x] **2026-07-18 validation**: 62 tests, TypeScript typecheck, ESLint, and production build all pass.
+- [x] **Bitget request control**: Browser calls Bitget V3 public endpoints directly because Bitget rejects Cloudflare Workers egress IPs with HTTP 403. The shared FIFO scheduler validates Bitget envelopes and enforces single concurrency, 250ms minimum starts plus jitter, bounded timeout/retries, API error mapping, and abort propagation.
+- [x] **2026-07-18 validation**: 80 tests, TypeScript typecheck, ESLint, and production build all pass; an Origin-header probe confirmed Bitget responds with `Access-Control-Allow-Origin: *`.
 
 ## Current Structure
 
@@ -59,7 +59,7 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 | `src/app/layout.tsx` | Root layout | ✅ Ready |
 | `src/app/globals.css` | Global styles | ✅ Ready |
 | `src/app/funding/page.tsx` | Funding rate monitor page | ✅ Ready |
-| `src/app/api/bitget/route.ts` | Allowlisted Bitget V3 UTA server proxy | ✅ Ready |
+| `src/app/api/bitget/route.ts` | Legacy/diagnostic Bitget proxy (Cloudflare egress is blocked upstream) | ⚠️ Not used by browser adapter |
 | `src/components/funding/FundingMonitor.tsx` | Main funding monitor component | ✅ Ready |
 | `src/components/funding/BitgetFundingMonitor.tsx` | Bitget funding monitor integration | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
@@ -82,12 +82,12 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 - `metaAndAssetCtxs`: Perpetual contract funding rates
 - `spotMetaAndAssetCtxs`: HIP-3 spot market funding rates
 - `fundingHistory`: Historical funding data (up to 30 days)
-- `/api/bitget`: Allowlisted proxy for Bitget V3 UTA public market endpoints, scoped to online USDT perpetuals
+- Direct `https://api.bitget.com/api/v3/market/*` browser requests for Bitget public market data, scoped to online USDT perpetuals
 - Bitget Funding/Search: Canonical rates load with the six-exchange universe; search details progress only after a matching query and charts load when selected
 
 ## Current Focus
 
-Bitget Funding and Search integration is complete. Current behavior to preserve includes the six-exchange universe, five-minute funding refresh, progressive search-detail hydration, on-demand chart history, exact Bitget `rawSymbol` dispatch, and bounded per-exchange request scheduling.
+Bitget Funding and Search integration is complete. Current behavior to preserve includes browser-direct Bitget transport (to avoid Cloudflare Workers 403), the six-exchange universe, five-minute funding refresh, progressive search-detail hydration, on-demand chart history, exact Bitget `rawSymbol` dispatch, and bounded per-exchange request scheduling.
 
 ## Quick Start Guide
 
@@ -160,3 +160,4 @@ export async function GET() {
 | 2026-07-18 | Implemented Bitget Phase 1 transport and normalization, including strict proxy actions/status mapping, scheduler bounds, pagination/caps, weekly candles, quantity semantics, and adapter tests. |
 | 2026-07-18 | Fixed Bitget Phase 1 review findings for official V3 history/list fields, recent-first candle pagination, one-request latest settlement, and deterministic abort/retry/proxy coverage. |
 | 2026-07-18 | Completed Bitget Funding and Search integration with exact raw-symbol dispatch, dynamic funding intervals, progressive detail lanes, on-demand charts, server proxy scheduling, and six-exchange documentation; validation passed with 62 tests, typecheck, lint, and build. |
+| 2026-07-18 | Fixed production Bitget 502 responses caused by upstream HTTP 403 against Cloudflare Workers: switched the browser adapter to direct CORS-enabled Bitget V3 requests, added strict envelope/error handling and direct-URL coverage; validation passed with 80 tests, typecheck, lint, and build. |

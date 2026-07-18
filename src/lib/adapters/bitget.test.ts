@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   aggregateBitgetWeeklyCandles,
+  buildBitgetUrl,
   computeBitgetBboSpread,
   computeBitgetImpactSpread,
   createBitgetScheduler,
@@ -249,6 +250,95 @@ describe("Bitget candles and books", () => {
 });
 
 describe("Bitget scheduler", () => {
+  test("unwraps successful direct API envelopes", async () => {
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async () => Response.json({ code: "00000", data: [{ symbol: "BTCUSDT" }] })) as typeof fetch,
+    });
+    await expect(scheduler.fetchJson("https://api.bitget.com/test")).resolves.toEqual([{ symbol: "BTCUSDT" }]);
+  });
+
+  test.each([
+    ["25004", 429],
+    ["25100", 404],
+    ["25000", 503],
+    ["25200", 400],
+    ["unknown", 502],
+  ])("maps failed business envelope %s to status %i", async (code, status) => {
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async () => Response.json({ code, msg: "diagnostic message", data: null })) as typeof fetch,
+    });
+    const failure = scheduler.fetchJson("https://api.bitget.com/test");
+    await expect(failure).rejects.toMatchObject({ status, apiCode: code, apiMessage: "diagnostic message" });
+    await expect(failure).rejects.toThrow(`API code ${code}: diagnostic message`);
+  });
+
+  test("keeps HTTP 429 precedence for unfamiliar business codes and retries with Retry-After", async () => {
+    let calls = 0;
+    const sleeps: number[] = [];
+    const scheduler = createBitgetScheduler({
+      now: () => 0,
+      random: () => 0,
+      sleep: async (ms) => { sleeps.push(ms); },
+      fetch: (async () => {
+        calls += 1;
+        if (calls === 1) {
+          return Response.json(
+            { code: "unfamiliar", msg: "rate limited", data: null },
+            { status: 429, headers: { "Retry-After": "2" } },
+          );
+        }
+        return Response.json({ code: "00000", data: ["recovered"] });
+      }) as typeof fetch,
+    });
+
+    await expect(scheduler.fetchJson("/limited-envelope")).resolves.toEqual(["recovered"]);
+    expect(calls).toBe(2);
+    expect(sleeps[0]).toBe(2000);
+  });
+
+  test("reports HTTP status 429 instead of mapping an unfamiliar business code", async () => {
+    let calls = 0;
+    const scheduler = createBitgetScheduler({
+      now: () => 0,
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async () => {
+        calls += 1;
+        return Response.json(
+          { code: "unfamiliar", msg: "rate limited", data: null },
+          { status: 429, headers: { "Retry-After": "2" } },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(scheduler.fetchJson("/limited-envelope")).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 2000,
+      apiCode: "unfamiliar",
+      apiMessage: "rate limited",
+    });
+    expect(calls).toBe(3);
+  });
+
+  test("rejects an HTTP error even when its Bitget envelope has success code 00000", async () => {
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async () => Response.json(
+        { code: "00000", msg: "upstream failure", data: ["must not unwrap"] },
+        { status: 400 },
+      )) as typeof fetch,
+    });
+
+    const failure = scheduler.fetchJson("/http-error-success-code");
+    await expect(failure).rejects.toMatchObject({ status: 400, apiCode: "00000", apiMessage: "upstream failure" });
+    await expect(failure).rejects.toThrow("Bitget request failed (400; API code 00000: upstream failure)");
+  });
+
   test("serializes requests, spaces starts by 250ms, and retries transient failures", async () => {
     let clock = 0;
     const starts: number[] = [];
@@ -262,7 +352,7 @@ describe("Bitget scheduler", () => {
         starts.push(clock);
         attempts += 1;
         if (attempts === 1) return new Response("{}", { status: 429, headers: { "Retry-After": "2" } });
-        return Response.json([]);
+        return Response.json({ code: "00000", data: [] });
       }) as typeof fetch,
     });
     const first = scheduler.fetchJson("/first");
@@ -297,7 +387,7 @@ describe("Bitget scheduler", () => {
       fetch: (async () => {
         calls += 1;
         if (calls === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
-        return Response.json([]);
+        return Response.json({ code: "00000", data: [] });
       }) as typeof fetch,
     });
     const first = scheduler.fetchJson("/first");
@@ -346,7 +436,7 @@ describe("Bitget scheduler", () => {
       sleep: async (ms) => { sleeps.push(ms); },
       fetch: (async () => {
         calls += 1;
-        return calls === 1 ? new Response("{}", { status: 429, headers: { "Retry-After": "600" } }) : Response.json([]);
+        return calls === 1 ? new Response("{}", { status: 429, headers: { "Retry-After": "600" } }) : Response.json({ code: "00000", data: [] });
       }) as typeof fetch,
     });
     await scheduler.fetchJson("/limited");
@@ -366,5 +456,41 @@ describe("Bitget scheduler", () => {
     });
     await expect(scheduler.fetchJson("/timeout")).rejects.toHaveProperty("name", "TimeoutError");
     expect(calls).toBe(3);
+  });
+});
+
+describe("Bitget direct API URLs", () => {
+  test.each([
+    ["instruments", "/api/v3/market/instruments"],
+    ["tickers", "/api/v3/market/tickers"],
+    ["current-fund-rate", "/api/v3/market/current-fund-rate"],
+    ["history-fund-rate", "/api/v3/market/history-fund-rate"],
+    ["candles", "/api/v3/market/candles"],
+    ["history-candles", "/api/v3/market/history-candles"],
+    ["orderbook", "/api/v3/market/orderbook"],
+  ] as const)("maps %s to the direct V3 path", (action, path) => {
+    const url = new URL(buildBitgetUrl(action));
+    expect(url.origin).toBe("https://api.bitget.com");
+    expect(url.pathname).toBe(path);
+    expect(url.searchParams.get("category")).toBe("USDT-FUTURES");
+  });
+
+  test("applies proxy defaults and lets caller params override them", () => {
+    const history = new URL(buildBitgetUrl("history-fund-rate"));
+    expect(Object.fromEntries(history.searchParams)).toMatchObject({ category: "USDT-FUTURES", cursor: "1", limit: "100" });
+
+    const candles = new URL(buildBitgetUrl("candles", { type: "index", limit: "25" }));
+    expect(Object.fromEntries(candles.searchParams)).toMatchObject({ category: "USDT-FUTURES", type: "index", limit: "25" });
+
+    const historyCandles = new URL(buildBitgetUrl("history-candles"));
+    expect(Object.fromEntries(historyCandles.searchParams)).toMatchObject({ category: "USDT-FUTURES", type: "market", limit: "100" });
+    expect(new URL(buildBitgetUrl("orderbook")).searchParams.get("limit")).toBe("100");
+  });
+
+  test("encodes caller parameters and always fixes the futures category", () => {
+    const url = new URL(buildBitgetUrl("tickers", { symbol: "BTC/USDT + test", category: "wrong" }));
+    expect(url.searchParams.get("symbol")).toBe("BTC/USDT + test");
+    expect(url.searchParams.get("category")).toBe("USDT-FUTURES");
+    expect(url.toString()).toContain("symbol=BTC%2FUSDT+%2B+test");
   });
 });
