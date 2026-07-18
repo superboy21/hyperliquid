@@ -1,10 +1,12 @@
 // ==================== Impact Price (VWAP) Calculation ====================
 // Computes volume-weighted average price by sweeping order book depth
-// across a configurable notional threshold (default $1000) for all 5 exchanges.
+// across a configurable notional threshold (default $1000) for all 6 exchanges.
 
 import { fetchL2Book } from "./hyperliquid";
 import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
+import { fetchBitgetImpactSpread } from "./adapters/bitget";
+import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
 
 export const DEFAULT_IMPACT_NOTIONAL = 1000;
 export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
@@ -382,6 +384,8 @@ export async function fetchImpactSpread(
     case "Lighter":
       book = await fetchLighterBook(rawSymbol, signal);
       break;
+    case "Bitget":
+      return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal);
     default:
       return null;
   }
@@ -390,4 +394,15 @@ export async function fetchImpactSpread(
   const spread = computeImpactSpread(book, notionalUsd);
   if (spread === null) return "insufficient"; // book ok, depth < notional
   return spread;
+}
+
+/** Search dispatch that prevents display-symbol fallback for Bitget. */
+export async function fetchSearchImpactSpread(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+  signal?: AbortSignal,
+  notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
+  fetcher: typeof fetchImpactSpread = fetchImpactSpread,
+): Promise<ImpactSpreadResult> {
+  const rawSymbol = requireBitgetRawSymbol(rate);
+  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd);
 }

@@ -2,6 +2,15 @@
 
 import { ComponentType, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ImpactSpreadResult } from "@/lib/impact-price";
+import { FUNDING_THEME_CLASSES, type FundingThemeKey } from "@/components/funding/fundingThemes";
+import {
+  calculateNotionalWeightedAnnualizedRate,
+  defaultAnnualizeFundingRate,
+  formatAnnualizedPercentage,
+  resolveTopBboSpread,
+  type AnnualizeFundingRate,
+} from "@/components/funding/fundingMonitorUtils";
+import { isAbortLikeError } from "@/lib/utils/abort";
 
 // ==================== Types ====================
 
@@ -10,6 +19,8 @@ export type SortField = "rate" | "name" | "volume" | "price" | "change" | "oi";
 
 export interface ExchangeFundingRate {
   symbol: string;
+  rawSymbol?: string;
+  marketKey?: string;
   fundingRate: number;
   lastSettlementRate: number;
   settlementHydrationKey?: string;
@@ -78,6 +89,8 @@ export interface HydrationPolicy {
   initialTargetStrategy?: "fixed-count" | "selected-and-visible";
   initialHydrationCap?: number;
   neighborRadius?: number;
+  deferSelectedSettlementToDetail?: boolean;
+  boundTargetsToCurrentBatch?: boolean;
   onRowClickHydrate?: (
     clickedSymbol: string,
     filteredRates: ExchangeFundingRate[],
@@ -86,12 +99,14 @@ export interface HydrationPolicy {
 
 export interface ExchangeFundingMonitorConfig {
   exchangeName: string;
-  exchangeColor: string;
+  exchangeColor: FundingThemeKey;
   categoryConfig: Record<string, CategoryConfig>;
   defaultFilterType: string;
   formatFundingRate: (rate: number) => string;
   formatAnnualizedRate: (rate: number, fundingIntervalSeconds?: number) => string;
   formatStatCardAnnualizedRate?: (rate: number, fundingIntervalSeconds: number) => string;
+  annualizeRate?: AnnualizeFundingRate;
+  statCardAnnualizeRate?: AnnualizeFundingRate;
   formatPrice: (price: number) => string;
   formatVolume: (volume: number) => string;
   ChartComponent: ComponentType<ChartComponentProps>;
@@ -101,13 +116,14 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
     targetSymbols: string[],
     hydrationKey: number,
+    signal: AbortSignal,
   ) => Promise<void>;
   hydrateOI?: (
     rates: ExchangeFundingRate[],
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
-  fetchDetailData: (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]) => Promise<DetailData>;
-  fetchImpactSpread?: (symbol: string, notional?: number) => Promise<ImpactSpreadResult>;
+  fetchDetailData: (rate: ExchangeFundingRate, interval: ChartInterval, rates: ExchangeFundingRate[], signal: AbortSignal) => Promise<DetailData>;
+  fetchImpactSpread?: (rate: ExchangeFundingRate, notional?: number, signal?: AbortSignal) => Promise<ImpactSpreadResult>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
@@ -146,6 +162,7 @@ export function FundingStatCard({
   formatFundingRate,
   formatAnnualizedRate,
   formatStatCardAnnualizedRate,
+  annualizeRate = defaultAnnualizeFundingRate,
 }: {
   title: string;
   rate: number | null;
@@ -153,6 +170,7 @@ export function FundingStatCard({
   formatFundingRate: (rate: number) => string;
   formatAnnualizedRate: (rate: number, fundingIntervalSeconds?: number) => string;
   formatStatCardAnnualizedRate?: (rate: number, fundingIntervalSeconds: number) => string;
+  annualizeRate?: AnnualizeFundingRate;
 }) {
   if (rate === null) {
     return (
@@ -166,12 +184,12 @@ export function FundingStatCard({
   const annualizedStr = formatStatCardAnnualizedRate
     ? formatStatCardAnnualizedRate(rate, fundingIntervalSeconds)
     : formatAnnualizedRate(rate, fundingIntervalSeconds);
-  const isPositive = !annualizedStr.startsWith("-");
+  const annualizedPctNum = annualizeRate(rate, fundingIntervalSeconds);
+  const isPositive = annualizedPctNum >= 0;
 
   // Derive per-settlement-period rate from the annualized value
   // annualizedPct = hourlyEquivalent * 8760 for all exchanges
   // perPeriodRate = annualizedPct * fundingIntervalHours / 8760
-  const annualizedPctNum = parseFloat(annualizedStr.replace(/[^0-9.eE+\-]/g, "")) || 0;
   const fundingIntervalHours = fundingIntervalSeconds / 3600;
   const perPeriodRate = annualizedPctNum * fundingIntervalHours / 8760;
   const perPeriodStr = `${perPeriodRate >= 0 ? "+" : ""}${perPeriodRate.toFixed(4)}%`;
@@ -198,6 +216,8 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     formatFundingRate,
     formatAnnualizedRate,
     formatStatCardAnnualizedRate,
+    annualizeRate = defaultAnnualizeFundingRate,
+    statCardAnnualizeRate,
     formatPrice,
     formatVolume,
     ChartComponent,
@@ -212,6 +232,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     searchPlaceholder = "搜索交易对，例如 BTC、ETH",
     filterFn,
   } = config;
+  const themeClasses = FUNDING_THEME_CLASSES[exchangeColor];
 
   // State
   const [fundingRates, setFundingRates] = useState<ExchangeFundingRate[]>([]);
@@ -236,6 +257,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [impactSpread, setImpactSpread] = useState<ImpactSpreadResult>(null);
   const [impactLoading, setImpactLoading] = useState(false);
   const impactAbortRef = useRef<AbortController | null>(null);
+  const detailAbortRef = useRef<AbortController | null>(null);
+  const detailGenerationRef = useRef(0);
+  const detailEffectGenerationRef = useRef(0);
+  const hydrationGenerationRef = useRef(0);
   const [hydrationTargetSymbols, setHydrationTargetSymbols] = useState<string[]>([]);
   const [hydrationKey, setHydrationKey] = useState(0);
   const fundingRatesRef = useRef<ExchangeFundingRate[]>([]);
@@ -243,7 +268,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const filteredRatesRef = useRef<ExchangeFundingRate[]>([]);
   const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const settlementCacheRef = useRef<Map<string, { value: number; timestamp: number }>>(new Map());
-  const settlementInflightRef = useRef<Set<string>>(new Set());
+  const settlementInflightRef = useRef<Map<string, number>>(new Map());
 
   const getSettlementCacheKey = useCallback((rate: ExchangeFundingRate): string => {
     return rate.settlementHydrationKey ?? rate.symbol;
@@ -268,6 +293,12 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     }
 
     return cached.value;
+  }, []);
+
+  const abortDetailForEffect = useCallback((effectGeneration: number) => {
+    if (detailEffectGenerationRef.current === effectGeneration) {
+      detailAbortRef.current?.abort();
+    }
   }, []);
 
   // Fetch rates
@@ -315,7 +346,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     } finally {
       setLoading(false);
     }
-  }, [cacheSettlementRate, fetchRates, getSettlementCacheKey]);
+  }, [cacheSettlementRate, fetchRates, getSettlementCacheKey, hydrateOI]);
 
   useEffect(() => {
     handleFetchRates();
@@ -326,6 +357,12 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   // Fetch detail data
   const handleFetchDetail = useCallback(
     async (symbol: string, interval: ChartInterval) => {
+      detailAbortRef.current?.abort();
+      const controller = new AbortController();
+      detailAbortRef.current = controller;
+      const generation = ++detailGenerationRef.current;
+      const isCurrentRequest = () => !controller.signal.aborted && detailGenerationRef.current === generation;
+
       setDetailLoading(true);
       setDetailError(null);
       setCandles([]);
@@ -335,7 +372,12 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
       try {
         const currentRates = fundingRatesRef.current;
-        const detailData = await fetchDetailData(symbol, interval, currentRates);
+        const selectedRate = currentRates.find((rate) => rate.symbol === symbol);
+        if (!selectedRate) {
+          throw new Error(`Missing selected funding row for ${symbol}`);
+        }
+        const detailData = await fetchDetailData(selectedRate, interval, currentRates, controller.signal);
+        if (!isCurrentRequest()) return;
         if (detailData.candles.length === 0) {
           setDetailError(`暂时拿不到该资产最近 30 天的${intervalLabels[interval]}数据。`);
           return;
@@ -360,20 +402,23 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
           });
         }
       } catch (fetchError) {
+        if (!isCurrentRequest() || isAbortLikeError(fetchError)) return;
         console.error("Error fetching detail:", fetchError);
         setDetailError("加载图表数据时发生错误。");
       } finally {
-        setDetailLoading(false);
+        if (isCurrentRequest()) setDetailLoading(false);
       }
     },
     [cacheSettlementRate, fetchDetailData, getSettlementCacheKey],
   );
 
   useEffect(() => {
+    const effectGeneration = ++detailEffectGenerationRef.current;
     if (selectedCoin) {
-      handleFetchDetail(selectedCoin, selectedInterval);
+      void handleFetchDetail(selectedCoin, selectedInterval);
     }
-  }, [handleFetchDetail, selectedCoin, selectedInterval]);
+    return () => abortDetailForEffect(effectGeneration);
+  }, [abortDetailForEffect, handleFetchDetail, selectedCoin, selectedInterval]);
 
   // Lazy-load impact spread when toggle switches to "impact"
   useEffect(() => {
@@ -390,7 +435,13 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
     setImpactSpread(null);
     setImpactLoading(true);
-    fetchImpactSpread(selectedCoin, impactNotional).then((spread) => {
+    const selectedRate = fundingRatesRef.current.find((rate) => rate.symbol === selectedCoin);
+    if (!selectedRate) {
+      setImpactLoading(false);
+      return () => controller.abort();
+    }
+
+    fetchImpactSpread(selectedRate, impactNotional, controller.signal).then((spread) => {
       if (!controller.signal.aborted) {
         setImpactSpread(spread);
         setImpactLoading(false);
@@ -463,14 +514,16 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     [filteredAndSortedRates],
   );
   const shouldDeferSelectedSettlementToDetail =
-    (config.hydrationPolicy?.initialTargetStrategy ?? "fixed-count") === "selected-and-visible";
+    config.hydrationPolicy?.deferSelectedSettlementToDetail
+      ?? (config.hydrationPolicy?.initialTargetStrategy ?? "fixed-count") === "selected-and-visible";
 
   useEffect(() => {
-    if (!hydrateRates || loading || filteredAndSortedRates.length === 0) {
+    const currentFilteredRates = filteredRatesRef.current;
+    if (!hydrateRates || loading || currentFilteredRates.length === 0) {
       return;
     }
 
-    const rateMap = new Map(filteredAndSortedRates.map((rate) => [rate.symbol, rate]));
+    const rateMap = new Map(currentFilteredRates.map((rate) => [rate.symbol, rate]));
     const selectedSymbol = selectedCoinRef.current;
     const cachedUpdates = new Map<string, number>();
     const symbolsToHydrate: string[] = [];
@@ -501,8 +554,6 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         continue;
       }
 
-      settlementInflightRef.current.add(cacheKey);
-      inflightKeys.push(cacheKey);
       symbolsToHydrate.push(symbol);
     }
 
@@ -522,8 +573,27 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       return;
     }
 
-    void hydrateRates(filteredAndSortedRates, (updater) => {
+    const controller = new AbortController();
+    const generation = ++hydrationGenerationRef.current;
+    for (const symbol of symbolsToHydrate) {
+      const rate = rateMap.get(symbol);
+      if (!rate) continue;
+      const cacheKey = getSettlementCacheKey(rate);
+      settlementInflightRef.current.set(cacheKey, generation);
+      inflightKeys.push(cacheKey);
+    }
+    const releaseInflightKeys = () => {
+      for (const key of inflightKeys) {
+        if (settlementInflightRef.current.get(key) === generation) {
+          settlementInflightRef.current.delete(key);
+        }
+      }
+    };
+
+    void hydrateRates(currentFilteredRates, (updater) => {
+      if (controller.signal.aborted || hydrationGenerationRef.current !== generation) return;
       setFundingRates((prev) => {
+        if (controller.signal.aborted || hydrationGenerationRef.current !== generation) return prev;
         const next = updater(prev);
         for (const rate of next) {
           if (Number.isFinite(rate.lastSettlementRate)) {
@@ -533,14 +603,19 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
         fundingRatesRef.current = next;
         return next;
       });
-    }, symbolsToHydrate, hydrationKey).finally(() => {
-      for (const key of inflightKeys) {
-        settlementInflightRef.current.delete(key);
+    }, symbolsToHydrate, hydrationKey, controller.signal).catch((hydrationError) => {
+      if (!controller.signal.aborted && !isAbortLikeError(hydrationError)) {
+        console.warn("Settlement hydration failed:", hydrationError);
       }
-    });
+    }).finally(releaseInflightKeys);
+
+    return () => {
+      controller.abort();
+      releaseInflightKeys();
+    };
   }, [
     cacheSettlementRate,
-    filteredAndSortedRates,
+    filteredOrderKey,
     getFreshCachedSettlementRate,
     getSettlementCacheKey,
     hydrateRates,
@@ -554,8 +629,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const initialHydrationCap = config.hydrationPolicy?.initialHydrationCap ?? initialCount;
   const initialTargetStrategy = config.hydrationPolicy?.initialTargetStrategy ?? "fixed-count";
   const resetOnFilterChange = config.hydrationPolicy?.resetOnFilterChange ?? true;
+  const boundTargetsToCurrentBatch = config.hydrationPolicy?.boundTargetsToCurrentBatch ?? false;
   useEffect(() => {
-    if (filteredAndSortedRates.length === 0) {
+    const hydrationOrderedRates = filteredRatesRef.current;
+    if (hydrationOrderedRates.length === 0) {
       setHydrationTargetSymbols([]);
       return;
     }
@@ -563,13 +640,13 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     const nextTargetSymbols =
       initialTargetStrategy === "selected-and-visible"
         ? (() => {
-            const selectedSymbol = filteredAndSortedRates[0]?.symbol;
+            const selectedSymbol = selectedCoinRef.current ?? hydrationOrderedRates[0]?.symbol;
             const visibleCount = Math.max(
               1,
               Math.ceil((tableScrollRef.current?.clientHeight ?? TABLE_ROW_HEIGHT) / TABLE_ROW_HEIGHT),
             );
-            const visibleSymbols = filteredAndSortedRates
-              .slice(0, Math.min(filteredAndSortedRates.length, visibleCount))
+            const visibleSymbols = hydrationOrderedRates
+              .slice(0, Math.min(hydrationOrderedRates.length, visibleCount))
               .map((rate) => rate.symbol);
 
             return Array.from(new Set([
@@ -577,7 +654,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               ...visibleSymbols,
             ])).slice(0, initialHydrationCap);
           })()
-        : filteredAndSortedRates.slice(0, initialCount).map((rate) => rate.symbol);
+        : hydrationOrderedRates.slice(0, initialCount).map((rate) => rate.symbol);
 
     if (!resetOnFilterChange) {
       setHydrationTargetSymbols((prev) => {
@@ -592,7 +669,6 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
     setHydrationTargetSymbols(nextTargetSymbols);
   }, [
-    filteredAndSortedRates,
     filteredOrderKey,
     initialCount,
     initialHydrationCap,
@@ -615,14 +691,11 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const positiveRates = useMemo(() => fundingRates.filter((rate) => rate.fundingRate > 0).length, [fundingRates]);
   const negativeRates = useMemo(() => fundingRates.filter((rate) => rate.fundingRate < 0).length, [fundingRates]);
 
-  const calculateWeightedAverage = (rates: ExchangeFundingRate[]) => {
-    if (rates.length === 0) return 0;
-    const totalNotional = rates.reduce((sum, rate) => sum + rate.notionalValue, 0);
-    if (totalNotional === 0) return 0;
-    return rates.reduce((sum, rate) => sum + rate.fundingRate * rate.notionalValue, 0) / totalNotional;
-  };
-
-  const averageRate = useMemo(() => calculateWeightedAverage(filteredAndSortedRates), [filteredAndSortedRates]);
+  const averageAnnualizedRate = useMemo(
+    () => calculateNotionalWeightedAnnualizedRate(filteredAndSortedRates, annualizeRate),
+    [annualizeRate, filteredAndSortedRates],
+  );
+  const averageAnnualizedRateLabel = formatAnnualizedPercentage(averageAnnualizedRate);
 
   const recent7HourlyFundingRates = useMemo(() => {
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
@@ -656,20 +729,13 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       historicalVolatility = periodVolatility * Math.sqrt(periodsPerYear) * 100;
     }
 
-    // Bid-ask spread: use detail data if available, otherwise compute from fundingRates
+    // Prefer the current selected-row BBO; the detail snapshot is only a fallback.
     let bidAskSpread: ImpactSpreadResult = null;
     if (spreadSource === "top") {
-      if (detailBidAskSpread !== null) {
-        bidAskSpread = detailBidAskSpread;
-      } else if (selectedCoin) {
-        const selectedRate = fundingRates.find((r) => r.symbol === selectedCoin);
-        if (selectedRate?.bestBid && selectedRate?.bestAsk) {
-          const midPrice = (selectedRate.bestBid + selectedRate.bestAsk) / 2;
-          if (midPrice > 0) {
-            bidAskSpread = ((selectedRate.bestAsk - selectedRate.bestBid) / midPrice) * 100;
-          }
-        }
-      }
+      const selectedRate = selectedCoin
+        ? fundingRates.find((rate) => rate.symbol === selectedCoin)
+        : undefined;
+      bidAskSpread = resolveTopBboSpread(selectedRate, detailBidAskSpread);
     } else if (spreadSource === "impact") {
       bidAskSpread = impactSpread;
     }
@@ -703,7 +769,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     return (
       <div className="flex min-h-[420px] items-center justify-center">
         <div className="text-center">
-          <div className={`mx-auto h-12 w-12 animate-spin rounded-full border-b-2 border-${exchangeColor}-500`} />
+          <div className={`mx-auto h-12 w-12 animate-spin rounded-full border-b-2 ${themeClasses.spinner}`} />
           <p className="mt-4 text-gray-400">正在加载 {exchangeName} 资金费率数据...</p>
         </div>
       </div>
@@ -728,7 +794,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
           <p className="mb-4 text-red-400">{error}</p>
           <button
             onClick={handleFetchRates}
-            className={`rounded-lg bg-${exchangeColor}-600 px-4 py-2 text-white transition-colors hover:bg-${exchangeColor}-700`}
+            className={`rounded-lg px-4 py-2 text-white transition-colors ${themeClasses.primaryButton}`}
           >
             重新加载
           </button>
@@ -759,10 +825,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
           <p className="text-sm text-gray-400">当前平均年化（OI 加权）</p>
           <p
             className={`text-lg font-bold ${
-              formatAnnualizedRate(averageRate).startsWith("-") ? "text-red-400" : "text-green-400"
+              averageAnnualizedRate < 0 ? "text-red-400" : "text-green-400"
             }`}
           >
-            {formatAnnualizedRate(averageRate)}
+            {averageAnnualizedRateLabel}
           </p>
         </div>
       </div>
@@ -810,7 +876,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               onClick={() => toggleSort(field)}
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === field
-                  ? `border-${exchangeColor}-600 bg-${exchangeColor}-600 text-white`
+                  ? themeClasses.activeControl
                   : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
               }`}
             >
@@ -859,6 +925,12 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               const visibleSymbols = filteredAndSortedRates.slice(startIndex, endIndex).map((rate) => rate.symbol);
 
               setHydrationTargetSymbols((prev) => {
+                if (boundTargetsToCurrentBatch) {
+                  return Array.from(new Set([
+                    ...(selectedCoinRef.current ? [selectedCoinRef.current] : []),
+                    ...visibleSymbols,
+                  ]));
+                }
                 const next = new Set(prev);
                 for (const symbol of visibleSymbols) {
                   next.add(symbol);
@@ -898,6 +970,9 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                           : [];
                       if (symbols.length > 0) {
                         setHydrationTargetSymbols((prev) => {
+                          if (boundTargetsToCurrentBatch) {
+                            return Array.from(new Set([rate.symbol, ...symbols]));
+                          }
                           const next = new Set(prev);
                           for (const s of symbols) next.add(s);
                           return Array.from(next);
@@ -987,7 +1062,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                       onClick={() => setSelectedInterval(interval)}
                       className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                         selectedInterval === interval
-                          ? `border-${exchangeColor}-600 bg-${exchangeColor}-600 text-white`
+                          ? themeClasses.activeControl
                           : "border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-700"
                       }`}
                     >
@@ -1021,7 +1096,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
             ) : detailLoading ? (
               <div className="flex h-[560px] items-center justify-center">
                 <div className="text-center">
-                  <div className={`mx-auto h-10 w-10 animate-spin rounded-full border-b-2 border-${exchangeColor}-500`} />
+                  <div className={`mx-auto h-10 w-10 animate-spin rounded-full border-b-2 ${themeClasses.spinner}`} />
                   <p className="mt-4 text-sm text-gray-400">
                     正在加载 {selectedCoin} 的 {intervalLabels[selectedInterval]} 数据...
                   </p>
@@ -1033,7 +1108,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                   <p className="text-red-400">{detailError}</p>
                   <button
                     onClick={() => handleFetchDetail(selectedCoin, selectedInterval)}
-                    className={`mt-4 rounded-lg bg-${exchangeColor}-600 px-4 py-2 text-white transition-colors hover:bg-${exchangeColor}-700`}
+                    className={`mt-4 rounded-lg px-4 py-2 text-white transition-colors ${themeClasses.primaryButton}`}
                   >
                     重新加载图表
                   </button>
@@ -1055,7 +1130,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                   <div className="grid grid-cols-3 gap-3">
                     <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
                       <p className="text-xs text-gray-400">结算周期</p>
-                      <p className={`mt-2 font-mono text-lg font-bold text-${exchangeColor}-400`}>
+                      <p className={`mt-2 font-mono text-lg font-bold ${themeClasses.accentText}`}>
                         {selectedFundingInterval / 3600} 小时
                       </p>
                       <p className="mt-1 text-xs text-gray-500">{exchangeName} 合约</p>
@@ -1146,6 +1221,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     formatFundingRate={formatFundingRate}
                     formatAnnualizedRate={formatAnnualizedRate}
                     formatStatCardAnnualizedRate={formatStatCardAnnualizedRate}
+                    annualizeRate={statCardAnnualizeRate ?? annualizeRate}
                   />
                   <FundingStatCard
                     title="最低资金费率(7天)"
@@ -1154,6 +1230,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     formatFundingRate={formatFundingRate}
                     formatAnnualizedRate={formatAnnualizedRate}
                     formatStatCardAnnualizedRate={formatStatCardAnnualizedRate}
+                    annualizeRate={statCardAnnualizeRate ?? annualizeRate}
                   />
                   <FundingStatCard
                     title="平均资金费率(7天)"
@@ -1162,6 +1239,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     formatFundingRate={formatFundingRate}
                     formatAnnualizedRate={formatAnnualizedRate}
                     formatStatCardAnnualizedRate={formatStatCardAnnualizedRate}
+                    annualizeRate={statCardAnnualizeRate ?? annualizeRate}
                   />
                   <FundingStatCard
                     title="最高资金费率(30天)"
@@ -1170,6 +1248,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     formatFundingRate={formatFundingRate}
                     formatAnnualizedRate={formatAnnualizedRate}
                     formatStatCardAnnualizedRate={formatStatCardAnnualizedRate}
+                    annualizeRate={statCardAnnualizeRate ?? annualizeRate}
                   />
                   <FundingStatCard
                     title="最低资金费率(30天)"
@@ -1178,6 +1257,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     formatFundingRate={formatFundingRate}
                     formatAnnualizedRate={formatAnnualizedRate}
                     formatStatCardAnnualizedRate={formatStatCardAnnualizedRate}
+                    annualizeRate={statCardAnnualizeRate ?? annualizeRate}
                   />
                   <FundingStatCard
                     title="平均资金费率(30天)"
@@ -1186,6 +1266,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                     formatFundingRate={formatFundingRate}
                     formatAnnualizedRate={formatAnnualizedRate}
                     formatStatCardAnnualizedRate={formatStatCardAnnualizedRate}
+                    annualizeRate={statCardAnnualizeRate ?? annualizeRate}
                   />
                 </div>
               </div>

@@ -18,6 +18,7 @@ import ExchangeFundingMonitor, {
 } from "@/components/funding/ExchangeFundingMonitor";
 import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
 import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume, type CandleSnapshotItem as GateCandle, type IntervalFundingRateItem as GateIntervalRate } from "@/lib/gateio";
+import { throwIfAborted } from "@/lib/utils/abort";
 
 // ==================== Category Config ====================
 
@@ -57,17 +58,20 @@ export default function GateFundingMonitor() {
   const RATES_CACHE_TTL_MS = 60_000;
 
   const buildDetailData = useCallback(async (
-    symbol: string,
+    selectedRow: ExchangeFundingRate,
     interval: ChartInterval,
     rates: ExchangeFundingRate[],
+    signal: AbortSignal,
   ): Promise<DetailData> => {
-    const cacheKey = `${symbol}:${interval}`;
+    throwIfAborted(signal);
+    const symbol = selectedRow.symbol;
+    const cacheKey = `${selectedRow.marketKey ?? symbol}:${interval}`;
     const cached = detailCacheRef.current.get(cacheKey);
     if (cached) {
       return cached;
     }
 
-    const selectedRate = rates.find((r) => r.symbol === symbol);
+    const selectedRate = rates.find((r) => r.symbol === symbol) ?? selectedRow;
     const fundingIntervalSeconds = selectedRate?.fundingInterval || 28800;
     const detail = await fetchGateCanonicalDetail(
       symbol,
@@ -75,6 +79,7 @@ export default function GateFundingMonitor() {
       fundingIntervalSeconds,
       selectedRate?.bestBid,
       selectedRate?.bestAsk,
+      signal,
     );
 
     const mappedCandles = detail.candles.map((c: GateCandle) => ({ ...c }));
@@ -93,7 +98,10 @@ export default function GateFundingMonitor() {
       latestSettlementRate: detail.lastSettlementRate,
     };
 
-    detailCacheRef.current.set(cacheKey, detailData);
+    throwIfAborted(signal);
+    if (detailData.candles.length > 0) {
+      detailCacheRef.current.set(cacheKey, detailData);
+    }
     return detailData;
   }, []);
 
@@ -111,12 +119,15 @@ export default function GateFundingMonitor() {
     rates: ExchangeFundingRate[],
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
     targetSymbols: string[],
+    _hydrationKey: number,
+    signal: AbortSignal,
     ): Promise<void> => {
     const missingSymbols = targetSymbols.filter((symbol) => {
       const rate = rates.find((item) => item.symbol === symbol);
       return rate && !Number.isFinite(rate.lastSettlementRate);
     });
-    const latestBySymbol = await hydrateGateLatestSettlementRates(missingSymbols);
+    const latestBySymbol = await hydrateGateLatestSettlementRates(missingSymbols, signal);
+    throwIfAborted(signal);
     if (latestBySymbol.size === 0) {
       return;
     }
@@ -145,7 +156,8 @@ export default function GateFundingMonitor() {
       fetchRates,
       hydrateRates,
       fetchDetailData: buildDetailData,
-      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("Gate.io", `${symbol}_USDT`, undefined, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
+        fetchImpactSpread("Gate.io", rate.rawSymbol ?? `${rate.symbol}_USDT`, signal, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">Gate.io 永续合约</p>

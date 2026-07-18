@@ -85,13 +85,15 @@ export default function BinanceFundingMonitor() {
     rates: ExchangeFundingRate[],
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
     targetSymbols: string[],
+    _hydrationKey: number,
+    signal: AbortSignal,
   ): Promise<void> => {
     const missingSymbols = targetSymbols.filter((symbol) => {
       const rate = rates.find((item) => item.symbol === symbol);
       return rate && !Number.isFinite(rate.lastSettlementRate);
     });
 
-    const latestBySymbol = await hydrateBinanceLatestSettlementRates(missingSymbols);
+    const latestBySymbol = await hydrateBinanceLatestSettlementRates(missingSymbols, signal);
     if (latestBySymbol.size === 0) {
       return;
     }
@@ -137,8 +139,8 @@ export default function BinanceFundingMonitor() {
 
   // Fetch detail data
   const fetchDetailData = useCallback(
-    async (symbol: string, interval: ChartInterval): Promise<DetailData> => {
-      const detail = mapBinanceDetailToMetrics(await fetchBinanceCanonicalDetail(symbol, interval));
+    async (rate: ExchangeFundingRate, interval: ChartInterval, _rates: ExchangeFundingRate[], signal: AbortSignal): Promise<DetailData> => {
+      const detail = mapBinanceDetailToMetrics(await fetchBinanceCanonicalDetail(rate.rawSymbol ?? rate.symbol, interval, signal));
       if (detail.candles.length === 0) {
         return { candles: [], intervalFundingRates: [], hourlyFundingRates30d: [] };
       }
@@ -185,7 +187,8 @@ export default function BinanceFundingMonitor() {
         resetOnFilterChange: true,
       },
       fetchDetailData,
-      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("Binance", symbol, undefined, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
+        fetchImpactSpread("Binance", rate.rawSymbol ?? rate.symbol, signal, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

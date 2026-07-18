@@ -5,14 +5,16 @@ import {
   fetchAllRates,
   filterByKeyword,
   batchFetchDetails,
+  partitionProgressiveDetailRates,
   fetchLighterIndexPrices,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
   type DetailResult,
 } from "@/lib/search";
-import { fetchImpactSpread, DEFAULT_IMPACT_NOTIONAL, IMPACT_NOTIONAL_PRESETS, type ImpactSpreadResult } from "@/lib/impact-price";
+import { fetchSearchImpactSpread, DEFAULT_IMPACT_NOTIONAL, IMPACT_NOTIONAL_PRESETS, type ImpactSpreadResult } from "@/lib/impact-price";
 import {
   fetchSearchCandles,
+  selectSearchChartRequest,
   type SearchChartInterval,
   type SearchCandlePoint,
   type FundingRatePoint,
@@ -120,6 +122,7 @@ const EXCHANGE_DOT_COLORS: Record<string, string> = {
   Binance: "bg-yellow-400",
   Lighter: "bg-purple-400",
   OKX: "bg-emerald-400",
+  Bitget: "bg-teal-400",
 };
 
 function formatSearchAnnualizedRate(rate: number, fundingInterval: number, exchange: string): string {
@@ -240,6 +243,7 @@ export default function CrossExchangeSearch() {
   const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
   const [customInputNotional, setCustomInputNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const [impactPriceCache, setImpactPriceCache] = useState<Map<string, ImpactSpreadResult>>(new Map());
+  const impactPriceCacheRef = useRef(impactPriceCache);
   const impactAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -262,6 +266,7 @@ export default function CrossExchangeSearch() {
   const [chartLoading, setChartLoading] = useState(false);
   const [showVolume, setShowVolume] = useState(false);
   const chartAbortRef = useRef<AbortController | null>(null);
+  const chartRequestGenerationRef = useRef(0);
 
   const isComboMode = useMemo(() =>
     comboSelection.mode !== null && comboSelection.first !== null && comboSelection.second !== null,
@@ -317,6 +322,10 @@ export default function CrossExchangeSearch() {
   useEffect(() => {
     allRatesRef.current = allRates;
   }, [allRates]);
+
+  useEffect(() => {
+    impactPriceCacheRef.current = impactPriceCache;
+  }, [impactPriceCache]);
 
   // Sort
   const sortedRates = useMemo(() => {
@@ -385,6 +394,7 @@ export default function CrossExchangeSearch() {
   const DEFAULT_DETAIL_CONCURRENCY = 4;
   const LIGHTER_DETAIL_CONCURRENCY = 1;
   const LIGHTER_DETAIL_DELAY_MS = 200;
+  const BITGET_DETAIL_CONCURRENCY = 1;
 
   const startDetailFetching = useCallback(
     (rates: SearchExchangeRate[]) => {
@@ -421,14 +431,16 @@ export default function CrossExchangeSearch() {
         });
       };
 
-      const nonLighter = rates.filter((r) => r.exchange !== "Lighter");
-      const lighter = rates.filter((r) => r.exchange === "Lighter");
+      const lanes = partitionProgressiveDetailRates(rates);
 
-      if (nonLighter.length > 0) {
-        batchFetchDetails(nonLighter, onUpdate, signal, DEFAULT_DETAIL_CONCURRENCY, 0);
+      if (lanes.generic.length > 0) {
+        void batchFetchDetails(lanes.generic, onUpdate, signal, DEFAULT_DETAIL_CONCURRENCY, 0);
       }
-      if (lighter.length > 0) {
-        batchFetchDetails(lighter, onUpdate, signal, LIGHTER_DETAIL_CONCURRENCY, LIGHTER_DETAIL_DELAY_MS);
+      if (lanes.lighter.length > 0) {
+        void batchFetchDetails(lanes.lighter, onUpdate, signal, LIGHTER_DETAIL_CONCURRENCY, LIGHTER_DETAIL_DELAY_MS);
+      }
+      if (lanes.bitget.length > 0) {
+        void batchFetchDetails(lanes.bitget, onUpdate, signal, BITGET_DETAIL_CONCURRENCY, 0);
       }
     },
     [],
@@ -470,7 +482,7 @@ export default function CrossExchangeSearch() {
 
     const pendingKeys = filteredRates
       .map((rate) => getDetailKey(rate.exchange, rate.symbol))
-      .filter((key) => !impactPriceCache.has(key));
+      .filter((key) => !impactPriceCacheRef.current.has(key));
     if (pendingKeys.length === 0) {
       return;
     }
@@ -503,9 +515,8 @@ export default function CrossExchangeSearch() {
           const key = pendingKeys[index++];
           const rate = filteredRates.find((r) => getDetailKey(r.exchange, r.symbol) === key);
           if (!rate) continue;
-          const symbol = rate.rawSymbol ?? rate.symbol;
           try {
-            const spread = await fetchImpactSpread(rate.exchange, symbol, signal, notional);
+            const spread = await fetchSearchImpactSpread(rate, signal, notional);
             writeResult(key, spread);
           } catch {
             writeResult(key, null);
@@ -734,39 +745,15 @@ export default function CrossExchangeSearch() {
       setSelectedRate(rate);
       setChartCandles([]);
       setChartFundingRates([]);
-      setChartLoading(true);
-
-      // Cancel previous chart request
-      if (chartAbortRef.current) {
-        chartAbortRef.current.abort();
-      }
-      chartAbortRef.current = new AbortController();
-      const signal = chartAbortRef.current.signal;
-
-      fetchSearchCandles(rate, chartInterval, signal)
-        .then((result) => {
-          if (!signal.aborted) {
-            setChartCandles(result.candles);
-            setChartFundingRates(result.fundingRates);
-            setChartLoading(false);
-          }
-        })
-        .catch((error) => {
-          if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted) {
-            console.error("[SearchChart] Fetch failed:", error);
-            setChartCandles([]);
-            setChartFundingRates([]);
-            setChartLoading(false);
-          }
-        });
     },
-    [selectedRate, chartInterval, searchTerm, comboSelection],
+    [selectedRate, searchTerm, comboSelection],
   );
 
   const fetchComboCandles = useCallback(async (
     first: SearchExchangeRate,
     second: SearchExchangeRate,
     interval: SearchChartInterval,
+    mode: "spread" | "ratio",
     signal: AbortSignal
   ) => {
     setChartLoading(true);
@@ -777,9 +764,6 @@ export default function CrossExchangeSearch() {
       ]);
 
       if (signal.aborted) return;
-
-      const mode = parseComboSearch(searchTerm).mode;
-      if (!mode) return;
 
       const comboResult = alignComboData(firstResult, secondResult, mode);
       setComboChartData(comboResult);
@@ -793,52 +777,43 @@ export default function CrossExchangeSearch() {
         setChartLoading(false);
       }
     }
-  }, [searchTerm]);
+  }, []);
 
-  // Re-fetch candles when interval changes (if a row is selected)
+  // Exactly one chart request generation per selection/interval state.
   useEffect(() => {
-    if (isComboMode && comboSelection.first && comboSelection.second) {
-      if (chartAbortRef.current) {
-        chartAbortRef.current.abort();
-      }
-      chartAbortRef.current = new AbortController();
-      const signal = chartAbortRef.current.signal;
+    const request = selectSearchChartRequest(
+      selectedRate,
+      comboSelection.first,
+      comboSelection.second,
+      comboSelection.mode,
+    );
+    if (!request) return;
 
-      setChartCandles([]);
-      setChartFundingRates([]);
-      setChartLoading(true);
-
-      fetchComboCandles(comboSelection.first, comboSelection.second, chartInterval, signal);
-
-      return () => {
-        if (chartAbortRef.current) {
-          chartAbortRef.current.abort();
-        }
-      };
-    }
-
-    if (!selectedRate) return;
-
-    if (chartAbortRef.current) {
-      chartAbortRef.current.abort();
-    }
-    chartAbortRef.current = new AbortController();
-    const signal = chartAbortRef.current.signal;
+    chartAbortRef.current?.abort();
+    const controller = new AbortController();
+    chartAbortRef.current = controller;
+    const signal = controller.signal;
+    const generation = ++chartRequestGenerationRef.current;
 
     setChartCandles([]);
     setChartFundingRates([]);
     setChartLoading(true);
 
-    fetchSearchCandles(selectedRate, chartInterval, signal)
+    if (request.kind === "combo") {
+      void fetchComboCandles(request.first, request.second, chartInterval, request.mode, signal);
+      return () => controllerCleanup();
+    }
+
+    fetchSearchCandles(request.rate, chartInterval, signal)
       .then((result) => {
-        if (!signal.aborted) {
+        if (!signal.aborted && generation === chartRequestGenerationRef.current) {
           setChartCandles(result.candles);
           setChartFundingRates(result.fundingRates);
           setChartLoading(false);
         }
       })
       .catch((error) => {
-        if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted) {
+        if (!(error instanceof DOMException && error.name === "AbortError") && !signal.aborted && generation === chartRequestGenerationRef.current) {
           console.error("[SearchChart] Interval change fetch failed:", error);
           setChartCandles([]);
           setChartFundingRates([]);
@@ -846,23 +821,12 @@ export default function CrossExchangeSearch() {
         }
       });
 
-    return () => {
-      if (chartAbortRef.current) {
-        chartAbortRef.current.abort();
-      }
-    };
-  }, [selectedRate, chartInterval, comboSelection, isComboMode, fetchComboCandles]);
+    return () => controllerCleanup();
 
-  // Fetch combo candles when second selection is set
-  useEffect(() => {
-    if (!comboSelection.first || !comboSelection.second || !comboSelection.mode) return;
-
-    if (chartAbortRef.current) chartAbortRef.current.abort();
-    chartAbortRef.current = new AbortController();
-    const signal = chartAbortRef.current.signal;
-
-    fetchComboCandles(comboSelection.first, comboSelection.second, chartInterval, signal);
-  }, [comboSelection.second, comboSelection.mode, chartInterval]);
+    function controllerCleanup() {
+      controller.abort();
+    }
+  }, [selectedRate, chartInterval, comboSelection.first, comboSelection.second, comboSelection.mode, fetchComboCandles]);
 
   // Clear combo chart data when second selection is removed
   useEffect(() => {

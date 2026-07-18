@@ -51,13 +51,15 @@ export default function OkxFundingMonitor() {
     rates: ExchangeFundingRate[],
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
     targetSymbols: string[],
+    _hydrationKey: number,
+    signal: AbortSignal,
   ): Promise<void> => {
     const missingSymbols = targetSymbols.filter((symbol) => {
       const rate = rates.find((item) => item.symbol === symbol);
       return rate && !Number.isFinite(rate.lastSettlementRate);
     });
 
-    const latestBySymbol = await hydrateOkxLatestSettlementRates(missingSymbols);
+    const latestBySymbol = await hydrateOkxLatestSettlementRates(missingSymbols, signal);
     if (latestBySymbol.size === 0) {
       return;
     }
@@ -71,17 +73,19 @@ export default function OkxFundingMonitor() {
   }, []);
 
   const fetchDetailData = useCallback(async (
-    symbol: string,
+    selectedRow: ExchangeFundingRate,
     interval: ChartInterval,
     rates: ExchangeFundingRate[],
+    signal: AbortSignal,
   ): Promise<DetailData> => {
-    const selectedRate = rates.find((rate) => rate.symbol === symbol);
-    const rawSymbol = selectedRate?.settlementHydrationKey?.replace(/^okx:/, "") ?? `${symbol}-USDT-SWAP`;
+    const selectedRate = rates.find((rate) => rate.symbol === selectedRow.symbol) ?? selectedRow;
+    const rawSymbol = selectedRate.rawSymbol ?? `${selectedRate.symbol}-USDT-SWAP`;
     const detail = mapOkxDetailToMetrics(
       await fetchOkxCanonicalDetail(
         rawSymbol,
         interval as "1d" | "4h" | "1h",
         selectedRate?.fundingInterval,
+        signal,
       ),
     );
     const fundingHistory = detail.fundingHistory.filter((item) => item.timestamp >= Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -125,7 +129,8 @@ export default function OkxFundingMonitor() {
         resetOnFilterChange: true,
       },
       fetchDetailData,
-      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("OKX", `${symbol}-USDT-SWAP`, undefined, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
+        fetchImpactSpread("OKX", rate.rawSymbol ?? `${rate.symbol}-USDT-SWAP`, signal, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">OKX 永续合约</p>

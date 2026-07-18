@@ -6,6 +6,7 @@ import {
   getFundingHistoryForDays,
 } from "@/lib/gateio";
 import { getExchangeTransportFlags } from "@/lib/exchange-flags";
+import { throwIfAborted } from "@/lib/utils/abort";
 import type {
   CanonicalFundingDetail,
   CanonicalFundingHistoryPoint,
@@ -14,8 +15,17 @@ import type {
 
 export type GateChartInterval = "1d" | "4h" | "1h";
 
+export function combineGateDetailSignals(
+  callerSignal: AbortSignal | undefined,
+  timeoutSignal: AbortSignal,
+): AbortSignal {
+  return callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
+}
+
 export interface GateFundingMonitorRow {
   symbol: string;
+  rawSymbol: string;
+  marketKey: string;
   fundingRate: number;
   lastSettlementRate: number;
   markPrice: number;
@@ -126,6 +136,8 @@ export async function fetchGateCanonicalRates(): Promise<CanonicalFundingRateRow
 export async function fetchGateFundingMonitorRates(): Promise<GateFundingMonitorRow[]> {
   return (await fetchGateCanonicalRates()).map((row) => ({
     symbol: row.symbol,
+    rawSymbol: row.rawSymbol,
+    marketKey: row.marketKey,
     fundingRate: row.fundingRate,
     lastSettlementRate: Number.NaN,
     markPrice: row.markPrice,
@@ -162,13 +174,15 @@ export async function fetchGateSearchRates(): Promise<GateSearchRate[]> {
   }));
 }
 
-export async function hydrateGateLatestSettlementRates(symbols: string[]): Promise<Map<string, number>> {
+export async function hydrateGateLatestSettlementRates(symbols: string[], signal?: AbortSignal): Promise<Map<string, number>> {
+  throwIfAborted(signal);
   if (symbols.length === 0) {
     return new Map();
   }
 
   const contractMap = new Map(symbols.map((symbol) => [`${symbol}_USDT`, symbol]));
-  const histories = await getBatchFundingHistory(Array.from(contractMap.keys()));
+  const histories = await getBatchFundingHistory(Array.from(contractMap.keys()), signal);
+  throwIfAborted(signal);
 
   return new Map(
     Array.from(histories.entries())
@@ -194,12 +208,13 @@ export async function fetchGateCanonicalDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<CanonicalFundingDetail> {
-  // Use shorter timeout for detail so funding page never hangs on a slow Gate call.
-  const detailSignal = signal ?? AbortSignal.timeout(8_000);
+  // Keep the shared caller cancellation and the detail timeout active together.
+  const detailSignal = combineGateDetailSignals(signal, AbortSignal.timeout(8_000));
   const [candles, history] = await Promise.all([
     getCandleSnapshot(symbol, interval, 30, detailSignal),
     getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, detailSignal),
   ]);
+  throwIfAborted(detailSignal);
 
   const fundingHistory: CanonicalFundingHistoryPoint[] = history.map((item) => ({
     timestamp: item.time,

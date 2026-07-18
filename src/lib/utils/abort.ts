@@ -19,9 +19,14 @@ export function createAbortError(): DOMException {
   return new DOMException("The operation was aborted.", "AbortError");
 }
 
+export function getAbortReason(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error || reason instanceof DOMException ? reason : createAbortError();
+}
+
 export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw createAbortError();
+    throw getAbortReason(signal);
   }
 }
 
@@ -37,7 +42,7 @@ export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     function onAbort() {
       clearTimeout(timeoutId);
       signal?.removeEventListener("abort", onAbort);
-      reject(createAbortError());
+      reject(getAbortReason(signal));
     }
 
     signal?.addEventListener("abort", onAbort, { once: true });

@@ -17,6 +17,18 @@ export interface ComboCandleResult extends SearchCandleResult {
   secondExchange: string;
 }
 
+function minimumOfficialQuoteVolume(
+  first: SearchCandlePoint,
+  second: SearchCandlePoint,
+): string | undefined {
+  if (first.quoteVolume === undefined || second.quoteVolume === undefined) return undefined;
+  const firstValue = Number(first.quoteVolume);
+  const secondValue = Number(second.quoteVolume);
+  return Number.isFinite(firstValue) && Number.isFinite(secondValue)
+    ? String(Math.min(firstValue, secondValue))
+    : undefined;
+}
+
 export function alignComboData(
   first: SearchCandleResult,
   second: SearchCandleResult,
@@ -39,6 +51,7 @@ export function alignComboData(
   const alignedCandles: SearchCandlePoint[] = [];
   for (const { first: firstCandle, second: secondCandle } of candleMap.values()) {
     if (!secondCandle) continue;
+    const quoteVolume = minimumOfficialQuoteVolume(firstCandle, secondCandle);
 
     if (mode === "spread") {
       alignedCandles.push({
@@ -49,7 +62,7 @@ export function alignComboData(
         low: "",
         close: String(parseFloat(firstCandle.close) - parseFloat(secondCandle.close)),
         volume: firstCandle.volume,
-        quoteVolume: String(Math.min(parseFloat(firstCandle.quoteVolume), parseFloat(secondCandle.quoteVolume))),
+        ...(quoteVolume === undefined ? {} : { quoteVolume }),
       });
     } else {
       // ratio mode
@@ -64,7 +77,7 @@ export function alignComboData(
         low: "",
         close: String(parseFloat(firstCandle.close) / parseFloat(secondCandle.close)),
         volume: firstCandle.volume,
-        quoteVolume: String(Math.min(parseFloat(firstCandle.quoteVolume), parseFloat(secondCandle.quoteVolume))),
+        ...(quoteVolume === undefined ? {} : { quoteVolume }),
       });
     }
   }

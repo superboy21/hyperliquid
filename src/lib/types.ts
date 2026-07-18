@@ -1,6 +1,6 @@
 // ==================== 交易所标识 ====================
 
-export type ExchangeId = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx";
+export type ExchangeId = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx" | "bitget";
 
 export interface ExchangeInfo {
   id: ExchangeId;
@@ -39,6 +39,12 @@ export const EXCHANGES: Record<ExchangeId, ExchangeInfo> = {
     name: "OKX",
     color: "emerald",
     accentColor: "bg-emerald-600",
+  },
+  bitget: {
+    id: "bitget",
+    name: "Bitget",
+    color: "teal",
+    accentColor: "bg-teal-600",
   },
 };
 
@@ -160,6 +166,8 @@ export interface CanonicalCandlePoint {
   low: string;
   close: string;
   volume: string;
+  /** Exchange-reported quote turnover, when the venue provides it. */
+  quoteVolume?: string;
 }
 
 export interface CanonicalFundingDetail {

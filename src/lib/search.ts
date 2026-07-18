@@ -1,6 +1,6 @@
 // ==================== Cross-Exchange Search Utility ====================
 // Fetches, filters, and computes detail fields for funding rates across
-// Hyperliquid, Gate.io, Binance, and Lighter exchanges.
+// Hyperliquid, Gate.io, Binance, OKX, Lighter, and Bitget exchanges.
 
 import {
   getAllFundingRatesWithHistory,
@@ -44,11 +44,16 @@ import {
   fetchOkxCanonicalRates,
   mapOkxDetailToMetrics,
 } from "@/lib/adapters/okx";
+import {
+  fetchBitgetCanonicalDetail,
+  fetchBitgetCanonicalRates,
+} from "@/lib/adapters/bitget";
+import type { CanonicalFundingRateRow } from "@/lib/types";
 
 // ==================== Interfaces ====================
 
 export interface SearchExchangeRate {
-  exchange: "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX";
+  exchange: "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX" | "Bitget";
   exchangeColor: string;
   symbol: string;
   rawSymbol?: string;
@@ -281,12 +286,13 @@ function computeAvgFundingRate2d(
 // ==================== Fetch All Rates ====================
 
 export async function fetchAllRates(): Promise<SearchExchangeRate[]> {
-  const [hyperliquidRates, gateioRates, binanceRates, lighterRates, okxRates] = await Promise.allSettled([
+  const [hyperliquidRates, gateioRates, binanceRates, lighterRates, okxRates, bitgetRates] = await Promise.allSettled([
     fetchHyperliquidRates(),
     fetchGateioRates(),
     fetchBinanceRates(),
     fetchLighterRates(),
     fetchOkxRates(),
+    fetchBitgetRates(),
   ]);
 
   const results: SearchExchangeRate[] = [];
@@ -319,6 +325,12 @@ export async function fetchAllRates(): Promise<SearchExchangeRate[]> {
     results.push(...okxRates.value);
   } else {
     console.error("[Search] OKX fetch failed:", okxRates.reason);
+  }
+
+  if (bitgetRates.status === "fulfilled") {
+    results.push(...bitgetRates.value);
+  } else {
+    console.error("[Search] Bitget fetch failed:", bitgetRates.reason);
   }
 
   return results;
@@ -397,6 +409,34 @@ async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
     bestBid: row.bestBid ?? undefined,
     bestAsk: row.bestAsk ?? undefined,
   }));
+}
+
+// ==================== Bitget Rates ====================
+
+export function mapBitgetSearchRate(row: CanonicalFundingRateRow): SearchExchangeRate {
+  return {
+    exchange: "Bitget",
+    exchangeColor: "teal",
+    symbol: row.symbol,
+    rawSymbol: row.rawSymbol,
+    fundingRate: row.fundingRate,
+    markPrice: row.markPrice,
+    indexPrice: row.indexPrice ?? null,
+    lastPrice: row.lastPrice,
+    change24h: row.change24h,
+    quoteVolume: row.quoteVolume,
+    openInterest: row.openInterest,
+    notionalValue: row.notionalValue,
+    fundingInterval: row.fundingIntervalSeconds,
+    assetCategory: row.assetCategory,
+    bestBid: row.bestBid ?? undefined,
+    bestAsk: row.bestAsk ?? undefined,
+  };
+}
+
+async function fetchBitgetRates(): Promise<SearchExchangeRate[]> {
+  const rows = await fetchBitgetCanonicalRates();
+  return rows.map(mapBitgetSearchRate);
 }
 
 // ==================== Lighter Rates ====================
@@ -548,9 +588,18 @@ export function filterByKeyword(
 
 // ==================== Fetch Detail for Single Symbol ====================
 
+export interface SearchDetailDependencies {
+  fetchBitgetCanonicalDetail: typeof fetchBitgetCanonicalDetail;
+}
+
+const SEARCH_DETAIL_DEPENDENCIES: SearchDetailDependencies = {
+  fetchBitgetCanonicalDetail,
+};
+
 export async function fetchDetailForSymbol(
   rate: SearchExchangeRate,
   signal?: AbortSignal,
+  dependencies: SearchDetailDependencies = SEARCH_DETAIL_DEPENDENCIES,
 ): Promise<DetailResult> {
   switch (rate.exchange) {
     case "Hyperliquid":
@@ -561,9 +610,57 @@ export async function fetchDetailForSymbol(
       return fetchBinanceDetail(rate.symbol, rate.bestBid, rate.bestAsk, signal);
     case "OKX":
       return fetchOkxDetail(rate.rawSymbol ?? `${rate.symbol}-USDT-SWAP`, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
+    case "Bitget":
+      return fetchBitgetDetail(rate, signal, dependencies.fetchBitgetCanonicalDetail);
     case "Lighter":
       return fetchLighterDetail(rate.marketId, rate.symbol, rate.bestBid, rate.bestAsk, signal);
   }
+}
+
+/** Bitget display symbols are not transport identifiers. */
+export function requireBitgetRawSymbol(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+): string {
+  if (rate.exchange !== "Bitget") {
+    return rate.rawSymbol ?? rate.symbol;
+  }
+  if (typeof rate.rawSymbol !== "string" || rate.rawSymbol.trim().length === 0) {
+    throw new TypeError(`Bitget rawSymbol is required for ${rate.symbol}`);
+  }
+  return rate.rawSymbol;
+}
+
+// ==================== Bitget Detail ====================
+
+async function fetchBitgetDetail(
+  rate: SearchExchangeRate,
+  signal?: AbortSignal,
+  fetchCanonicalDetail: typeof fetchBitgetCanonicalDetail = fetchBitgetCanonicalDetail,
+): Promise<DetailResult> {
+  const rawSymbol = requireBitgetRawSymbol(rate);
+  const detail = await fetchCanonicalDetail({
+    symbol: rate.symbol,
+    rawSymbol,
+    marketKey: rawSymbol,
+    fundingIntervalSeconds: rate.fundingInterval,
+    bestBid: rate.bestBid,
+    bestAsk: rate.bestAsk,
+  }, "1d", { signal });
+  const fundingHistory = detail.fundingHistory.map((item) => ({
+    time: item.timestamp,
+    fundingRate: String(item.fundingRate),
+  }));
+  const historicalVolatility = computeHistoricalVolatility(detail.candles);
+  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+
+  return {
+    lastSettlementRate: detail.lastSettlementRate,
+    avgFundingRate2d: computeAvgFundingRate2d(fundingHistory),
+    historicalVolatility,
+    bidAskSpread: detail.bidAskSpread ?? computeBidAskSpread(rate.bestBid, rate.bestAsk),
+    avgFundingRate7d: avg7d,
+    avgFundingRate30d: avg30d,
+  };
 }
 
 // ==================== Hyperliquid Detail ====================
@@ -837,12 +934,49 @@ if (resolvedMarketId === null) {
 
 // ==================== Batch Fetch with Concurrency Control ====================
 
+export interface ProgressiveDetailLanes {
+  generic: SearchExchangeRate[];
+  lighter: SearchExchangeRate[];
+  bitget: SearchExchangeRate[];
+}
+
+export function partitionProgressiveDetailRates(
+  rates: readonly SearchExchangeRate[],
+): ProgressiveDetailLanes {
+  const lanes: ProgressiveDetailLanes = { generic: [], lighter: [], bitget: [] };
+  for (const rate of rates) {
+    if (rate.exchange === "Lighter") lanes.lighter.push(rate);
+    else if (rate.exchange === "Bitget") lanes.bitget.push(rate);
+    else lanes.generic.push(rate);
+  }
+  return lanes;
+}
+
+type DetailFetcher = (rate: SearchExchangeRate, signal?: AbortSignal) => Promise<DetailResult>;
+
+function waitForDetailDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, delayMs);
+    function cleanup() { signal?.removeEventListener("abort", aborted); }
+    function done() { cleanup(); resolve(); }
+    function aborted() {
+      clearTimeout(timer);
+      cleanup();
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    }
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
+}
+
 export async function batchFetchDetails(
   rates: SearchExchangeRate[],
   onUpdate: (rate: SearchExchangeRate, detail: DetailResult) => void,
   signal?: AbortSignal,
   concurrency: number = 4,
   delayMs: number = 0,
+  fetchDetail: DetailFetcher = fetchDetailForSymbol,
 ): Promise<void> {
   const queue = [...rates];
   const inFlight: Promise<void>[] = [];
@@ -859,11 +993,9 @@ export async function batchFetchDetails(
         avgFundingRate30d: null,
       });
 
-      if (delayMs > 0 && !signal?.aborted) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
+      await waitForDetailDelay(delayMs, signal);
 
-      const detail = await fetchDetailForSymbol(rate, signal);
+      const detail = await fetchDetail(rate, signal);
 
       if (signal?.aborted) return;
 

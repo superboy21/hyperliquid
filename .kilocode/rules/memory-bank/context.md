@@ -1,13 +1,14 @@
-# Active Context: Next.js Starter Template with Funding Monitor
+# Active Context: Six-Exchange Funding Monitor and Search
 
 ## Current State
 
-**Template Status**: ✅ Active Development - Funding Monitor with HIP-3 Assets
+**Template Status**: ✅ Active Development - Six-Exchange Funding Monitor and Search
 
-The project now includes a comprehensive Hyperliquid funding rate monitoring page with:
-- Real-time data for perpetual and HIP-3 spot markets
+The project now includes funding monitoring and cross-exchange search for Hyperliquid, Gate.io, Binance, OKX, Lighter, and Bitget, with:
+- Public market data for perpetual contracts and Hyperliquid HIP-3 markets
 - Annualized funding rate display
 - 7-day and 30-day historical averages
+- Five-minute funding-list refresh, progressive search details, and on-demand charts
 
 ## Recently Completed
 
@@ -18,7 +19,7 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] Memory bank documentation
 - [x] Recipe system for common features
 - [x] Hyperliquid funding rate monitoring page
-- [x] Real-time funding rate display with 30s auto-refresh
+- [x] Funding rate display with 5-minute auto-refresh
 - [x] Historical funding rate data (30-day view)
 - [x] Search and sort functionality
 - [x] Statistics dashboard (positive/negative rates, average)
@@ -44,6 +45,11 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - [x] **Search result midpoint pricing**: The Search price column switches to “中间价” only for non-empty searches with matches, uses valid positive best bid/ask values, and shows `--` instead of falling back to last price.
 - [x] **Search result midpoint premium**: Search-result premium display and sorting now use the validated midpoint against index price, while default and no-result views retain last-price premium.
 - [x] **Lighter live midpoint hydration**: Lighter detail results retain the live top bid/ask already fetched for spread calculation, allowing Search midpoint and premium display/sorting to consume detail-cache quotes without restarting rate filtering.
+- [x] **Bitget funding and Search architecture completed**: Added the allowlisted V3 UTA proxy, canonical list/history/candle/order-book normalization, bounded shared scheduling/retries, exact raw-symbol identity, Funding UI integration, Search result/detail/chart integration, and progressive Bitget request lanes.
+- [x] **Bitget Phase 1 review fixes**: Aligned history with V3 `resultList`/`fundingRateTimestamp`, made recent candles the single first request with bounded history fallback, added one-request latest settlement loading, and expanded deterministic scheduler/proxy tests.
+- [x] **Bitget semantics**: Scope is online `USDT-FUTURES` perpetuals; each contract's dynamic 1/2/4/8-hour funding interval drives annualization; official turnover and open interest semantics are preserved; `rawSymbol` is mandatory for transport; order-book sizes are base quantities; weekly candles aggregate UTC Monday-based daily candles.
+- [x] **Bitget request control**: Browser calls use `/api/bitget`; the server proxy allowlists V3 public actions/parameters and maps upstream status; one shared FIFO scheduler enforces single concurrency, 250ms minimum starts plus jitter, bounded timeout/retries, and abort propagation.
+- [x] **2026-07-18 validation**: 62 tests, TypeScript typecheck, ESLint, and production build all pass.
 
 ## Current Structure
 
@@ -53,16 +59,19 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 | `src/app/layout.tsx` | Root layout | ✅ Ready |
 | `src/app/globals.css` | Global styles | ✅ Ready |
 | `src/app/funding/page.tsx` | Funding rate monitor page | ✅ Ready |
+| `src/app/api/bitget/route.ts` | Allowlisted Bitget V3 UTA server proxy | ✅ Ready |
 | `src/components/funding/FundingMonitor.tsx` | Main funding monitor component | ✅ Ready |
+| `src/components/funding/BitgetFundingMonitor.tsx` | Bitget funding monitor integration | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
+| `src/lib/adapters/bitget.ts` | Bitget canonical adapter and shared scheduler | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
 
 ## Features
 
 ### Funding Monitor Features
 
-1. **Real-time Data**: Updates every 30 seconds
-2. **HIP-3 Assets**: Shows 41 spot tokens including xyz:GOLD, xyz:XYZ100, xyz:PLATINUM, xyz:TSLA, xyz:NVDA, and more
+1. **Market Data Refresh**: Funding lists update every 5 minutes; selected history and charts load on demand
+2. **HIP-3 Assets**: Supports the current XYZ, Vntl, Para, and Km HIP-3 market groups alongside standard Hyperliquid perpetuals
 3. **Annualized Rates**: All rates displayed as annual percentages
 4. **Historical Averages**: 7-day and 30-day rolling averages
 5. **Sorting Options**: By current rate, 7d avg, 30d avg, volume, name
@@ -73,14 +82,12 @@ The project now includes a comprehensive Hyperliquid funding rate monitoring pag
 - `metaAndAssetCtxs`: Perpetual contract funding rates
 - `spotMetaAndAssetCtxs`: HIP-3 spot market funding rates
 - `fundingHistory`: Historical funding data (up to 30 days)
+- `/api/bitget`: Allowlisted proxy for Bitget V3 UTA public market endpoints, scoped to online USDT perpetuals
+- Bitget Funding/Search: Canonical rates load with the six-exchange universe; search details progress only after a matching query and charts load when selected
 
 ## Current Focus
 
-The template is ready. Next steps depend on user requirements:
-
-1. What type of application to build
-2. What features are needed
-3. Design/branding preferences
+Bitget Funding and Search integration is complete. Current behavior to preserve includes the six-exchange universe, five-minute funding refresh, progressive search-detail hydration, on-demand chart history, exact Bitget `rawSymbol` dispatch, and bounded per-exchange request scheduling.
 
 ## Quick Start Guide
 
@@ -150,3 +157,6 @@ export async function GET() {
 | 2026-07-12 | Updated Search results to display and sort by bid/ask midpoint when a search has matches, with strict invalid-data handling and unchanged default pricing. |
 | 2026-07-12 | Aligned Search premium display and sorting with midpoint pricing for matched searches, without a last-price fallback when midpoint or index data is invalid. |
 | 2026-07-12 | Preserved Lighter order-book top quotes in Search detail cache and prioritized them for midpoint-based price, premium, and sorting calculations. |
+| 2026-07-18 | Implemented Bitget Phase 1 transport and normalization, including strict proxy actions/status mapping, scheduler bounds, pagination/caps, weekly candles, quantity semantics, and adapter tests. |
+| 2026-07-18 | Fixed Bitget Phase 1 review findings for official V3 history/list fields, recent-first candle pagination, one-request latest settlement, and deterministic abort/retry/proxy coverage. |
+| 2026-07-18 | Completed Bitget Funding and Search integration with exact raw-symbol dispatch, dynamic funding intervals, progressive detail lanes, on-demand charts, server proxy scheduling, and six-exchange documentation; validation passed with 62 tests, typecheck, lint, and build. |

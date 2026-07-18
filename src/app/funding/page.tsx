@@ -7,13 +7,15 @@ import GateFundingMonitor from "@/components/funding/GateFundingMonitor";
 import BinanceFundingMonitor from "@/components/funding/BinanceFundingMonitor";
 import LighterFundingMonitor from "@/components/funding/LighterFundingMonitor";
 import OkxFundingMonitor from "@/components/funding/OkxFundingMonitor";
+import BitgetFundingMonitor from "@/components/funding/BitgetFundingMonitor";
+import { FUNDING_THEME_CLASSES, type FundingThemeKey } from "@/components/funding/fundingThemes";
 
-type Exchange = "hyperliquid" | "gate" | "binance" | "lighter" | "okx";
+type Exchange = "hyperliquid" | "gate" | "binance" | "lighter" | "okx" | "bitget";
 
 interface ExchangeConfig {
   id: Exchange;
   name: string;
-  color: string;
+  color: FundingThemeKey;
   iconPath: string;
   component: React.ReactNode;
 }
@@ -53,6 +55,13 @@ const EXCHANGE_CONFIG: ExchangeConfig[] = [
     color: "emerald",
     iconPath: "M5 5h5v5H5V5zm9 0h5v5h-5V5zM5 14h5v5H5v-5zm9-2h5v7h-7v-5h2v-2z",
     component: <OkxFundingMonitor />,
+  },
+  {
+    id: "bitget",
+    name: "Bitget",
+    color: "teal",
+    iconPath: "M4 7h10l-3-3m3 3-3 3m9 7H10l3 3m-3-3 3-3",
+    component: <BitgetFundingMonitor />,
   },
 ];
 
@@ -108,7 +117,7 @@ export default function FundingPage() {
                   onClick={() => setSelectedExchange(exchange.id)}
                   className={`flex items-center gap-2 rounded-lg border px-5 py-2.5 font-medium transition-all ${
                     isActive
-                      ? `border-${exchange.color}-600 bg-${exchange.color}-600 text-white shadow-lg shadow-${exchange.color}-600/25`
+                      ? FUNDING_THEME_CLASSES[exchange.color].activeExchangeTab
                       : "border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600 hover:bg-gray-700"
                   }`}
                 >

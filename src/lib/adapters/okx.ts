@@ -8,6 +8,8 @@ export type OkxChartInterval = "1d" | "4h" | "1h" | "1m";
 
 export interface OkxFundingMonitorRow {
   symbol: string;
+  rawSymbol: string;
+  marketKey: string;
   fundingRate: number;
   lastSettlementRate: number;
   settlementHydrationKey?: string;
@@ -269,8 +271,8 @@ async function fetchNativeFundingSnapshot(signal?: AbortSignal): Promise<Map<str
   return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
 }
 
-async function fetchNativeInstruments(): Promise<Map<string, OkxNativeInstrumentEntry>> {
-  const response = await fetch("/api/okx?endpoint=public/instruments&instType=SWAP", { cache: "no-store" });
+async function fetchNativeInstruments(signal?: AbortSignal): Promise<Map<string, OkxNativeInstrumentEntry>> {
+  const response = await fetch("/api/okx?endpoint=public/instruments&instType=SWAP", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -284,8 +286,8 @@ async function fetchNativeInstruments(): Promise<Map<string, OkxNativeInstrument
   );
 }
 
-async function fetchNativeTickers(): Promise<Map<string, OkxNativeTickerEntry>> {
-  const response = await fetch("/api/okx?endpoint=market/tickers&instType=SWAP", { cache: "no-store" });
+async function fetchNativeTickers(signal?: AbortSignal): Promise<Map<string, OkxNativeTickerEntry>> {
+  const response = await fetch("/api/okx?endpoint=market/tickers&instType=SWAP", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -295,8 +297,8 @@ async function fetchNativeTickers(): Promise<Map<string, OkxNativeTickerEntry>> 
   return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
 }
 
-async function fetchNativeOpenInterest(): Promise<Map<string, OkxNativeOpenInterestEntry>> {
-  const response = await fetch("/api/okx?endpoint=public/open-interest&instType=SWAP", { cache: "no-store" });
+async function fetchNativeOpenInterest(signal?: AbortSignal): Promise<Map<string, OkxNativeOpenInterestEntry>> {
+  const response = await fetch("/api/okx?endpoint=public/open-interest&instType=SWAP", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -328,13 +330,13 @@ async function fetchNativeIndexPrices(signal?: AbortSignal): Promise<Map<string,
   return result;
 }
 
-async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
+async function fetchNativeRates(signal?: AbortSignal): Promise<CanonicalFundingRateRow[]> {
   const [fundingSnapshot, instruments, tickers, openInterest, indexPrices] = await Promise.all([
-    fetchNativeFundingSnapshot(),
-    fetchNativeInstruments(),
-    fetchNativeTickers(),
-    fetchNativeOpenInterest(),
-    fetchNativeIndexPrices(),
+    fetchNativeFundingSnapshot(signal),
+    fetchNativeInstruments(signal),
+    fetchNativeTickers(signal),
+    fetchNativeOpenInterest(signal),
+    fetchNativeIndexPrices(signal),
   ]);
 
   return Array.from(fundingSnapshot.entries())
@@ -375,13 +377,15 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
     });
 }
 
-export async function fetchOkxCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
-  return fetchNativeRates();
+export async function fetchOkxCanonicalRates(signal?: AbortSignal): Promise<CanonicalFundingRateRow[]> {
+  return fetchNativeRates(signal);
 }
 
 export async function fetchOkxFundingMonitorRates(): Promise<OkxFundingMonitorRow[]> {
   return (await fetchOkxCanonicalRates()).map((row) => ({
     symbol: row.symbol,
+    rawSymbol: row.rawSymbol,
+    marketKey: row.marketKey,
     fundingRate: row.fundingRate,
     lastSettlementRate: Number.isFinite(row.lastSettlementRate) ? (row.lastSettlementRate as number) : Number.NaN,
     settlementHydrationKey: row.settlementHydrationKey,
@@ -398,12 +402,12 @@ export async function fetchOkxFundingMonitorRates(): Promise<OkxFundingMonitorRo
   }));
 }
 
-export async function hydrateOkxLatestSettlementRates(symbols: string[]): Promise<Map<string, number>> {
+export async function hydrateOkxLatestSettlementRates(symbols: string[], signal?: AbortSignal): Promise<Map<string, number>> {
   if (symbols.length === 0) {
     return new Map();
   }
 
-  const rows = await fetchOkxCanonicalRates();
+  const rows = await fetchOkxCanonicalRates(signal);
   const targetSet = new Set(symbols);
   return new Map(
     rows

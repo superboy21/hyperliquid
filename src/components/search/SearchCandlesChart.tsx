@@ -42,6 +42,7 @@ const EXCHANGE_COLORS: Record<string, string> = {
   Binance: "#EAB308",       // yellow-500
   Lighter: "#A855F7",       // purple-500
   OKX: "#10B981",           // emerald-500
+  Bitget: "#14B8A6",        // teal-500
 };
 
 function formatPrice(value: number): string {
@@ -148,7 +149,8 @@ export default function SearchCandlesChart({
     const isTurnover = !showVolume;
     const subLabel = isTurnover ? "成交额" : "成交量";
     const subData = candles.map((candle) => {
-      const val = isTurnover ? Number(candle.quoteVolume) : Number(candle.volume);
+      const parsed = isTurnover ? Number(candle.quoteVolume) : Number(candle.volume);
+      const val = Number.isFinite(parsed) ? parsed : null;
       const open = Number(candle.open);
       const close = Number(candle.close);
       return {
@@ -226,7 +228,8 @@ export default function SearchCandlesChart({
       }
 
       if (volumeItem) {
-        lines.push(`${subLabel}: ${formatVolume(volumeItem.value)}`);
+        const value = volumeItem.value == null ? Number.NaN : Number(volumeItem.value);
+        lines.push(`${subLabel}: ${Number.isFinite(value) ? formatVolume(value) : "N/A"}`);
       }
 
       if (fundingItem) {
@@ -235,7 +238,7 @@ export default function SearchCandlesChart({
         const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
         const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
         lines.push(`年化资金费率: ${annualizedStr}`);
-        lines.push(`原始小时费率: ${rawStr}`);
+        lines.push(`原始结算周期费率: ${rawStr}`);
       }
 
       return lines.join("<br/>");
@@ -481,7 +484,7 @@ export default function SearchCandlesChart({
         <p>• 主图：K线图，显示开盘/收盘/最高/最低价格</p>
         <p>• 副图1：{showVolume ? "成交量" : "成交额"}（可切换）</p>
         {!is1m && <p>• 副图2：年化资金费率（%），0轴为参考线</p>}
-        <p>• 1m间隔隐藏资金费率副图（资金费率按小时结算）</p>
+        <p>• 1m间隔隐藏资金费率副图（资金费率按各合约结算周期统计）</p>
       </div>
     </div>
   );

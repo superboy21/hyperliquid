@@ -28,6 +28,7 @@ import {
   type IntervalFundingRateItem as HyperliquidIntervalRate,
 } from "@/lib/hyperliquid";
 import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
+import { sleep } from "@/lib/utils/abort";
 
 // ==================== Helpers ====================
 
@@ -55,6 +56,8 @@ function mapToExchangeFundingRate(rate: FundingRate): ExchangeFundingRate {
 
   return {
     symbol: displaySymbol,
+    rawSymbol: rate.coin,
+    marketKey: rate.coin,
     fundingRate: parseFloat(rate.fundingRate),
     lastSettlementRate: Number.NaN,
     settlementHydrationKey: `hyperliquid:${displaySymbol}`,
@@ -117,6 +120,8 @@ export default function FundingMonitor() {
     rates: ExchangeFundingRate[],
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
     targetSymbols: string[],
+    _hydrationKey: number,
+    signal: AbortSignal,
   ): Promise<void> => {
     const batchSize = 3;
     const rateMap = new Map(rates.map((rate) => [rate.symbol, rate]));
@@ -126,11 +131,12 @@ export default function FundingMonitor() {
       .filter((rate) => !Number.isFinite(rate.lastSettlementRate));
 
     for (let i = 0; i < targetRates.length; i += batchSize) {
+      if (signal.aborted) return;
       const batch = targetRates.slice(i, Math.min(i + batchSize, targetRates.length));
       const updates = await Promise.all(
         batch.map(async (rate) => {
           const apiSymbol = toApiSymbol(rate.symbol);
-          const lastSettlementRate = await getLatestSettledFundingRate(apiSymbol);
+          const lastSettlementRate = await getLatestSettledFundingRate(apiSymbol, 12, signal);
           if (!Number.isFinite(lastSettlementRate)) {
             return null;
           }
@@ -154,7 +160,7 @@ export default function FundingMonitor() {
       }
 
       if (i + batchSize < targetRates.length) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await sleep(200, signal);
       }
     }
   }, []);
@@ -188,12 +194,13 @@ export default function FundingMonitor() {
         if (filterType === "standard") return rate.assetCategory === "standard";
         return true;
       },
-      fetchDetailData: async (symbol: string, interval: ChartInterval, rates: ExchangeFundingRate[]): Promise<DetailData> => {
-        const apiSymbol = toApiSymbol(symbol);
+      fetchDetailData: async (selectedRate: ExchangeFundingRate, interval: ChartInterval, rates: ExchangeFundingRate[], signal: AbortSignal): Promise<DetailData> => {
+        const symbol = selectedRate.symbol;
+        const apiSymbol = selectedRate.rawSymbol ?? toApiSymbol(symbol);
         const [candleData, fundingHistory, l2Top] = await Promise.all([
-          getCandleSnapshot(apiSymbol, interval, 30),
-          getFundingHistoryForDays(apiSymbol, 30),
-          fetchL2BookBestBidAsk(apiSymbol),
+          getCandleSnapshot(apiSymbol, interval, 30, signal),
+          getFundingHistoryForDays(apiSymbol, 30, signal),
+          fetchL2BookBestBidAsk(apiSymbol, signal),
         ]);
 
         // Map Hyperliquid candles to shared type
@@ -245,9 +252,9 @@ export default function FundingMonitor() {
           bidAskSpread,
         };
       },
-      fetchImpactSpread: async (symbol: string, notional = 1000): Promise<ImpactSpreadResult> => {
-        const apiSymbol = toApiSymbol(symbol);
-        return fetchImpactSpread("Hyperliquid", apiSymbol, undefined, notional);
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal): Promise<ImpactSpreadResult> => {
+        const apiSymbol = rate.rawSymbol ?? toApiSymbol(rate.symbol);
+        return fetchImpactSpread("Hyperliquid", apiSymbol, signal, notional);
       },
       renderExchangeBadge: (symbol: string) => (
         <>

@@ -190,12 +190,14 @@ export async function getFundingHistory(
         signal,
       }
     );
+    throwIfAborted(signal);
 
     if (!response.ok) {
       return [];
     }
 
     const data = await response.json();
+    throwIfAborted(signal);
     if (!Array.isArray(data)) {
       return [];
     }
@@ -206,7 +208,8 @@ export async function getFundingHistory(
     }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) {
-      return [];
+      throwIfAborted(signal);
+      throw error;
     }
 
     console.error(`Error fetching funding history for ${contract}:`, error);
@@ -218,8 +221,10 @@ export async function getFundingHistory(
  * 批量获取多个合约的历史资金费率
  */
 export async function getBatchFundingHistory(
-  contracts: string[]
+  contracts: string[],
+  signal?: AbortSignal,
 ): Promise<Map<string, FundingHistoryItem[]>> {
+  throwIfAborted(signal);
   if (contracts.length === 0) {
     return new Map();
   }
@@ -232,16 +237,20 @@ export async function getBatchFundingHistory(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contracts }),
         cache: "no-store",
+        signal,
       }
     );
+    throwIfAborted(signal);
 
     if (!response.ok) {
       const errorText = await response.text();
+      throwIfAborted(signal);
       console.error(`Batch Gate.io funding history failed: ${response.status} ${errorText}`);
       return new Map();
     }
 
     const data: GateBatchFundingRatesResponseItem[] = await response.json();
+    throwIfAborted(signal);
     if (!Array.isArray(data)) {
       return new Map();
     }
@@ -258,6 +267,10 @@ export async function getBatchFundingHistory(
         ])
     );
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      throwIfAborted(signal);
+      throw error;
+    }
     console.error("Error fetching batch Gate.io funding history:", error);
     return new Map();
   }
@@ -313,10 +326,12 @@ export async function getFundingHistoryAll(
       cache: "no-store",
       signal,
     });
+    throwIfAborted(signal);
 
     if (!response.ok) break;
 
     const data = await response.json();
+    throwIfAborted(signal);
     if (!Array.isArray(data) || data.length === 0) break;
 
     let newCount = 0;
@@ -368,12 +383,14 @@ export async function getCandleSnapshot(
           signal,
         }
     );
+    throwIfAborted(signal);
 
     if (!response.ok) {
       return [];
     }
 
     const data = await response.json();
+    throwIfAborted(signal);
     if (!Array.isArray(data)) {
       return [];
     }
@@ -394,7 +411,8 @@ export async function getCandleSnapshot(
     });
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) {
-      return [];
+      throwIfAborted(signal);
+      throw error;
     }
 
     console.error(`Error fetching candles for ${coin}:`, error);

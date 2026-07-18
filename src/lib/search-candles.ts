@@ -1,5 +1,5 @@
 // ==================== Search Candlestick Data Layer ====================
-// Fetches candlestick data for all 5 exchanges with maximum history per interval.
+// Fetches candlestick data for all 6 exchanges with maximum history per interval.
 // Used by the search page chart component.
 
 import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as hlGetFundingHistoryForDays } from "./hyperliquid";
@@ -7,8 +7,9 @@ import { getFundingHistoryAll as gateGetFundingHistoryAll } from "./gateio";
 import { getFundingHistoryAll as lighterGetFundingHistoryAll, lighterFetch } from "./lighter";
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical } from "./adapters/okx";
 import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
+import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
-import type { SearchExchangeRate } from "./search";
+import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
 
 // ==================== Types ====================
 
@@ -22,7 +23,7 @@ export interface SearchCandlePoint {
   low: string;
   close: string;
   volume: string;
-  quoteVolume: string;
+  quoteVolume?: string;
 }
 
 export interface FundingRatePoint {
@@ -37,6 +38,23 @@ export interface SearchCandleResult {
   interval: SearchChartInterval;
   exchange: string;
   symbol: string;
+}
+
+export type SearchChartRequest =
+  | { kind: "single"; rate: SearchExchangeRate }
+  | { kind: "combo"; first: SearchExchangeRate; second: SearchExchangeRate; mode: "spread" | "ratio" };
+
+/** Selects at most one request generation for the current chart state. */
+export function selectSearchChartRequest(
+  selectedRate: SearchExchangeRate | null,
+  first: SearchExchangeRate | null,
+  second: SearchExchangeRate | null,
+  mode: "spread" | "ratio" | null,
+): SearchChartRequest | null {
+  if (first || second || mode) {
+    return first && second && mode ? { kind: "combo", first, second, mode } : null;
+  }
+  return selectedRate ? { kind: "single", rate: selectedRate } : null;
 }
 
 // ==================== Interval Utilities ====================
@@ -64,6 +82,7 @@ const MAX_CANDLES: Record<string, number> = {
   gateio: 2000,
   okx: 300,
   lighter: 500,
+  bitget: 9000,
 };
 
 // ==================== Interval → Days Mapping ====================
@@ -208,7 +227,7 @@ function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCand
 
 // ==================== Funding Rate Helpers ====================
 
-function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): number {
+export function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): number {
   const settlementsPerDay = (24 * 3600) / fundingIntervalSeconds;
   return rate * settlementsPerDay * 365;
 }
@@ -547,6 +566,16 @@ async function fetchLighterCandles(
   }
 }
 
+export async function fetchBitgetSearchCandles(
+  rawSymbol: string,
+  interval: SearchChartInterval,
+  signal?: AbortSignal,
+  fetchCandles: typeof fetchBitgetCandles = fetchBitgetCandles,
+): Promise<SearchCandlePoint[]> {
+  const candles = await fetchCandles(rawSymbol, interval, { signal });
+  return candles.map((candle) => ({ ...candle }));
+}
+
 // ==================== Funding History Fetch Functions ====================
 
 async function fetchHyperliquidFundingHistory(
@@ -673,6 +702,46 @@ async function fetchLighterFundingHistory(
   }
 }
 
+export async function fetchBitgetSearchFundingHistory(
+  rawSymbol: string,
+  cutoffTime: number,
+  signal?: AbortSignal,
+  fetchFundingHistory: typeof fetchBitgetFundingHistory = fetchBitgetFundingHistory,
+): Promise<{ time: number; rate: number }[]> {
+  const history = await fetchFundingHistory(rawSymbol, { cutoffTime, signal });
+  return history.map((item) => ({ time: item.timestamp, rate: item.fundingRate }));
+}
+
+export interface BitgetSearchChartDependencies {
+  fetchCandles: typeof fetchBitgetSearchCandles;
+  fetchFundingHistory: typeof fetchBitgetSearchFundingHistory;
+}
+
+const BITGET_SEARCH_CHART_DEPENDENCIES: BitgetSearchChartDependencies = {
+  fetchCandles: fetchBitgetSearchCandles,
+  fetchFundingHistory: fetchBitgetSearchFundingHistory,
+};
+
+/** Candle-first Bitget chart flow; funding is bounded to the returned candle range. */
+export async function fetchBitgetSearchChart(
+  rate: SearchExchangeRate,
+  interval: SearchChartInterval,
+  signal?: AbortSignal,
+  dependencies: BitgetSearchChartDependencies = BITGET_SEARCH_CHART_DEPENDENCIES,
+): Promise<Pick<SearchCandleResult, "candles" | "fundingRates">> {
+  const rawSymbol = requireBitgetRawSymbol(rate);
+  const candles = await dependencies.fetchCandles(rawSymbol, interval, signal);
+  throwIfAborted(signal);
+  if (candles.length === 0) return { candles: [], fundingRates: [] };
+
+  const cutoffTime = Math.min(...candles.map((candle) => candle.openTime));
+  const fundingHistory = await dependencies.fetchFundingHistory(rawSymbol, cutoffTime, signal);
+  return {
+    candles,
+    fundingRates: aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval),
+  };
+}
+
 // ==================== Unified Fetch Dispatcher ====================
 
 export async function fetchSearchCandles(
@@ -731,6 +800,10 @@ export async function fetchSearchCandles(
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
+    }
+    case "Bitget": {
+      const result = await fetchBitgetSearchChart(rate, interval, signal);
+      return { ...empty, ...result };
     }
     default:
       return empty;

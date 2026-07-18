@@ -1,10 +1,10 @@
-# HyperTools - Hyperliquid 交易工具包
+# HyperTools - 跨交易所永续合约工具包
 
-一个面向 Hyperliquid 交易者的专业工具包，提供实时资金费率监控、持仓分析和套利机会发现。
+一个面向永续合约交易者的专业工具包，提供 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 六家交易所的资金费率监控与跨交易所搜索。
 
 ## 功能特性
 
-- **实时资金费率监控**：追踪 Hyperliquid 所有永续合约及 HIP-3 资产的资金费率
+- **六交易所资金费率监控**：追踪 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 的永续合约资金费率
 - **历史数据分析**：查看 30 天资金费率历史及统计指标
 - **智能排序与筛选**：按费率、价格、成交量、持仓量、24h 涨跌幅排序
 - **资产类型筛选**：按标准资产、XYZ-Hip3、Vntl-Hip3、Para-Hip3、Km-Hip3 分类查看
@@ -17,7 +17,7 @@
 - **语言**：TypeScript
 - **样式**：Tailwind CSS 4
 - **状态管理**：React Hooks (useState, useEffect)
-- **数据获取**：原生 Fetch API + Hyperliquid SDK
+- **数据获取**：原生 Fetch API + Hyperliquid SDK + Next.js 服务端代理
 - **包管理器**：Bun
 
 ## 项目结构
@@ -27,6 +27,7 @@ src/
 ├── app/                    # Next.js App Router
 │   ├── funding/            # 资金费率监控页面
 │   ├── search/             # 跨交易所搜索页面
+│   ├── api/bitget/         # Bitget V3 UTA 公开市场 API 服务端代理
 │   ├── layout.tsx          # 根布局
 │   └── page.tsx            # 首页
 ├── components/             # React 组件
@@ -45,6 +46,7 @@ src/
 │   ├── symbol-mapping.ts   # API 名称与显示名称映射
 │   ├── adapters/           # 交易所适配器
 │   │   ├── binance.ts
+│   │   ├── bitget.ts       # Bitget 请求调度、标准化与历史数据适配
 │   │   ├── gate.ts
 │   │   └── okx.ts
 │   └── utils/              # 通用工具函数
@@ -62,11 +64,12 @@ Hyperliquid 资金费率监控主组件，包含：
 - 资金费率说明区域
 
 ### ExchangeFundingMonitor.tsx
-通用交易所资金费率监控组件，支持 Gate.io、Binance、OKX、Lighter 四个交易所。
+通用交易所资金费率监控组件供六家交易所页面复用；资金费率页可在 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 之间切换。
 
 ### CrossExchangeSearch.tsx
 跨交易所搜索与对比工具，支持：
 - 多交易所价格/费率对比
+- 搜索命中后渐进加载详情，点击结果时按需加载图表
 - 组合图表（Spread/Ratio 模式）
 - 历史资金费率与成交额子图
 
@@ -110,12 +113,13 @@ bun start
 | `bun start` | 启动生产服务器 |
 | `bun lint` | 运行 ESLint |
 | `bun typecheck` | 运行 TypeScript 类型检查 |
+| `bun test` | 运行 Bun 测试套件 |
 
 ## 功能详解
 
 ### 资金费率监控
 
-应用监控两类资产：
+Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永续合约：
 1. **标准永续合约**：BTC、ETH、SOL 等传统加密货币永续合约
 2. **HIP-3 资产**：Hyperliquid Improvement Proposal 3 支持的扩展资产，包括：
    - **XYZ-Hip3**：商品（GOLD、SILVER）、股票（AAPL、TSLA、NVDA）、ETF（DRAM、XLE）、指数（SP500、JP225）、FX（JPY、EUR）等 82 个资产
@@ -139,6 +143,9 @@ bun start
 - Binance
 - OKX
 - Lighter
+- Bitget
+
+搜索首次加载六家交易所的基础市场列表；只有在输入搜索条件并产生结果后才渐进获取详情字段，K 线、历史资金费率及组合图表则在点击结果后按需加载。
 
 支持组合图表语法：
 - `ETH-BTC`：价差图（Spread）
@@ -146,9 +153,10 @@ bun start
 
 ### 数据更新频率
 
-- 资金费率每 30 秒自动刷新
-- 历史数据在选中资产时按需加载
-- 所有数据均来自各交易所公开 API，无需认证
+- 资金费率列表每 5 分钟自动刷新
+- 资金费率页的历史数据和图表在选中资产时按需加载
+- 搜索详情在搜索命中后渐进加载，搜索图表在选中结果时按需加载
+- 数据来自各交易所公开市场 API，无需交易所 API Key；部分请求通过 Next.js 服务端代理转发
 
 ### 排序选项
 
@@ -163,14 +171,24 @@ bun start
 
 ## API 集成
 
-项目使用以下公开 API 端点：
+项目使用以下公开市场 API，并按交易所的 CORS、限流和标准化需要选择直连或 Next.js 服务端代理：
 - Hyperliquid：`POST /info`（`metaAndAssetCtxs`、`fundingHistory`、`l2Book`）
-- Gate.io：`GET /api/v4/spot/funding_rate`、`GET /api/v4/futures/usdt/funding_rate`
-- Binance：`GET /fapi/v1/fundingRate`
-- OKX：`GET /api/v5/public/funding-rate-history`
-- Lighter：`GET /v1/lighter/funding-rate-history`
+- Gate.io：前端通过 `/api/gate/futures/usdt/*` 服务端路由访问 USDT 永续合约公开端点
+- Binance：前端通过 `/api/binance`、`/api/binance/klines` 和 `/api/binance/ccxt` 服务端路由访问公开市场数据
+- OKX：前端通过 `/api/okx` 和 `/api/okx/ccxt` 服务端路由访问公开市场数据
+- Lighter：公开 API 采用限速直连，并在失败时回退到 `/api/lighter`；指数价格使用 `/api/lighter/index-prices`
+- Bitget：前端统一请求 `/api/bitget`，由白名单服务端代理访问 V3 UTA 公开市场端点
 
-所有 API 调用均直接发往各交易所端点，无需认证。
+这些公开市场数据无需交易所认证，但并非所有浏览器请求都直接发往交易所；服务端代理用于处理 CORS、参数白名单、超时和上游错误映射。
+
+### Bitget V3 UTA
+
+- 市场范围限定为 `category=USDT-FUTURES` 中状态为 `online`、类型为 `perpetual` 的 USDT 永续合约。
+- `/api/bitget` 仅允许映射到 `/api/v3/market/instruments`、`tickers`、`current-fund-rate`、`history-fund-rate`、`candles`、`history-candles` 和 `orderbook` 的公开操作，并校验参数后由服务端代理转发。
+- `src/lib/adapters/bitget.ts` 将列表、历史资金费率、K 线和订单簿统一为项目的标准数据结构；显示名称与请求所需的原始 `rawSymbol` 分开保存。
+- 资金结算周期不是固定值：适配器读取每个合约的实际 1、2、4 或 8 小时间隔，并据此计算周期费率与年化值。
+- 所有 Bitget 浏览器请求共享 FIFO 单并发调度器，请求启动至少间隔 250ms（附少量抖动），并对超时、HTTP 429 和 5xx 执行有上限的重试；取消信号会停止排队或进行中的请求。
+- 历史 K 线先请求一次近期端点，再按需分页回溯历史端点；周线由 UTC 周一开始的日线聚合生成。Funding 页面详情和 Search 图表均按需获取历史数据。
 
 ## 部署
 
@@ -203,6 +221,14 @@ bun start
 - 所有贡献者
 
 ## 更新日志
+
+### v2026.07.18
+- 新增 Bitget 资金费率页与跨交易所搜索支持，应用现覆盖六家交易所
+- 新增 `src/lib/adapters/bitget.ts` 标准适配器及 `/api/bitget` V3 UTA 公开市场服务端代理
+- 支持 Bitget 在线 USDT 永续合约、动态 1/2/4/8 小时资金结算周期、历史资金费率、K 线和订单簿价差
+- 新增 Bitget 共享单并发调度、请求间隔、超时、有限重试、分页上限和取消处理
+- 搜索详情改为命中后渐进加载，图表在选择结果时按需加载；文档刷新周期修正为 5 分钟
+- 验证通过：62 项测试、TypeScript 类型检查、ESLint 与生产构建
 
 ### v2026.05.31
 - 新增 KM Hip3 资产（Kinetiq Markets）：24 个资产，包括股票（AAPL、TSLA、TENCENT）、商品（GOLD、SILVER、USOIL）、指数（US500、USTECH、SMALL2000）、债券（USBOND）、FX（EUR）

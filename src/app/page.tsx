@@ -30,7 +30,7 @@ export default function Home() {
             <span className="bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent"> 数据分析工具</span>
           </h1>
           <p className="mx-auto max-w-2xl text-xl text-gray-400">
-            为 Hyperliquid 交易者打造的专业工具集，实时监控资金费率，帮助你更快发现市场机会。
+            为永续合约交易者打造的专业工具集，聚合六家交易所资金费率，帮助你更快发现市场机会。
           </p>
         </div>
 
@@ -53,7 +53,7 @@ export default function Home() {
               </div>
               <h3 className="mb-2 text-xl font-bold text-white">交易所资金费率监控</h3>
               <p className="text-sm leading-relaxed text-gray-400">
-                实时监控 Hyperliquid 和 Gate.io 全市场资金费率，支持多交易所切换、K 线图表和年化费率统计。
+                实时监控 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 六家交易所资金费率，支持交易所切换、K 线图表和年化费率统计。
               </p>
               <div className="mt-4 flex items-center gap-2 text-sm font-medium text-blue-400 transition-colors group-hover:text-blue-300">
                 开始使用
@@ -107,7 +107,7 @@ export default function Home() {
               </svg>
             </div>
             <h4 className="mb-2 font-semibold text-white">实时数据</h4>
-            <p className="text-sm text-gray-500">每 30 秒自动刷新，尽量保证数据时效。</p>
+            <p className="text-sm text-gray-500">每 5 分钟自动刷新，尽量保证数据时效。</p>
           </div>
           <div>
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/10">
@@ -116,7 +116,7 @@ export default function Home() {
               </svg>
             </div>
             <h4 className="mb-2 font-semibold text-white">安全可靠</h4>
-            <p className="text-sm text-gray-500">直接连接公开市场数据，无需连接钱包。</p>
+            <p className="text-sm text-gray-500">使用公开市场数据接口，无需连接钱包。</p>
           </div>
           <div>
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-green-500/10">
@@ -132,7 +132,7 @@ export default function Home() {
         <div className="mt-20 text-center">
           <p className="mb-4 text-sm text-gray-500">如果你有功能建议，欢迎继续一起完善。</p>
           <div className="flex items-center justify-center gap-4 text-gray-600">
-            <span className="text-sm">Built for Hyperliquid Traders</span>
+            <span className="text-sm">Built for Perpetual Traders</span>
             <span className="text-gray-700">|</span>
             <span className="text-sm">2026 HyperTools</span>
           </div>

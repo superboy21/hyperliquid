@@ -10,6 +10,8 @@ export type BinanceChartInterval = "1d" | "4h" | "1h";
 
 export interface BinanceFundingMonitorRow {
   symbol: string;
+  rawSymbol: string;
+  marketKey: string;
   fundingRate: number;
   lastSettlementRate: number;
   markPrice: number;
@@ -184,6 +186,8 @@ function isSupportedBinanceSymbol(symbol: string): boolean {
 function mapCanonicalRow(row: CanonicalFundingRateRow): BinanceFundingMonitorRow {
   return {
     symbol: row.symbol,
+    rawSymbol: row.rawSymbol,
+    marketKey: row.marketKey,
     fundingRate: row.fundingRate,
     lastSettlementRate: Number.isFinite(row.lastSettlementRate) ? (row.lastSettlementRate as number) : Number.NaN,
     markPrice: row.markPrice,
@@ -387,12 +391,12 @@ export async function fetchBinanceCanonicalDetail(symbol: string, interval: Bina
   }
 }
 
-export async function hydrateBinanceLatestSettlementRates(symbols: string[]): Promise<Map<string, number>> {
+export async function hydrateBinanceLatestSettlementRates(symbols: string[], signal?: AbortSignal): Promise<Map<string, number>> {
   if (symbols.length === 0) {
     return new Map();
   }
 
-  const response = await binanceFetch("fundingRate", "limit=1000");
+  const response = await binanceFetch("fundingRate", "limit=1000", { signal });
   if (!response.ok) {
     return new Map();
   }

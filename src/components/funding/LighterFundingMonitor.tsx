@@ -14,6 +14,7 @@ import ExchangeFundingMonitor, {
 } from "@/components/funding/ExchangeFundingMonitor";
 import { lighterFetch, getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
 import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
+import { sleep } from "@/lib/utils/abort";
 
 // ==================== Lighter-specific Types ====================
 
@@ -145,6 +146,8 @@ function getAverageFundingRatesByInterval(history: FundingHistoryItem[], interva
 function mapToExchangeFundingRate(rate: LighterFundingRate): ExchangeFundingRate {
   return {
     symbol: rate.symbol,
+    rawSymbol: rate.symbol,
+    marketKey: String(rate.marketId),
     fundingRate: parseFloat(rate.fundingRate),
     lastSettlementRate: Number.NaN,
     settlementHydrationKey: `lighter:${rate.marketId}`,
@@ -266,6 +269,8 @@ export default function LighterFundingMonitor() {
       rates: ExchangeFundingRate[],
       updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
       targetSymbols: string[],
+      _hydrationKey: number,
+      signal: AbortSignal,
     ): Promise<void> => {
       const batchSize = 3;
       const rateMap = new Map(rates.map((rate) => [rate.symbol, rate]));
@@ -290,10 +295,11 @@ export default function LighterFundingMonitor() {
         );
 
       for (let i = 0; i < targetRates.length; i += batchSize) {
+        if (signal.aborted) return;
         const batch = targetRates.slice(i, Math.min(i + batchSize, targetRates.length));
         const updates = await Promise.all(
           batch.map(async ({ rate, marketId }) => {
-            const lastSettlementRate = await getLatestSettledFundingRate(marketId);
+            const lastSettlementRate = await getLatestSettledFundingRate(marketId, 6, signal);
             if (!Number.isFinite(lastSettlementRate)) {
               return null;
             }
@@ -319,7 +325,7 @@ export default function LighterFundingMonitor() {
         }
 
         if (i + batchSize < targetRates.length) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await sleep(200, signal);
         }
       }
     },
@@ -328,7 +334,8 @@ export default function LighterFundingMonitor() {
 
   // Fetch detail data
   const fetchDetailData = useCallback(
-    async (symbol: string, interval: ChartInterval): Promise<DetailData> => {
+    async (selectedRow: ExchangeFundingRate, interval: ChartInterval, _rates: ExchangeFundingRate[], signal: AbortSignal): Promise<DetailData> => {
+      const symbol = selectedRow.symbol;
       const selectedRate = fundingRates.find((r) => r.symbol === symbol);
       const marketId = selectedRate?.marketId;
 
@@ -347,8 +354,8 @@ export default function LighterFundingMonitor() {
       }
 
       const [candlesRes, fundingRes] = await Promise.all([
-        lighterFetch("candles", `market_id=${marketId}&resolution=${interval}&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=${countBack}`),
-        lighterFetch("fundings", `market_id=${marketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`),
+        lighterFetch("candles", `market_id=${marketId}&resolution=${interval}&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=${countBack}`, { signal }),
+        lighterFetch("fundings", `market_id=${marketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`, { signal }),
       ]);
 
       // Process candles
@@ -426,7 +433,7 @@ export default function LighterFundingMonitor() {
       // Fetch order book for bid-ask spread
       let bidAskSpread: number | null = null;
       try {
-        const orderBookRes = await lighterFetch("orderBookOrders", `market_id=${marketId}&limit=1`);
+        const orderBookRes = await lighterFetch("orderBookOrders", `market_id=${marketId}&limit=1`, { signal });
         if (orderBookRes.ok) {
           const orderBookData = await orderBookRes.json();
           const bestAsk = orderBookData.asks?.[0]?.price ? parseFloat(orderBookData.asks[0].price) : null;
@@ -437,6 +444,7 @@ export default function LighterFundingMonitor() {
           }
         }
       } catch (e) {
+        if (signal.aborted) throw e;
         console.error("Error fetching order book:", e);
       }
 
@@ -466,6 +474,8 @@ export default function LighterFundingMonitor() {
         if (absRate >= 10) return `${annualizedPct > 0 ? "+" : ""}${annualizedPct.toFixed(2)}%`;
         return `${annualizedPct > 0 ? "+" : ""}${annualizedPct.toFixed(3)}%`;
       },
+      annualizeRate: (rate: number) => (rate / 8) * 24 * 365 * 100,
+      statCardAnnualizeRate: (rate: number) => rate * 24 * 365,
       formatStatCardAnnualizedRate: (rate: number) => formatAnnualizedRateFromHourly(rate),
       formatPrice: (price: number) => formatPrice(price),
       formatVolume: (volume: number) => formatVolume(volume),
@@ -482,7 +492,8 @@ export default function LighterFundingMonitor() {
         resetOnFilterChange: true,
       } satisfies HydrationPolicy,
       fetchDetailData,
-      fetchImpactSpread: async (symbol: string, notional = 1000) => fetchImpactSpread("Lighter", symbol, undefined, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
+        fetchImpactSpread("Lighter", rate.rawSymbol ?? rate.symbol, signal, notional),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

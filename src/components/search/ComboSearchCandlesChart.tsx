@@ -141,7 +141,8 @@ export default function ComboSearchCandlesChart({
 
     const subLabel = showVolume ? "较小成交量" : "较小成交额";
     const subData = candles.map((candle) => {
-      const val = showVolume ? parseFloat(candle.volume) : parseFloat(candle.quoteVolume);
+      const parsed = showVolume ? parseFloat(candle.volume) : Number(candle.quoteVolume);
+      const val = Number.isFinite(parsed) ? parsed : null;
       const open = parseFloat(candle.open);
       const close = parseFloat(candle.close);
       return {
@@ -216,7 +217,8 @@ export default function ComboSearchCandlesChart({
       }
 
       if (volumeItem) {
-        lines.push(`${subLabel}: ${formatVolume(volumeItem.value)}`);
+        const value = volumeItem.value == null ? Number.NaN : Number(volumeItem.value);
+        lines.push(`${subLabel}: ${Number.isFinite(value) ? formatVolume(value) : "N/A"}`);
       }
 
       if (fundingItem) {
@@ -225,7 +227,7 @@ export default function ComboSearchCandlesChart({
         const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
         const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
         lines.push(`年化资金费率差: ${annualizedStr}`);
-        lines.push(`原始小时费率差: ${rawStr}`);
+        lines.push(`原始结算周期费率差: ${rawStr}`);
       }
 
       return lines.join("<br/>");
