@@ -1,0 +1,231 @@
+import type { ComboCandleResult } from "../combo";
+import type { MixedCombinationResult, SpotContainingCombinationResult } from "./combine";
+
+export type ArbitrageChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
+export type TailTrimPercent = 0 | 1 | 2.5 | 5 | 10;
+
+const RANGE_MS: Record<ArbitrageChartRange, number | null> = {
+  all: null,
+  "3y": 3 * 365 * 86_400_000,
+  "1y": 365 * 86_400_000,
+  "6m": 183 * 86_400_000,
+  "1m": 30 * 86_400_000,
+  "1d": 86_400_000,
+  "4h": 14_400_000,
+};
+
+export interface ValueWithRelativeGap {
+  value: number | null;
+  gapPercent: number | null;
+}
+
+export interface DistributionBands {
+  minus2Sigma: ValueWithRelativeGap;
+  minus1Sigma: ValueWithRelativeGap;
+  plus1Sigma: ValueWithRelativeGap;
+  plus2Sigma: ValueWithRelativeGap;
+}
+
+export interface DistributionAnalytics {
+  mean: number | null;
+  populationSigma: number | null;
+  minus2Sigma: number | null;
+  minus1Sigma: number | null;
+  plus1Sigma: number | null;
+  plus2Sigma: number | null;
+  bands: DistributionBands;
+  retainedCount: number;
+  removedCount: number;
+}
+
+export interface AverageAnalytics {
+  mean: number | null;
+  count: number;
+}
+
+export interface MixedDashboardAnalytics {
+  derivedClose: DistributionAnalytics;
+  currentDerivedClose: ValueWithRelativeGap;
+  fundingAnnualized: AverageAnalytics;
+  spotTurnover: AverageAnalytics;
+  perpTurnover: AverageAnalytics;
+}
+
+export function relativeGapPercent(
+  value: number | null | undefined,
+  mean: number | null | undefined,
+): number | null {
+  if (
+    value === null || value === undefined || mean === null || mean === undefined
+    || !Number.isFinite(value) || !Number.isFinite(mean) || mean === 0
+  ) return null;
+  return (value - mean) / Math.abs(mean) * 100;
+}
+
+export function valueWithRelativeGap(
+  value: number | null | undefined,
+  mean: number | null | undefined,
+): ValueWithRelativeGap {
+  const finiteValue = value !== null && value !== undefined && Number.isFinite(value) ? value : null;
+  return { value: finiteValue, gapPercent: relativeGapPercent(finiteValue, mean) };
+}
+
+function distributionBands(
+  mean: number | null,
+  values: Pick<DistributionAnalytics, "minus2Sigma" | "minus1Sigma" | "plus1Sigma" | "plus2Sigma">,
+): DistributionBands {
+  return {
+    minus2Sigma: valueWithRelativeGap(values.minus2Sigma, mean),
+    minus1Sigma: valueWithRelativeGap(values.minus1Sigma, mean),
+    plus1Sigma: valueWithRelativeGap(values.plus1Sigma, mean),
+    plus2Sigma: valueWithRelativeGap(values.plus2Sigma, mean),
+  };
+}
+
+function latestVisibleClose(visible: MixedCombinationResult): number | null {
+  let latestCloseTime = Number.NEGATIVE_INFINITY;
+  let latestValue: number | null = null;
+  for (const point of visible.points) {
+    if (!Number.isFinite(point.closeTime) || point.closeTime <= latestCloseTime) continue;
+    latestCloseTime = point.closeTime;
+    latestValue = Number.isFinite(point.close) ? point.close : null;
+  }
+  return latestValue;
+}
+
+function average(values: readonly number[]): AverageAnalytics {
+  const finite = values.filter(Number.isFinite);
+  return {
+    mean: finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null,
+    count: finite.length,
+  };
+}
+
+export function filterLegacyComboRange(
+  result: ComboCandleResult,
+  range: ArbitrageChartRange,
+): ComboCandleResult {
+  if (range === "all" || result.candles.length === 0) {
+    return { ...result, candles: [...result.candles], fundingRates: [...result.fundingRates] };
+  }
+  const duration = RANGE_MS[range];
+  if (duration === null) return result;
+  const dataEnd = Math.max(...result.candles.map((point) => point.closeTime).filter(Number.isFinite));
+  if (!Number.isFinite(dataEnd)) return { ...result, candles: [], fundingRates: [] };
+  const cutoff = dataEnd - duration;
+  return {
+    ...result,
+    candles: result.candles.filter((point) => point.openTime >= cutoff && point.openTime <= dataEnd),
+    fundingRates: result.fundingRates.filter((point) => point.time >= cutoff && point.time <= dataEnd),
+  };
+}
+
+export function filterAlignedRange<T extends SpotContainingCombinationResult>(
+  result: T,
+  range: ArbitrageChartRange,
+): T;
+export function filterAlignedRange(
+  result: ComboCandleResult,
+  range: ArbitrageChartRange,
+): ComboCandleResult;
+export function filterAlignedRange(
+  result: SpotContainingCombinationResult | ComboCandleResult,
+  range: ArbitrageChartRange,
+): SpotContainingCombinationResult | ComboCandleResult {
+  if (!("kind" in result)) return filterLegacyComboRange(result, range);
+  if (range === "all" || result.points.length === 0) {
+    return { ...result, points: [...result.points], funding: [...result.funding] };
+  }
+  const duration = RANGE_MS[range];
+  if (duration === null) return result;
+  const dataEnd = Math.max(...result.points.map((point) => point.closeTime).filter(Number.isFinite));
+  if (!Number.isFinite(dataEnd)) return { ...result, points: [], funding: [] };
+  const cutoff = dataEnd - duration;
+  return {
+    ...result,
+    points: result.points.filter((point) => point.openTime >= cutoff && point.openTime <= dataEnd),
+    funding: result.funding.filter((point) => point.time >= cutoff && point.time <= dataEnd),
+  };
+}
+
+export function distributionAnalytics(
+  values: readonly number[],
+  trimPercent: TailTrimPercent,
+): DistributionAnalytics {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  const tailSize = Math.floor(sorted.length * trimPercent / 100);
+  const retained = sorted.slice(tailSize, sorted.length - tailSize);
+  if (retained.length === 0) {
+    const emptyBands = distributionBands(null, {
+      minus2Sigma: null,
+      minus1Sigma: null,
+      plus1Sigma: null,
+      plus2Sigma: null,
+    });
+    return {
+      mean: null,
+      populationSigma: null,
+      minus2Sigma: null,
+      minus1Sigma: null,
+      plus1Sigma: null,
+      plus2Sigma: null,
+      bands: emptyBands,
+      retainedCount: 0,
+      removedCount: sorted.length,
+    };
+  }
+  const mean = retained.reduce((sum, value) => sum + value, 0) / retained.length;
+  const populationSigma = Math.sqrt(
+    retained.reduce((sum, value) => sum + (value - mean) ** 2, 0) / retained.length,
+  );
+  const minus2Sigma = mean - 2 * populationSigma;
+  const minus1Sigma = mean - populationSigma;
+  const plus1Sigma = mean + populationSigma;
+  const plus2Sigma = mean + 2 * populationSigma;
+  return {
+    mean,
+    populationSigma,
+    minus2Sigma,
+    minus1Sigma,
+    plus1Sigma,
+    plus2Sigma,
+    bands: distributionBands(mean, { minus2Sigma, minus1Sigma, plus1Sigma, plus2Sigma }),
+    retainedCount: retained.length,
+    removedCount: sorted.length - retained.length,
+  };
+}
+
+export function dashboardAnalytics(
+  visible: MixedCombinationResult,
+  trimPercent: TailTrimPercent,
+): MixedDashboardAnalytics {
+  const derivedClose = distributionAnalytics(visible.points.map((point) => point.close), trimPercent);
+  const spotTurnovers: number[] = [];
+  const perpTurnovers: number[] = [];
+  for (const point of visible.points) {
+    const legs = [
+      { market: visible.leg1, turnover: point.leg1Turnover },
+      { market: visible.leg2, turnover: point.leg2Turnover },
+    ] as const;
+    for (const leg of legs) {
+      if (!leg.turnover) continue;
+      (leg.market.kind === "spot" ? spotTurnovers : perpTurnovers).push(leg.turnover.value);
+    }
+  }
+  return {
+    derivedClose,
+    currentDerivedClose: valueWithRelativeGap(latestVisibleClose(visible), derivedClose.mean),
+    fundingAnnualized: average(visible.funding.map((point) => point.annualizedRate)),
+    spotTurnover: average(spotTurnovers),
+    perpTurnover: average(perpTurnovers),
+  };
+}
+
+export function visibleDashboardAnalytics(
+  result: MixedCombinationResult,
+  range: ArbitrageChartRange,
+  trimPercent: TailTrimPercent,
+): { visible: MixedCombinationResult; dashboard: MixedDashboardAnalytics } {
+  const visible = filterAlignedRange(result, range);
+  return { visible, dashboard: dashboardAnalytics(visible, trimPercent) };
+}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { proxyFetch } from "@/lib/utils/proxy";
 
 // 资产分类映射
 const ASSET_CATEGORIES: Record<string, string[]> = {
@@ -92,18 +93,19 @@ export async function GET(request: NextRequest) {
     console.log(`[Gate API] Fetching from: ${baseUrl}`);
 
     // 并行拉取 tickers 和 contracts，缩短首屏等待时间
-    const requestInit: RequestInit = {
+    const requestInit: RequestInit & { timeout: number } = {
       method: "GET",
+      cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      signal: AbortSignal.timeout(30000),
+      timeout: 10_000,
     };
 
     const [tickersRes, contractsRes] = await Promise.allSettled([
-      fetch(`${baseUrl}/futures/usdt/tickers`, requestInit),
-      fetch(`${baseUrl}/futures/usdt/contracts`, requestInit),
+      proxyFetch(`${baseUrl}/futures/usdt/tickers`, requestInit),
+      proxyFetch(`${baseUrl}/futures/usdt/contracts`, requestInit),
     ]);
 
     if (tickersRes.status !== "fulfilled" || !tickersRes.value.ok) {

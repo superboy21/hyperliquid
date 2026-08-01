@@ -28,6 +28,7 @@ import {
   type IntervalFundingRateItem as HyperliquidIntervalRate,
 } from "@/lib/hyperliquid";
 import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 import { sleep } from "@/lib/utils/abort";
 
 // ==================== Helpers ====================
@@ -252,9 +253,9 @@ export default function FundingMonitor() {
           bidAskSpread,
         };
       },
-      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal): Promise<ImpactSpreadResult> => {
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal, depthMode?: ImpactDepthMode): Promise<ImpactSpreadResult> => {
         const apiSymbol = rate.rawSymbol ?? toApiSymbol(rate.symbol);
-        return fetchImpactSpread("Hyperliquid", apiSymbol, signal, notional);
+        return fetchImpactSpread("Hyperliquid", apiSymbol, signal, notional, depthMode);
       },
       renderExchangeBadge: (symbol: string) => (
         <>

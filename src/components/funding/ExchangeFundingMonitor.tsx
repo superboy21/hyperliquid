@@ -2,6 +2,7 @@
 
 import { ComponentType, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ImpactSpreadResult } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 import { FUNDING_THEME_CLASSES, type FundingThemeKey } from "@/components/funding/fundingThemes";
 import {
   calculateNotionalWeightedAnnualizedRate,
@@ -123,7 +124,7 @@ export interface ExchangeFundingMonitorConfig {
     updateRates: (updater: (prev: ExchangeFundingRate[]) => ExchangeFundingRate[]) => void,
   ) => Promise<void>;
   fetchDetailData: (rate: ExchangeFundingRate, interval: ChartInterval, rates: ExchangeFundingRate[], signal: AbortSignal) => Promise<DetailData>;
-  fetchImpactSpread?: (rate: ExchangeFundingRate, notional?: number, signal?: AbortSignal) => Promise<ImpactSpreadResult>;
+  fetchImpactSpread?: (rate: ExchangeFundingRate, notional?: number, signal?: AbortSignal, depthMode?: ImpactDepthMode) => Promise<ImpactSpreadResult>;
   renderExchangeBadge?: (symbol: string) => ReactNode;
   renderInfoSection?: () => ReactNode;
   renderExtraStatsCard?: (rates: ExchangeFundingRate[]) => ReactNode;
@@ -253,6 +254,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
   const [detailBidAskSpread, setDetailBidAskSpread] = useState<number | null>(null);
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
   const [impactNotional, setImpactNotional] = useState(1000);
+  const [impactDepthMode, setImpactDepthMode] = useState<ImpactDepthMode>("standard");
   const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
   const [impactSpread, setImpactSpread] = useState<ImpactSpreadResult>(null);
   const [impactLoading, setImpactLoading] = useState(false);
@@ -441,7 +443,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       return () => controller.abort();
     }
 
-    fetchImpactSpread(selectedRate, impactNotional, controller.signal).then((spread) => {
+    fetchImpactSpread(selectedRate, impactNotional, controller.signal, impactDepthMode).then((spread) => {
       if (!controller.signal.aborted) {
         setImpactSpread(spread);
         setImpactLoading(false);
@@ -455,7 +457,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     return () => {
       controller.abort();
     };
-  }, [spreadSource, selectedCoin, fetchImpactSpread, impactNotional]);
+  }, [spreadSource, selectedCoin, fetchImpactSpread, impactNotional, impactDepthMode]);
 
   // Clear impact spread when coin changes
   useEffect(() => {
@@ -1195,11 +1197,27 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                            )}
                          </div>
                        )}
-                        <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
+                        {spreadSource === "impact" && (
+                          <button
+                            type="button"
+                            aria-pressed={impactDepthMode === "max"}
+                            onClick={() => setImpactDepthMode((current) => current === "standard" ? "max" : "standard")}
+                            className={`mt-1.5 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-all active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/80 ${
+                              impactDepthMode === "max"
+                                ? "border-amber-500/60 bg-amber-500/20 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.12)] hover:bg-amber-500/30"
+                                : "border-gray-600 bg-gray-800 text-gray-400 hover:border-gray-500 hover:bg-gray-700 hover:text-gray-200"
+                            }`}
+                          >
+                            {impactDepthMode === "max" ? "最大 REST 深度" : "标准深度 20/100"}
+                          </button>
+                        )}
+                         <p className="mt-2 font-mono text-lg font-bold text-yellow-400">
                           {spreadSource === "impact" && impactLoading ? (
                            <span className="inline-block h-4 w-4 animate-spin rounded-full border-b-2 border-yellow-400" />
                          ) : selectedSummary.bidAskSpread === "no_ctVal" ? (
                            "No ctVal"
+                          ) : selectedSummary.bidAskSpread === "no_multiplier" ? (
+                            "缺少合约乘数"
                          ) : selectedSummary.bidAskSpread === "insufficient" ? (
                            "深度不足"
                          ) : typeof selectedSummary.bidAskSpread === "number" ? (

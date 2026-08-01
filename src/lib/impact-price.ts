@@ -7,6 +7,13 @@ import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
 import { fetchBitgetImpactSpread } from "./adapters/bitget";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
+import {
+  computeOrderBookImpactSpread,
+  resolvePerpImpactDepth,
+  type ImpactDepthMode,
+  type NormalizedBookLevel,
+  type NormalizedOrderBook,
+} from "./order-book-impact";
 
 export const DEFAULT_IMPACT_NOTIONAL = 1000;
 export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
@@ -14,71 +21,7 @@ export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
 // ==================== Types ====================
 
 /** Result of an impact spread computation. */
-export type ImpactSpreadResult = number | "insufficient" | "no_ctVal" | null;
-
-interface BookLevel {
-  price: number;
-  qty: number; // in base asset units
-}
-
-interface NormalizedBook {
-  bids: BookLevel[]; // sorted descending by price
-  asks: BookLevel[]; // sorted ascending by price
-}
-
-// ==================== VWAP Computation ====================
-
-/**
- * Compute VWAP impact price by sweeping order book levels
- * until cumulative notional >= notionalUsd.
- * Returns null if total depth < notionalUsd.
- */
-function computeImpactPrice(book: NormalizedBook, side: "bid" | "ask", notionalUsd: number): number | null {
-  const levels = side === "bid" ? book.bids : book.asks;
-  if (levels.length === 0 || notionalUsd <= 0) return null;
-
-  let cumulativeNotional = 0;
-  let cumulativeQty = 0;
-
-  for (const level of levels) {
-    const levelNotional = level.price * level.qty;
-
-    if (cumulativeNotional + levelNotional >= notionalUsd) {
-      const remaining = notionalUsd - cumulativeNotional;
-      const partialQty = remaining / level.price;
-      cumulativeQty += partialQty;
-      cumulativeNotional = notionalUsd;
-      break;
-    }
-
-    cumulativeQty += level.qty;
-    cumulativeNotional += levelNotional;
-  }
-
-  if (cumulativeNotional < notionalUsd || cumulativeQty <= 0) {
-    return null; // insufficient depth
-  }
-
-  return notionalUsd / cumulativeQty;
-}
-
-/**
- * Compute impact spread from a normalized book.
- * Returns spread percentage, or null if insufficient depth on either side.
- */
-function computeImpactSpread(book: NormalizedBook, notionalUsd: number): number | null {
-  const impactBid = computeImpactPrice(book, "bid", notionalUsd);
-  const impactAsk = computeImpactPrice(book, "ask", notionalUsd);
-
-  if (impactBid == null || impactAsk == null || impactBid <= 0 || impactAsk <= 0) {
-    return null;
-  }
-
-  const midPrice = (impactBid + impactAsk) / 2;
-  if (midPrice <= 0) return null;
-
-  return ((impactAsk - impactBid) / midPrice) * 100;
-}
+export type ImpactSpreadResult = number | "insufficient" | "no_ctVal" | "no_multiplier" | null;
 
 // ==================== Gate.io Multiplier Cache ====================
 
@@ -145,20 +88,20 @@ async function getOkxCtVal(instId: string, signal?: AbortSignal): Promise<number
 async function fetchHyperliquidBook(
   coin: string,
   signal?: AbortSignal,
-): Promise<NormalizedBook | null> {
+): Promise<NormalizedOrderBook | null> {
   try {
     const fullData = await fetchL2Book(coin, signal);
     if (!fullData?.levels || fullData.levels.length < 2) return null;
 
-    const bids: BookLevel[] = fullData.levels[0].map((l) => ({
+    const bids: NormalizedBookLevel[] = fullData.levels[0].map((l) => ({
       price: Number.parseFloat(l.px),
-      qty: Number.parseFloat(l.sz),
-    })).filter((l) => l.price > 0 && l.qty > 0);
+      quantity: Number.parseFloat(l.sz),
+    })).filter((l) => l.price > 0 && l.quantity > 0);
 
-    const asks: BookLevel[] = fullData.levels[1].map((l) => ({
+    const asks: NormalizedBookLevel[] = fullData.levels[1].map((l) => ({
       price: Number.parseFloat(l.px),
-      qty: Number.parseFloat(l.sz),
-    })).filter((l) => l.price > 0 && l.qty > 0);
+      quantity: Number.parseFloat(l.sz),
+    })).filter((l) => l.price > 0 && l.quantity > 0);
 
     return { bids, asks };
   } catch {
@@ -188,36 +131,43 @@ async function getGateMultiplier(contract: string, signal?: AbortSignal): Promis
   }
 }
 
+export interface GatePerpOrderBookPayload {
+  bids?: Array<{ p: string; s: number }>;
+  asks?: Array<{ p: string; s: number }>;
+}
+
+/** Convert Gate contracts to base quantity, failing closed without a valid multiplier. */
+export function normalizeGatePerpOrderBook(
+  data: GatePerpOrderBookPayload,
+  multiplier: number | null | undefined,
+): NormalizedOrderBook | "no_multiplier" {
+  if (multiplier == null || !Number.isFinite(multiplier) || multiplier <= 0) return "no_multiplier";
+  const convert = (levels: Array<{ p: string; s: number }> = []): NormalizedBookLevel[] => levels
+    .map((level) => ({
+      price: Number.parseFloat(level.p),
+      quantity: Number(level.s) * multiplier,
+    }))
+    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.quantity) && level.price > 0 && level.quantity > 0);
+  return { bids: convert(data.bids), asks: convert(data.asks) };
+}
+
 async function fetchGateioBook(
   contract: string,
+  depthLimit: number,
   signal?: AbortSignal,
-): Promise<NormalizedBook | null> {
+): Promise<NormalizedOrderBook | "no_multiplier" | null> {
   try {
     const response = await fetch(
-      `/api/gate/futures/usdt/order_book?contract=${encodeURIComponent(contract)}&limit=20`,
+      `/api/gate/futures/usdt/order_book?contract=${encodeURIComponent(contract)}&limit=${depthLimit}`,
       { signal, cache: "no-store" },
     );
 
     if (!response.ok) return null;
 
-    const data = (await response.json()) as {
-      bids: Array<{ p: string; s: number }>;
-      asks: Array<{ p: string; s: number }>;
-    };
+    const data = (await response.json()) as GatePerpOrderBookPayload;
 
-    const multiplier = gateMultiplierCache.get(contract) ?? (await getGateMultiplier(contract, signal)) ?? 1;
-
-    const bids: BookLevel[] = (data.bids ?? []).map((l) => ({
-      price: Number.parseFloat(l.p),
-      qty: l.s * multiplier, // contracts → base asset
-    })).filter((l) => l.price > 0 && l.qty > 0);
-
-    const asks: BookLevel[] = (data.asks ?? []).map((l) => ({
-      price: Number.parseFloat(l.p),
-      qty: l.s * multiplier,
-    })).filter((l) => l.price > 0 && l.qty > 0);
-
-    return { bids, asks };
+    const multiplier = gateMultiplierCache.get(contract) ?? await getGateMultiplier(contract, signal);
+    return normalizeGatePerpOrderBook(data, multiplier);
   } catch {
     return null;
   }
@@ -225,12 +175,13 @@ async function fetchGateioBook(
 
 async function fetchBinanceBook(
   symbol: string,
+  depthLimit: number,
   signal?: AbortSignal,
-): Promise<NormalizedBook | null> {
+): Promise<NormalizedOrderBook | null> {
   try {
     const response = await binanceFetch(
       "depth",
-      `symbol=${encodeURIComponent(symbol)}&limit=20`,
+      `symbol=${encodeURIComponent(symbol)}&limit=${depthLimit}`,
       { signal },
     );
 
@@ -241,15 +192,15 @@ async function fetchBinanceBook(
       asks: Array<[string, string]>;
     };
 
-    const bids: BookLevel[] = (data.bids ?? []).map(([px, qty]) => ({
+    const bids: NormalizedBookLevel[] = (data.bids ?? []).map(([px, qty]) => ({
       price: Number.parseFloat(px),
-      qty: Number.parseFloat(qty),
-    })).filter((l) => l.price > 0 && l.qty > 0);
+      quantity: Number.parseFloat(qty),
+    })).filter((l) => l.price > 0 && l.quantity > 0);
 
-    const asks: BookLevel[] = (data.asks ?? []).map(([px, qty]) => ({
+    const asks: NormalizedBookLevel[] = (data.asks ?? []).map(([px, qty]) => ({
       price: Number.parseFloat(px),
-      qty: Number.parseFloat(qty),
-    })).filter((l) => l.price > 0 && l.qty > 0);
+      quantity: Number.parseFloat(qty),
+    })).filter((l) => l.price > 0 && l.quantity > 0);
 
     return { bids, asks };
   } catch {
@@ -260,11 +211,13 @@ async function fetchBinanceBook(
 async function fetchOkxBook(
   instId: string,
   ctVal: number,
+  depthLimit: number,
   signal?: AbortSignal,
-): Promise<NormalizedBook | null> {
+): Promise<NormalizedOrderBook | null> {
   try {
+    const endpoint = depthLimit > 400 ? "market/books-full" : "market/books";
     const response = await fetch(
-      `/api/okx?endpoint=market/books&instId=${encodeURIComponent(instId)}&sz=20`,
+      `/api/okx?endpoint=${endpoint}&instId=${encodeURIComponent(instId)}&sz=${depthLimit}`,
       { signal, cache: "no-store" },
     );
 
@@ -281,15 +234,15 @@ async function fetchOkxBook(
     if (!book) return null;
 
     // OKX order book sz is in contracts — multiply by ctVal to get base asset qty
-    const bids: BookLevel[] = (book.bids ?? []).map(([px, sz]) => ({
+    const bids: NormalizedBookLevel[] = (book.bids ?? []).map(([px, sz]) => ({
       price: Number.parseFloat(px),
-      qty: Number.parseFloat(sz) * ctVal,
-    })).filter((l) => l.price > 0 && l.qty > 0);
+      quantity: Number.parseFloat(sz) * ctVal,
+    })).filter((l) => l.price > 0 && l.quantity > 0);
 
-    const asks: BookLevel[] = (book.asks ?? []).map(([px, sz]) => ({
+    const asks: NormalizedBookLevel[] = (book.asks ?? []).map(([px, sz]) => ({
       price: Number.parseFloat(px),
-      qty: Number.parseFloat(sz) * ctVal,
-    })).filter((l) => l.price > 0 && l.qty > 0);
+      quantity: Number.parseFloat(sz) * ctVal,
+    })).filter((l) => l.price > 0 && l.quantity > 0);
 
     return { bids, asks };
   } catch {
@@ -299,8 +252,9 @@ async function fetchOkxBook(
 
 async function fetchLighterBook(
   symbol: string,
+  depthLimit: number,
   signal?: AbortSignal,
-): Promise<NormalizedBook | null> {
+): Promise<NormalizedOrderBook | null> {
   try {
     const marketMap = await getMarketMap();
     let marketId: number | undefined;
@@ -316,7 +270,7 @@ async function fetchLighterBook(
 
     const response = await lighterFetch(
       "orderBookOrders",
-      `market_id=${marketId}&limit=20`,
+      `market_id=${marketId}&limit=${depthLimit}`,
       { signal },
     );
 
@@ -327,18 +281,18 @@ async function fetchLighterBook(
       asks?: Array<Record<string, unknown>>;
     };
 
-    const parseLevel = (l: Record<string, unknown>): BookLevel | null => {
+    const parseLevel = (l: Record<string, unknown>): NormalizedBookLevel | null => {
       const price = Number.parseFloat(String(l.price ?? ""));
       const qtyRaw = l.remaining_base_amount ?? l.size ?? l.base_amount ?? 0;
-      const qty = Number.parseFloat(String(qtyRaw));
-      if (!Number.isFinite(price) || !Number.isFinite(qty) || price <= 0 || qty <= 0) {
+      const quantity = Number.parseFloat(String(qtyRaw));
+      if (!Number.isFinite(price) || !Number.isFinite(quantity) || price <= 0 || quantity <= 0) {
         return null;
       }
-      return { price, qty };
+      return { price, quantity };
     };
 
-    const bids: BookLevel[] = (data.bids ?? []).map(parseLevel).filter((l): l is BookLevel => l !== null);
-    const asks: BookLevel[] = (data.asks ?? []).map(parseLevel).filter((l): l is BookLevel => l !== null);
+    const bids: NormalizedBookLevel[] = (data.bids ?? []).map(parseLevel).filter((l): l is NormalizedBookLevel => l !== null);
+    const asks: NormalizedBookLevel[] = (data.asks ?? []).map(parseLevel).filter((l): l is NormalizedBookLevel => l !== null);
 
     return { bids, asks };
   } catch {
@@ -353,56 +307,75 @@ async function fetchLighterBook(
  *
  * @returns spread percentage (number), "insufficient" if book is available
  *          but total depth < notionalUsd on either side, "no_ctVal" if the
- *          OKX contract multiplier is unavailable, or null if the book could
- *          not be fetched at all.
+ *          OKX contract multiplier is unavailable, "no_multiplier" if Gate's
+ *          multiplier is unavailable, or null if the book could not be fetched.
  */
 export async function fetchImpactSpread(
   exchange: string,
   rawSymbol: string,
   signal?: AbortSignal,
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
+  depthMode: ImpactDepthMode = "standard",
 ): Promise<ImpactSpreadResult> {
-  let book: NormalizedBook | null = null;
+  let book: NormalizedOrderBook | null = null;
 
   switch (exchange) {
     case "Hyperliquid":
       book = await fetchHyperliquidBook(rawSymbol, signal);
       break;
     case "Gate.io":
-      book = await fetchGateioBook(rawSymbol, signal);
+      {
+        const gateBook = await fetchGateioBook(rawSymbol, resolvePerpImpactDepth("Gate.io", depthMode), signal);
+        if (gateBook === "no_multiplier") return gateBook;
+        book = gateBook;
+      }
       break;
     case "Binance":
-      book = await fetchBinanceBook(rawSymbol, signal);
+      book = await fetchBinanceBook(rawSymbol, resolvePerpImpactDepth("Binance", depthMode), signal);
       break;
     case "OKX": {
       // OKX order book sz is in contracts — need ctVal to convert to base qty
       const ctVal = await getOkxCtVal(rawSymbol, signal);
       if (ctVal === null) return "no_ctVal";
-      book = await fetchOkxBook(rawSymbol, ctVal, signal);
+      book = await fetchOkxBook(rawSymbol, ctVal, resolvePerpImpactDepth("OKX", depthMode), signal);
       break;
     }
     case "Lighter":
-      book = await fetchLighterBook(rawSymbol, signal);
+      book = await fetchLighterBook(rawSymbol, resolvePerpImpactDepth("Lighter", depthMode), signal);
       break;
     case "Bitget":
-      return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal);
+      return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
     default:
       return null;
   }
 
   if (!book) return null; // fetch error
-  const spread = computeImpactSpread(book, notionalUsd);
-  if (spread === null) return "insufficient"; // book ok, depth < notional
-  return spread;
+  return computeOrderBookImpactSpread(book, notionalUsd);
 }
 
 /** Search dispatch that prevents display-symbol fallback for Bitget. */
+export function fetchSearchImpactSpread(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+  signal?: AbortSignal,
+  notionalUsd?: number,
+  depthMode?: ImpactDepthMode,
+): Promise<ImpactSpreadResult>;
+export function fetchSearchImpactSpread(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+  signal?: AbortSignal,
+  notionalUsd?: number,
+  fetcher?: typeof fetchImpactSpread,
+  depthMode?: ImpactDepthMode,
+): Promise<ImpactSpreadResult>;
 export async function fetchSearchImpactSpread(
   rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
   signal?: AbortSignal,
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
-  fetcher: typeof fetchImpactSpread = fetchImpactSpread,
+  depthModeOrFetcher: ImpactDepthMode | typeof fetchImpactSpread = "standard",
+  depthModeAfterFetcher: ImpactDepthMode = "standard",
 ): Promise<ImpactSpreadResult> {
   const rawSymbol = requireBitgetRawSymbol(rate);
-  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd);
+  const fetcher = typeof depthModeOrFetcher === "function" ? depthModeOrFetcher : fetchImpactSpread;
+  const depthMode = typeof depthModeOrFetcher === "function" ? depthModeAfterFetcher : depthModeOrFetcher;
+  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd, depthMode);
 }

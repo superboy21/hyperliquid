@@ -30,6 +30,7 @@ export interface FundingRatePoint {
   time: number;
   rate: number;
   annualizedRate: number;
+  sampleCount?: number;
 }
 
 export interface SearchCandleResult {
@@ -232,7 +233,7 @@ export function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): 
   return rate * settlementsPerDay * 365;
 }
 
-function aggregateFundingRatesToCandles(
+export function aggregateFundingRatesToCandles(
   rawHistory: { time: number; rate: number }[],
   candles: SearchCandlePoint[],
   fundingIntervalSeconds: number,
@@ -252,10 +253,11 @@ function aggregateFundingRatesToCandles(
         time: candle.openTime,
         rate: avgRate,
         annualizedRate: toAnnualizedRate(avgRate, fundingIntervalSeconds),
+        sampleCount: ratesInRange.length,
       };
     }
 
-    return { time: candle.openTime, rate: 0, annualizedRate: 0 };
+    return { time: candle.openTime, rate: 0, annualizedRate: 0, sampleCount: 0 };
   });
 }
 

@@ -18,7 +18,8 @@ import ExchangeFundingMonitor, {
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
 } from "@/components/funding/ExchangeFundingMonitor";
-import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
+import { fetchImpactSpread } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 
 // ==================== Helpers ====================
 
@@ -187,8 +188,8 @@ export default function BinanceFundingMonitor() {
         resetOnFilterChange: true,
       },
       fetchDetailData,
-      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
-        fetchImpactSpread("Binance", rate.rawSymbol ?? rate.symbol, signal, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal, depthMode?: ImpactDepthMode) =>
+        fetchImpactSpread("Binance", rate.rawSymbol ?? rate.symbol, signal, notional, depthMode),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

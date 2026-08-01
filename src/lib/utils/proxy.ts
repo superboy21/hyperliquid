@@ -14,6 +14,22 @@ const PROXY_URL =
   "";
 
 /**
+ * Canonicalize request header names for Undici and add JSON defaults without
+ * creating differently-cased duplicates. Caller-provided values win.
+ */
+export function normalizeProxyHeaders(initHeaders?: HeadersInit): Record<string, string> {
+  const normalized = new Headers(initHeaders);
+  if (!normalized.has("content-type")) normalized.set("content-type", "application/json");
+  if (!normalized.has("accept")) normalized.set("accept", "application/json");
+
+  const headers: Record<string, string> = {};
+  normalized.forEach((value, name) => {
+    headers[name.toLowerCase()] = value;
+  });
+  return headers;
+}
+
+/**
  * Server-side fetch with timeout and optional HTTP proxy support.
  * Falls back to direct globalThis.fetch if no proxy is configured,
  * or when running on edge runtimes where undici is unavailable.
@@ -54,15 +70,7 @@ export async function proxyFetch(
       ...restInit
     } = init ?? {};
 
-    const headers: Record<string, string> = {};
-    if (initHeaders) {
-      const h = new Headers(initHeaders);
-      h.forEach((v, k) => {
-        headers[k] = v;
-      });
-    }
-    if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
-    if (!headers["Accept"]) headers["Accept"] = "application/json";
+    const headers = normalizeProxyHeaders(initHeaders);
 
     const response = await undici.fetch(url.toString(), {
       method: method ?? "GET",

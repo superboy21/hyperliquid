@@ -12,6 +12,7 @@ import {
   type DetailResult,
 } from "@/lib/search";
 import { fetchSearchImpactSpread, DEFAULT_IMPACT_NOTIONAL, IMPACT_NOTIONAL_PRESETS, type ImpactSpreadResult } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 import {
   fetchSearchCandles,
   selectSearchChartRequest,
@@ -205,7 +206,12 @@ function getSortValue(
     case "spread": {
       if (spreadSource === "impact" && impactPriceCache) {
         const impact = impactPriceCache.get(getDetailKey(rate.exchange, rate.symbol));
-        if (impact === null || impact === "insufficient" || impact === "no_ctVal") return Number.NEGATIVE_INFINITY;
+        if (
+          impact === null ||
+          impact === "insufficient" ||
+          impact === "no_ctVal" ||
+          impact === "no_multiplier"
+        ) return Number.NEGATIVE_INFINITY;
         if (impact != null) return impact;
       }
       return rate.detail?.bidAskSpread ?? -1;
@@ -240,6 +246,7 @@ export default function CrossExchangeSearch() {
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
   const [spreadSource, setSpreadSource] = useState<"top" | "impact">("top");
   const [impactNotional, setImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
+  const [impactDepthMode, setImpactDepthMode] = useState<ImpactDepthMode>("standard");
   const [impactNotionalCustom, setImpactNotionalCustom] = useState(false);
   const [customInputNotional, setCustomInputNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const [impactPriceCache, setImpactPriceCache] = useState<Map<string, ImpactSpreadResult>>(new Map());
@@ -516,7 +523,7 @@ export default function CrossExchangeSearch() {
           const rate = filteredRates.find((r) => getDetailKey(r.exchange, r.symbol) === key);
           if (!rate) continue;
           try {
-            const spread = await fetchSearchImpactSpread(rate, signal, notional);
+            const spread = await fetchSearchImpactSpread(rate, signal, notional, impactDepthMode);
             writeResult(key, spread);
           } catch {
             writeResult(key, null);
@@ -532,7 +539,7 @@ export default function CrossExchangeSearch() {
     return () => {
       controller.abort();
     };
-  }, [filteredRates, loading, debouncedSearchTerm, spreadSource, impactNotional]);
+  }, [filteredRates, loading, debouncedSearchTerm, spreadSource, impactNotional, impactDepthMode]);
 
   // REST supplies most index prices. Retry the WebSocket snapshot only for unresolved
   // Lighter rows in the current search, merging partial responses immediately.
@@ -1126,6 +1133,26 @@ export default function CrossExchangeSearch() {
                     )}
                   </div>
                     );})()}
+                {spreadSource === "impact" && (
+                  <div className="mt-1 flex justify-end">
+                    <button
+                      type="button"
+                      aria-pressed={impactDepthMode === "max"}
+                      onClick={() => {
+                        impactAbortRef.current?.abort();
+                        setImpactPriceCache(new Map());
+                        setImpactDepthMode((current) => current === "standard" ? "max" : "standard");
+                      }}
+                      className={`rounded border px-1.5 py-0.5 text-[9px] font-medium transition-all active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/80 ${
+                        impactDepthMode === "max"
+                          ? "border-amber-500/60 bg-amber-500/20 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.12)] hover:bg-amber-500/30"
+                          : "border-gray-600 bg-gray-900/70 text-gray-400 hover:border-gray-500 hover:bg-gray-700 hover:text-gray-200"
+                      }`}
+                    >
+                      {impactDepthMode === "max" ? "最大 REST 深度" : "标准深度 20/100"}
+                    </button>
+                  </div>
+                )}
               </th>
               <th
                 className="cursor-pointer px-2 py-2 text-right text-[11px] font-medium text-gray-400 hover:text-gray-200 xl:px-2.5"
@@ -1319,6 +1346,9 @@ export default function CrossExchangeSearch() {
                          if (effectiveSpread === "no_ctVal") {
                            return <span className="text-xs text-red-400">No ctVal</span>;
                          }
+                          if (effectiveSpread === "no_multiplier") {
+                            return <span className="text-xs text-red-400">缺少合约乘数</span>;
+                          }
                          return effectiveSpread != null ? (
                            <span className="whitespace-nowrap font-mono text-xs text-gray-300">
                              {effectiveSpread.toFixed(4)}%

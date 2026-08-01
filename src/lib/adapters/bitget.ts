@@ -1,5 +1,6 @@
 import type { AssetCategory, CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
 import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
+import { computeOrderBookImpactSpread, resolvePerpImpactDepth } from "@/lib/order-book-impact";
 
 export type BitgetCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
 export type BitgetAction = "instruments" | "tickers" | "current-fund-rate" | "history-fund-rate" | "candles" | "history-candles" | "orderbook";
@@ -528,7 +529,7 @@ export function normalizeBitgetOrderBook(payload: unknown): NormalizedBitgetOrde
   return { asks: parseSide(object.a ?? object.asks), bids: parseSide(object.b ?? object.bids) };
 }
 
-export async function fetchBitgetOrderBook(rawSymbol: string, limit = 100, signal?: AbortSignal, request: BitgetRequest = requestBitget) {
+export async function fetchBitgetOrderBook(rawSymbol: string, limit = resolvePerpImpactDepth("Bitget"), signal?: AbortSignal, request: BitgetRequest = requestBitget) {
   return normalizeBitgetOrderBook(await request("orderbook", { symbol: rawSymbol, limit: String(Math.max(1, Math.min(1000, Math.trunc(limit)))) }, signal));
 }
 
@@ -620,35 +621,34 @@ export function computeBitgetImpactSpread(
   book: NormalizedBitgetOrderBook,
   notionalUsd: number,
 ): BitgetImpactSpreadResult {
-  if (!Number.isFinite(notionalUsd) || notionalUsd <= 0) return null;
-
-  const impactPrice = (levels: NormalizedBitgetBookLevel[]): number | null => {
-    let filledNotional = 0;
-    let filledBaseQty = 0;
-    for (const level of levels) {
-      if (level.price <= 0 || level.baseQty <= 0) continue;
-      const availableNotional = level.price * level.baseQty;
-      const usedNotional = Math.min(availableNotional, notionalUsd - filledNotional);
-      filledNotional += usedNotional;
-      filledBaseQty += usedNotional / level.price;
-      if (filledNotional >= notionalUsd) break;
-    }
-    return filledNotional >= notionalUsd && filledBaseQty > 0 ? notionalUsd / filledBaseQty : null;
-  };
-
-  const impactBid = impactPrice([...book.bids].sort((a, b) => b.price - a.price));
-  const impactAsk = impactPrice([...book.asks].sort((a, b) => a.price - b.price));
-  if (impactBid === null || impactAsk === null) return "insufficient";
-  const midpoint = (impactBid + impactAsk) / 2;
-  return midpoint > 0 ? ((impactAsk - impactBid) / midpoint) * 100 : null;
+  return computeOrderBookImpactSpread({
+    bids: book.bids.map((level) => ({ price: level.price, quantity: level.baseQty })),
+    asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
+  }, notionalUsd);
 }
 
+export function fetchBitgetImpactSpread(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  request?: BitgetRequest,
+  requestedLimit?: number,
+): Promise<BitgetImpactSpreadResult>;
+export function fetchBitgetImpactSpread(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  requestedLimit?: number,
+): Promise<BitgetImpactSpreadResult>;
 export async function fetchBitgetImpactSpread(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
-  request: BitgetRequest = requestBitget,
+  requestOrLimit: BitgetRequest | number = requestBitget,
+  requestedLimit: number = resolvePerpImpactDepth("Bitget"),
 ): Promise<BitgetImpactSpreadResult> {
-  const book = await fetchBitgetOrderBook(rawSymbol, 100, signal, request);
+  const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBitget;
+  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
+  const book = await fetchBitgetOrderBook(rawSymbol, limit, signal, request);
   return computeBitgetImpactSpread(book, notionalUsd);
 }

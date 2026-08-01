@@ -13,7 +13,8 @@ import ExchangeFundingMonitor, {
   type IntervalFundingRateItem,
 } from "@/components/funding/ExchangeFundingMonitor";
 import { lighterFetch, getFundingHistory, getLatestSettledFundingRate } from "@/lib/lighter";
-import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
+import { fetchImpactSpread } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 import { sleep } from "@/lib/utils/abort";
 
 // ==================== Lighter-specific Types ====================
@@ -492,8 +493,8 @@ export default function LighterFundingMonitor() {
         resetOnFilterChange: true,
       } satisfies HydrationPolicy,
       fetchDetailData,
-      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
-        fetchImpactSpread("Lighter", rate.rawSymbol ?? rate.symbol, signal, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal, depthMode?: ImpactDepthMode) =>
+        fetchImpactSpread("Lighter", rate.rawSymbol ?? rate.symbol, signal, notional, depthMode),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">结算周期</p>

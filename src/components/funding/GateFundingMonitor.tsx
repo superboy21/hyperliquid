@@ -16,7 +16,8 @@ import ExchangeFundingMonitor, {
   type ExchangeFundingMonitorConfig,
   type ExchangeFundingRate,
 } from "@/components/funding/ExchangeFundingMonitor";
-import { fetchImpactSpread, type ImpactSpreadResult } from "@/lib/impact-price";
+import { fetchImpactSpread } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume, type CandleSnapshotItem as GateCandle, type IntervalFundingRateItem as GateIntervalRate } from "@/lib/gateio";
 import { throwIfAborted } from "@/lib/utils/abort";
 
@@ -156,8 +157,8 @@ export default function GateFundingMonitor() {
       fetchRates,
       hydrateRates,
       fetchDetailData: buildDetailData,
-      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) =>
-        fetchImpactSpread("Gate.io", rate.rawSymbol ?? `${rate.symbol}_USDT`, signal, notional),
+      fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal, depthMode?: ImpactDepthMode) =>
+        fetchImpactSpread("Gate.io", rate.rawSymbol ?? `${rate.symbol}_USDT`, signal, notional, depthMode),
       renderExtraStatsCard: () => (
         <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
           <p className="text-sm text-gray-400">Gate.io 永续合约</p>

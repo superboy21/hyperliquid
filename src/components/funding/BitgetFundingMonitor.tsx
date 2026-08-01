@@ -14,10 +14,11 @@ import {
   computeBitgetFundingRatesByInterval,
   fetchBitgetCanonicalDetail,
   fetchBitgetCanonicalRates,
-  fetchBitgetImpactSpread,
   fetchLatestBitgetSettlement,
   selectBitgetDetailCandles,
 } from "@/lib/adapters/bitget";
+import { fetchImpactSpread } from "@/lib/impact-price";
+import { type ImpactDepthMode } from "@/lib/order-book-impact";
 import { formatAnnualizedRate, formatFundingRate, formatPrice, formatVolume } from "@/lib/types";
 
 const categoryConfig: Record<string, CategoryConfig> = {
@@ -139,9 +140,9 @@ export default function BitgetFundingMonitor() {
       boundTargetsToCurrentBatch: true,
     } satisfies HydrationPolicy,
     fetchDetailData,
-    fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal) => {
+    fetchImpactSpread: async (rate: ExchangeFundingRate, notional = 1000, signal?: AbortSignal, depthMode?: ImpactDepthMode) => {
       if (!rate.rawSymbol) throw new Error(`Bitget raw symbol is missing for ${rate.symbol}`);
-      return fetchBitgetImpactSpread(rate.rawSymbol, notional, signal);
+      return fetchImpactSpread("Bitget", rate.rawSymbol, signal, notional, depthMode);
     },
     renderExtraStatsCard: () => (
       <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">

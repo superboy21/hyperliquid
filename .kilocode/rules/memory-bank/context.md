@@ -1,11 +1,13 @@
-# Active Context: Six-Exchange Funding Monitor and Search
+# Active Context: Cross-Exchange Market Toolkit
 
 ## Current State
 
-**Template Status**: ✅ Active Development - Six-Exchange Funding Monitor and Search
+**Template Status**: ✅ Active Development - Six-Exchange Perpetual, Spot, and Combination Analysis Toolkit
 
-The project now includes funding monitoring and cross-exchange search for Hyperliquid, Gate.io, Binance, OKX, Lighter, and Bitget, with:
+The project now includes funding monitoring plus perpetual and spot search for Hyperliquid, Gate.io, Binance, OKX, Lighter, and Bitget, with:
 - Public market data for perpetual contracts and Hyperliquid HIP-3 markets
+- Six-exchange spot search with normalized pair identity, market comparison, and single-market charts
+- `/spot_perp_arbitrage` unified Spot+Perp search with source charts, ordered two-leg combinations, and mixed visible-range analytics
 - Annualized funding rate display
 - 7-day and 30-day historical averages
 - Five-minute funding-list refresh, progressive search details, and on-demand charts
@@ -52,6 +54,26 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 - [x] **Bitget daily candle window fix**: The initial V3 `candles` request is now clamped to the same inclusive-safe 90-day maximum as history requests, preventing daily/weekly requests from sending the former 99-day span rejected by Bitget.
 - [x] **Bitget zero-width pagination fix**: Recent and history candle transport now guarantees `startTime < endTime`, skips ineligible unaligned seams, and widens eligible aligned seams to recover the boundary candle. Canonical detail also preserves funding, settlement, and BBO metrics when only the candle branch fails.
 - [x] **2026-07-18 validation**: 88 tests, TypeScript typecheck, ESLint, and production build all pass; live Origin-header probes confirmed Bitget CORS and the corrected XAUUSDT daily request return HTTP 200.
+- [x] **Six-exchange Spot Search**: Added Hyperliquid, Gate.io, Binance, Lighter, OKX, and Bitget spot lists with normalized `exchange:marketKey` identity and canonical base/quote pairs.
+- [x] **Strict spot facade**: `/api/spot/[exchange]` permits only validated `list`, `candles`, and `book` operations against fixed upstream hosts.
+- [x] **Search-gated spot details**: Historical volatility and Top spread load only after a non-empty matching search; Impact depth loads only in Impact mode, with bounded concurrency and cancellation.
+- [x] **On-demand spot charts**: Selecting one market loads a two-panel candle plus quote-turnover/base-volume chart with no funding panel.
+- [x] **Maximum REST depth limits**: Order books are capped at Hyperliquid 20, Gate.io 100, Binance 5000, Lighter 250, OKX 5000, and Bitget 150 levels.
+- [x] **Hyperliquid PURR spot transport fix**: Spot normalization now uses the API-required `PURR/USDC` transport symbol for PURR while retaining `@index` transport symbols for all indexed markets.
+- [x] **Spot quote-currency filter**: Spot Search defaults to exact `USDT` pairs and can switch between `USDC`, `U`, `USD1`, `USD`, or all pairs before keyword/detail/Impact filtering.
+- [x] **Binance U/USD1 pair parsing**: The concatenated Binance ticker symbols now recognize exact `U` and `USD1` suffixes, retaining markets such as `BTC/U`, `BNB/U`, and `BTC/USD1`.
+- [x] **Hyperliquid proxy header fix**: Node proxy requests now normalize header names case-insensitively, preventing duplicate `Content-Type` values that caused Hyperliquid to return text/plain HTTP 415 and the spot facade to report a misleading 502.
+- [x] **Impact depth modes**: Spot Search, Perp Search, and Funding default to standard depth (Hyperliquid 20, every other venue 100) and expose an Impact-only toggle for each Spot/Perp venue's maximum REST depth. Switching modes aborts stale work, clears only Impact results, and preserves notional/detail/chart state.
+- [x] **Unified Impact VWAP**: Spot, generic Perp, and Bitget Perp now share one quote-notional VWAP implementation that sorts copied bids/asks best-to-worst, preserves partial final-level fills, and never mutates source books.
+- [x] **Gate multiplier fail-closed**: Gate Perp Impact converts contract counts with a validated `quanto_multiplier`; missing, invalid, zero, or failed multiplier lookup returns `no_multiplier` and displays `缺少合约乘数` instead of assuming 1.
+- [x] **Gate ticker proxy reliability**: The Perp Search Gate ticker route now uses the shared proxy-aware transport for both tickers and contracts with bounded timeouts, eliminating direct Node requests that intermittently exceeded 30 seconds and returned HTTP 500.
+- [x] **Six-exchange Spot/Perp analysis**: Added `/spot_perp_arbitrage` with a unified nullable market table, default USDT spot filtering, source single-market charts, and Perp/Perp, Spot/Spot, or mixed combinations.
+- [x] **Explicit compact query contract**: Exactly one `-` or `/` creates an ordered two-leg query; selection order defines leg 1/leg 2, and `BTC/USDT` is intentionally parsed as a BTC-to-USDT ratio query rather than exact pair search.
+- [x] **Aligned combination analytics**: Two-leg candles use exact timestamp intersection and shorter available history; mixed dashboards consume the visible data-end range and report per-tail trimmed mean/population σ, signed observed funding, and separate Spot/Perp turnover averages.
+- [x] **Final Spot/Perp Oracle review**: Final Oracle gate returned GO after legacy Perp parity, positive ratio inputs, progressive BBO projection, result discrimination, data-end range contracts, and chart-range transitions were remediated. Final validation passed: 153 tests, 501 assertions, typecheck, ESLint, production build, and local page/API smoke tests.
+- [x] **Arbitrage Binance OI hydration**: `/spot_perp_arbitrage` now mirrors Perp Search's search-gated `hydrateSearchBinanceOpenInterest` flow, replacing Binance's temporary 24h-turnover notional placeholder with actual open interest × mark price through abort/generation-safe immutable updates.
+- [x] **Arbitrage default ranking**: Search results on `/spot_perp_arbitrage` now default to 24h quote turnover descending, while retaining sortable table headers.
+- [x] **Mixed current-value and mean-gap metrics**: The mixed dashboard now shows the latest visible spread/ratio close and annotates it plus all four ±1σ/±2σ bands with relative distance to the trimmed mean, using `(value - mean) / |mean| × 100` and `--` for a zero/unavailable mean.
 
 ## Current Structure
 
@@ -61,11 +83,22 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 | `src/app/layout.tsx` | Root layout | ✅ Ready |
 | `src/app/globals.css` | Global styles | ✅ Ready |
 | `src/app/funding/page.tsx` | Funding rate monitor page | ✅ Ready |
+| `src/app/spotsearch/page.tsx` | Six-exchange spot search page | ✅ Ready |
+| `src/app/spot_perp_arbitrage/page.tsx` | Unified six-exchange Spot/Perp analysis page | ✅ Ready |
+| `src/app/api/spot/[exchange]/route.ts` | Strict six-exchange spot list/candle/book facade | ✅ Ready |
 | `src/app/api/bitget/route.ts` | Legacy/diagnostic Bitget proxy (Cloudflare egress is blocked upstream) | ⚠️ Not used by browser adapter |
 | `src/components/funding/FundingMonitor.tsx` | Main funding monitor component | ✅ Ready |
 | `src/components/funding/BitgetFundingMonitor.tsx` | Bitget funding monitor integration | ✅ Ready |
+| `src/components/spotsearch/SpotMarketSearch.tsx` | Spot table, gated detail/impact loading, and chart selection | ✅ Ready |
+| `src/components/spotsearch/SpotSearchCandlesChart.tsx` | Two-panel spot candle and turnover/volume chart | ✅ Ready |
+| `src/components/spot-perp-arbitrage/` | Unified table/controller, spot-containing charts, and mixed dashboard | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
 | `src/lib/adapters/bitget.ts` | Bitget canonical adapter and shared scheduler | ✅ Ready |
+| `src/lib/spot-search.ts` | Spot market normalization, identity, lists, and details | ✅ Ready |
+| `src/lib/spot-search-candles.ts` | Spot candle transport and normalization | ✅ Ready |
+| `src/lib/spot-impact-price.ts` | Max-depth spot Impact spread requests | ✅ Ready |
+| `src/lib/spot-combo.ts` | Spot candle combination utility (not wired to Spot Search UI) | ✅ Ready |
+| `src/lib/spot-perp-arbitrage/` | Unified market/query/selection, candle alignment, combination, and analytics domain | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
 
 ## Features
@@ -79,17 +112,27 @@ The project now includes funding monitoring and cross-exchange search for Hyperl
 5. **Sorting Options**: By current rate, 7d avg, 30d avg, volume, name
 6. **Statistics Dashboard**: Market overview with key metrics
 
+### Spot/Perp Analysis Features
+
+1. **Unified Search**: Six-exchange Spot+Perp results; Spot defaults to USDT and supports USDC/U/USD1/USD/all
+2. **Explicit Ordered Grammar**: One `-` or `/` selects spread or ratio terms, and click order defines both legs (`BTC/USDT` is a ratio query)
+3. **Source and Combination Charts**: Source single charts plus legacy Perp/Perp and aligned Spot/Spot or mixed charts
+4. **Shorter Exact Overlap**: Combinations intersect exact candle timestamps and use the shorter aligned history
+5. **Visible Mixed Dashboard**: Data-end range statistics with per-tail trimming, population σ, signed observed funding, and separate Spot/Perp turnover means
+6. **Analysis Only**: No automated arbitrage execution or order placement
+
 ### API Integration
 
-- `metaAndAssetCtxs`: Perpetual contract funding rates
-- `spotMetaAndAssetCtxs`: HIP-3 spot market funding rates
+- `metaAndAssetCtxs`: HyperCore perpetual metadata/context and funding rates
+- dex-scoped `metaAndAssetCtxs`: HIP-3 perpetual metadata/context and funding rates
+- `spotMetaAndAssetCtxs`: HyperCore spot metadata/context (not HIP-3 funding)
 - `fundingHistory`: Historical funding data (up to 30 days)
 - Direct `https://api.bitget.com/api/v3/market/*` browser requests for Bitget public market data, scoped to online USDT perpetuals
 - Bitget Funding/Search: Canonical rates load with the six-exchange universe; search details progress only after a matching query and charts load when selected
 
 ## Current Focus
 
-Bitget Funding and Search integration is complete. Current behavior to preserve includes browser-direct Bitget transport (to avoid Cloudflare Workers 403), the six-exchange universe, five-minute funding refresh, progressive search-detail hydration, on-demand chart history, exact Bitget `rawSymbol` dispatch, and bounded per-exchange request scheduling.
+Funding, perpetual Search, six-exchange Spot Search, and `/spot_perp_arbitrage` analysis are complete with final Oracle GO. Preserve browser-direct Bitget perpetual transport, five-minute funding refresh, exact raw-symbol dispatch, bounded request scheduling, search-gated expensive spot detail calls, compact ordered query semantics, exact aligned overlap, and visible-range mixed analytics. The Spot/Perp page is analytical only and must not imply automated execution.
 
 ## Quick Start Guide
 
@@ -165,3 +208,16 @@ export async function GET() {
 | 2026-07-18 | Fixed production Bitget 502 responses caused by upstream HTTP 403 against Cloudflare Workers: switched the browser adapter to direct CORS-enabled Bitget V3 requests, added strict envelope/error handling and direct-URL coverage; validation passed with 80 tests, typecheck, lint, and build. |
 | 2026-07-18 | Fixed Bitget daily/weekly candle requests exceeding the V3 90-day window by clamping the initial recent request to 90 aligned candles; the reported XAUUSDT request now returns HTTP 200 and validation passes with 81 tests. |
 | 2026-07-18 | Fixed Bitget `code=20001` zero-width candle pagination on Funding/Search, recovered eligible aligned boundaries, and added candle-only Search detail degradation so funding averages, settlement, and BBO remain available; Oracle accepted and validation passes with 88 tests. |
+| 2026-08-01 | Completed six-exchange Spot Search with strict facade, normalized pair identity, search-gated volatility and Top/Impact spreads, on-demand two-panel charts, max REST depth caps, and PURR special transport. Validation passed: 102 tests, typecheck, lint, production build, and live six-exchange list/candle/book/max-depth smoke. |
+| 2026-08-01 | Added an exact quote-currency selector to Spot Search, defaulting to USDT with USDC/U/USD1/USD/all options; excluded markets no longer enter search-gated detail or Impact queues. |
+| 2026-08-01 | Fixed Binance concatenated-symbol decomposition for the new U and USD1 quote assets. Live normalization found 47 U markets (including BTC/U and BNB/U) and 31 USD1 markets; focused tests and typecheck pass. |
+| 2026-08-01 | Fixed proxy-mode Hyperliquid Spot list failures by deduplicating case-insensitive JSON headers and mapping non-JSON upstream errors before success parsing. Local `/api/spot/hyperliquid?action=list` now returns 200 with 320 markets. |
+| 2026-08-01 | Audited Perp Impact depth. Hyperliquid already uses its REST maximum; Gate/Binance/OKX/Lighter/Bitget currently request below their effective maxima. Live probes confirmed Gate futures returns 100 levels and OKX books-full returns 5000 levels for SWAP; adaptive escalation is recommended for bulk Search. |
+| 2026-08-01 | Unified Spot/Perp/Bitget Impact math behind one sorted, non-mutating VWAP helper and changed Gate multiplier handling to fail closed with an explicit UI state. Final validation after depth-policy integration passed: 117 tests, typecheck, lint, and production build. |
+| 2026-08-01 | Centralized Perp Impact depth at 100 levels where supported, retaining Hyperliquid's 20-level REST cap. Live probes returned 20/20 for Hyperliquid and 100/100 for Gate, Binance, OKX, Lighter, and Bitget. |
+| 2026-08-01 | Added standard/max REST Impact depth modes across Spot Search, Perp Search, and Funding. Standard remains HL 20/others 100; maximum limits are market-type specific. Validation passed: 121 tests, typecheck, lint, and production build. |
+| 2026-08-02 | Fixed intermittent Gate Perp Search ticker HTTP 500 errors by routing ticker/contract requests through `proxyFetch` with a 10-second bound. Local verification improved from a 30-second 500 to three consecutive HTTP 200 responses in 3.3–4.0 seconds; focused tests and typecheck pass. |
+| 2026-08-02 | Completed `/spot_perp_arbitrage`: unified six-exchange Spot+Perp search, default-USDT quote filtering, source and ordered combination charts, exact shorter-history alignment, and visible mixed analytics. `BTC/USDT` is explicitly a ratio query. Final Oracle GO recorded; validation passed with 153 tests/501 assertions, typecheck, ESLint, production build, and local HTTP smoke tests. |
+| 2026-08-02 | Fixed Binance持仓价值 on `/spot_perp_arbitrage` by hydrating only matched pending Binance perps and replacing the quote-volume placeholder with actual OI notional. Focused tests, typecheck, scoped ESLint, production build, and live BTCUSDT verification passed; live notional and 24h turnover differed as expected. |
+| 2026-08-02 | Changed `/spot_perp_arbitrage` result-table default sorting to 24h quote turnover descending; typecheck and scoped ESLint pass. |
+| 2026-08-02 | Added visible-range spread/ratio current value and relative-to-mean percentages for the current value and all four σ bands. Current value remains untrimmed while its reference mean follows the selected per-tail trim. Validation passed with 38 focused tests/139 assertions, typecheck, scoped ESLint, and production build. |

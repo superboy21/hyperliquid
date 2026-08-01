@@ -8,6 +8,7 @@ import {
   fetchBitgetCandles,
   fetchBitgetCanonicalDetail,
   fetchBitgetFundingHistory,
+  fetchBitgetImpactSpread,
   fetchLatestBitgetSettlement,
   latestBitgetFundingPoint,
   normalizeBitgetCandles,
@@ -17,6 +18,7 @@ import {
   selectBitgetDetailCandles,
   type BitgetRequest,
 } from "./bitget";
+import { computeOrderBookImpactSpread, resolvePerpImpactDepth } from "../order-book-impact";
 
 describe("Bitget successful-payload parsing and list normalization", () => {
   test("rejects envelopes and malformed successful payloads", () => {
@@ -339,6 +341,39 @@ describe("Bitget candles and books", () => {
       bids: [{ price: 99, baseQty: 1 }],
       asks: [{ price: 101, baseQty: 20 }],
     }, 1000)).toBe("insufficient");
+  });
+
+  test("delegates impact math to the shared unsorted-book calculation", () => {
+    const book = {
+      bids: [{ price: 99, baseQty: 20 }, { price: 100, baseQty: 1 }],
+      asks: [{ price: 102, baseQty: 20 }, { price: 101, baseQty: 1 }],
+    };
+    const sharedBook = {
+      bids: book.bids.map((level) => ({ price: level.price, quantity: level.baseQty })),
+      asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
+    };
+    expect(computeBitgetImpactSpread(book, 1000)).toBe(computeOrderBookImpactSpread(sharedBook, 1000));
+  });
+
+  test("uses the centralized Bitget perpetual impact depth", async () => {
+    let requestedLimit: string | undefined;
+    const request: BitgetRequest = async (action, params) => {
+      expect(action).toBe("orderbook");
+      requestedLimit = params.limit;
+      return { bids: [["99", "20"]], asks: [["101", "20"]] };
+    };
+    await fetchBitgetImpactSpread("BTCUSDT", 1000, undefined, request);
+    expect(requestedLimit).toBe(String(resolvePerpImpactDepth("Bitget")));
+  });
+
+  test("propagates an explicitly requested maximum Bitget depth", async () => {
+    let requestedLimit: string | undefined;
+    const request: BitgetRequest = async (_action, params) => {
+      requestedLimit = params.limit;
+      return { bids: [["99", "20"]], asks: [["101", "20"]] };
+    };
+    await fetchBitgetImpactSpread("BTCUSDT", 1000, undefined, request, resolvePerpImpactDepth("Bitget", "max"));
+    expect(requestedLimit).toBe("1000");
   });
 });
 

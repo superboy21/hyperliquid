@@ -64,6 +64,52 @@ export default function Home() {
             </div>
           </Link>
 
+          <Link
+            href="/spotsearch"
+            className="group relative rounded-2xl border border-white/10 bg-gray-800/50 p-6 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-emerald-500/50 hover:shadow-2xl hover:shadow-emerald-500/10"
+          >
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-emerald-500/5 to-cyan-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 shadow-lg shadow-emerald-500/25">
+                  <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M7 4v6m10-6v6M5 13h4v4H5v-4zm10 0h4v4h-4v-4z" />
+                  </svg>
+                </div>
+                <span className="rounded-full border border-green-500/20 bg-green-500/10 px-3 py-1 text-xs font-medium text-green-400">已上线</span>
+              </div>
+              <h3 className="mb-2 text-xl font-bold text-white">跨交易所现货搜索</h3>
+              <p className="text-sm leading-relaxed text-gray-400">汇总现货交易对，按需查看盘口中间价、历史波动率、买卖价差与K线成交数据。</p>
+              <div className="mt-4 flex items-center gap-2 text-sm font-medium text-emerald-400 transition-colors group-hover:text-emerald-300">
+                搜索现货市场
+                <svg className="h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </div>
+            </div>
+          </Link>
+
+          <Link
+            href="/spot_perp_arbitrage"
+            className="group relative rounded-2xl border border-white/10 bg-gray-800/50 p-6 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-violet-500/50 hover:shadow-2xl hover:shadow-violet-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+          >
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-violet-500/5 to-indigo-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-500/25">
+                  <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h11m0 0-3-3m3 3-3 3M17 17H6m0 0 3 3m-3-3 3-3" />
+                  </svg>
+                </div>
+                <span className="rounded-full border border-green-500/20 bg-green-500/10 px-3 py-1 text-xs font-medium text-green-400">已上线</span>
+              </div>
+              <h3 className="mb-2 text-xl font-bold text-white">现货 / 永续组合分析</h3>
+              <p className="text-sm leading-relaxed text-gray-400">统一搜索现货与永续市场，按点击顺序构建价差或比值组合，并查看重叠历史、成交额、资金费率和可见区间统计。</p>
+              <div className="mt-4 flex items-center gap-2 text-sm font-medium text-violet-400 transition-colors group-hover:text-violet-300">
+                打开组合工具
+                <svg className="h-4 w-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </div>
+            </div>
+          </Link>
+
           <div className="relative rounded-2xl border border-white/5 bg-gray-800/30 p-6 backdrop-blur-sm">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gray-700/50">
