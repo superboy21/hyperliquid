@@ -25,7 +25,30 @@ export async function GET(request: NextRequest) {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      let body: unknown = null;
+      try {
+        body = await response.json();
+      } catch {
+        // Upstream error bodies are not guaranteed to be JSON.
+      }
+
+      const message =
+        body && typeof body === "object"
+          ? String(
+              (body as { error?: unknown; message?: unknown; msg?: unknown }).error ??
+                (body as { message?: unknown }).message ??
+                (body as { msg?: unknown }).msg ??
+                `HTTP ${response.status}`,
+            )
+          : `HTTP ${response.status}`;
+      const retryAfter = response.headers.get("Retry-After");
+      return NextResponse.json(
+        { error: message, upstreamStatus: response.status },
+        {
+          status: response.status,
+          headers: retryAfter ? { "Retry-After": retryAfter } : undefined,
+        },
+      );
     }
 
     const data = await response.json();

@@ -938,15 +938,17 @@ export interface ProgressiveDetailLanes {
   generic: SearchExchangeRate[];
   lighter: SearchExchangeRate[];
   bitget: SearchExchangeRate[];
+  okx: SearchExchangeRate[];
 }
 
 export function partitionProgressiveDetailRates(
   rates: readonly SearchExchangeRate[],
 ): ProgressiveDetailLanes {
-  const lanes: ProgressiveDetailLanes = { generic: [], lighter: [], bitget: [] };
+  const lanes: ProgressiveDetailLanes = { generic: [], lighter: [], bitget: [], okx: [] };
   for (const rate of rates) {
     if (rate.exchange === "Lighter") lanes.lighter.push(rate);
     else if (rate.exchange === "Bitget") lanes.bitget.push(rate);
+    else if (rate.exchange === "OKX") lanes.okx.push(rate);
     else lanes.generic.push(rate);
   }
   return lanes;

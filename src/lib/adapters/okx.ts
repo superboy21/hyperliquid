@@ -6,6 +6,121 @@ import type {
 
 export type OkxChartInterval = "1d" | "4h" | "1h" | "1m";
 
+export const OKX_MIN_INTERVAL_MS = 200;
+const OKX_MAX_ATTEMPTS = 3;
+const OKX_DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000] as const;
+const OKX_FUNDING_SNAPSHOT_TTL_MS = 10_000;
+
+let okxFetchQueue: Promise<unknown> = Promise.resolve();
+let lastOkxFetchAt = 0;
+
+function abortError(): DOMException {
+  return new DOMException("The operation was aborted.", "AbortError");
+}
+
+function waitWithSignal(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  if (delayMs <= 0) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, delayMs);
+    function cleanup() {
+      signal?.removeEventListener("abort", aborted);
+    }
+    function done() {
+      cleanup();
+      resolve();
+    }
+    function aborted() {
+      clearTimeout(timer);
+      cleanup();
+      reject(abortError());
+    }
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
+}
+
+function rejectImmediatelyOnAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError());
+
+  return new Promise((resolve, reject) => {
+    function cleanup() {
+      signal?.removeEventListener("abort", aborted);
+    }
+    function aborted() {
+      cleanup();
+      reject(abortError());
+    }
+    signal.addEventListener("abort", aborted, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+async function throttleOkxFetch<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const run = async (): Promise<T> => {
+    if (signal?.aborted) throw abortError();
+    await waitWithSignal(Math.max(0, OKX_MIN_INTERVAL_MS - (Date.now() - lastOkxFetchAt)), signal);
+    if (signal?.aborted) throw abortError();
+    lastOkxFetchAt = Date.now();
+    return task();
+  };
+
+  const next = okxFetchQueue.then(run, run);
+  okxFetchQueue = next.catch(() => undefined);
+  return rejectImmediatelyOnAbort(next, signal);
+}
+
+function parseOkxRetryAfterMs(retryAfterHeader: string | null): number | null {
+  if (retryAfterHeader !== null && retryAfterHeader.trim() !== "") {
+    const seconds = Number(retryAfterHeader);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1_000, 60_000);
+    }
+  }
+  return null;
+}
+
+/** `attempt` is the zero-based retry index (0 for the first retry). */
+export function computeOkxRetryDelayMs(retryAfterHeader: string | null, attempt: number): number {
+  return parseOkxRetryAfterMs(retryAfterHeader) ?? (attempt <= 0 ? 1_000 : 2_000);
+}
+
+function shouldRetryOkxResponse(response: Response): boolean {
+  return response.status === 429 || response.status >= 500;
+}
+
+/** Serialize and retry all OKX HTTP attempts to smooth client-side request bursts. */
+export async function okxFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  retryDelays: readonly number[] = OKX_DEFAULT_RETRY_DELAYS_MS,
+): Promise<Response> {
+  const signal = init.signal ?? undefined;
+
+  for (let attempt = 0; attempt < OKX_MAX_ATTEMPTS; attempt += 1) {
+    const response = await throttleOkxFetch(() => fetch(input, init), signal);
+    if (!shouldRetryOkxResponse(response) || attempt === OKX_MAX_ATTEMPTS - 1) {
+      return response;
+    }
+
+    const retryAfterDelay = parseOkxRetryAfterMs(response.headers.get("Retry-After"));
+    const delay = retryAfterDelay ?? retryDelays[attempt] ?? computeOkxRetryDelayMs(null, attempt);
+    await waitWithSignal(Math.max(0, delay), signal);
+  }
+
+  throw new Error("OKX fetch exhausted unexpectedly");
+}
+
 export interface OkxFundingMonitorRow {
   symbol: string;
   rawSymbol: string;
@@ -202,7 +317,7 @@ export async function fetchOkxFundingHistory(
   signal?: AbortSignal,
   days?: number,
 ): Promise<CanonicalFundingHistoryPoint[]> {
-  const pageSize = 100;
+  const pageSize = 400;
   const requiredRows = getRequiredOkxFundingHistoryRows(fundingIntervalSeconds, days);
   const pagesNeeded = Math.max(1, Math.ceil(requiredRows / pageSize));
   const collected = new Map<number, number>();
@@ -219,7 +334,7 @@ export async function fetchOkxFundingHistory(
       search.set("after", cursor);
     }
 
-    const response = await fetch(`/api/okx?${search.toString()}`, { cache: "no-store", signal });
+    const response = await okxFetch(`/api/okx?${search.toString()}`, { cache: "no-store", signal });
     if (!response.ok) {
       throw new Error("Failed to fetch OKX funding history");
     }
@@ -260,19 +375,52 @@ export async function fetchOkxFundingHistory(
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
-async function fetchNativeFundingSnapshot(signal?: AbortSignal): Promise<Map<string, OkxNativeFundingRateEntry>> {
-  const response = await fetch("/api/okx?endpoint=public/funding-rate&instId=ANY", { cache: "no-store", signal });
-  if (!response.ok) {
-    return new Map();
+let fundingSnapshotCache: { value: Map<string, OkxNativeFundingRateEntry>; expiresAt: number } | null = null;
+let fundingSnapshotInFlight: Promise<Map<string, OkxNativeFundingRateEntry>> | null = null;
+
+export function clearOkxFundingSnapshotCache(): void {
+  fundingSnapshotCache = null;
+  fundingSnapshotInFlight = null;
+}
+
+export async function fetchNativeFundingSnapshot(
+  signal?: AbortSignal,
+  ttlMs: number = OKX_FUNDING_SNAPSHOT_TTL_MS,
+): Promise<Map<string, OkxNativeFundingRateEntry>> {
+  if (signal?.aborted) throw abortError();
+  if (fundingSnapshotCache && Date.now() < fundingSnapshotCache.expiresAt) {
+    return fundingSnapshotCache.value;
+  }
+  if (fundingSnapshotInFlight) {
+    return rejectImmediatelyOnAbort(fundingSnapshotInFlight, signal);
   }
 
-  const payload = (await response.json()) as { data?: OkxNativeFundingRateEntry[] };
-  const rows = Array.isArray(payload.data) ? payload.data : [];
-  return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
+  let cacheable = false;
+  const request = (async () => {
+    const response = await okxFetch("/api/okx?endpoint=public/funding-rate&instId=ANY", { cache: "no-store", signal });
+    if (!response.ok) return new Map<string, OkxNativeFundingRateEntry>();
+
+    const payload = (await response.json()) as { data?: OkxNativeFundingRateEntry[] };
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    cacheable = true;
+    return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
+  })();
+  fundingSnapshotInFlight = request;
+  void request.then(
+    (value) => {
+      if (cacheable) fundingSnapshotCache = { value, expiresAt: Date.now() + Math.max(0, ttlMs) };
+    },
+    () => {
+      fundingSnapshotCache = null;
+    },
+  ).finally(() => {
+    if (fundingSnapshotInFlight === request) fundingSnapshotInFlight = null;
+  });
+  return request;
 }
 
 async function fetchNativeInstruments(signal?: AbortSignal): Promise<Map<string, OkxNativeInstrumentEntry>> {
-  const response = await fetch("/api/okx?endpoint=public/instruments&instType=SWAP", { cache: "no-store", signal });
+  const response = await okxFetch("/api/okx?endpoint=public/instruments&instType=SWAP", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -287,7 +435,7 @@ async function fetchNativeInstruments(signal?: AbortSignal): Promise<Map<string,
 }
 
 async function fetchNativeTickers(signal?: AbortSignal): Promise<Map<string, OkxNativeTickerEntry>> {
-  const response = await fetch("/api/okx?endpoint=market/tickers&instType=SWAP", { cache: "no-store", signal });
+  const response = await okxFetch("/api/okx?endpoint=market/tickers&instType=SWAP", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -298,7 +446,7 @@ async function fetchNativeTickers(signal?: AbortSignal): Promise<Map<string, Okx
 }
 
 async function fetchNativeOpenInterest(signal?: AbortSignal): Promise<Map<string, OkxNativeOpenInterestEntry>> {
-  const response = await fetch("/api/okx?endpoint=public/open-interest&instType=SWAP", { cache: "no-store", signal });
+  const response = await okxFetch("/api/okx?endpoint=public/open-interest&instType=SWAP", { cache: "no-store", signal });
   if (!response.ok) {
     return new Map();
   }
@@ -309,7 +457,7 @@ async function fetchNativeOpenInterest(signal?: AbortSignal): Promise<Map<string
 }
 
 async function fetchNativeIndexPrices(signal?: AbortSignal): Promise<Map<string, number>> {
-  const response = await fetch("/api/okx?endpoint=market/index-tickers&quoteCcy=USDT", {
+  const response = await okxFetch("/api/okx?endpoint=market/index-tickers&quoteCcy=USDT", {
     cache: "no-store",
     signal,
   });
@@ -424,7 +572,7 @@ export async function fetchOkxCanonicalDetail(
 ): Promise<CanonicalFundingDetail> {
   const [fundingHistory, candlesRes, snapshot] = await Promise.all([
     fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal),
-    fetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store", signal }),
+    okxFetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store", signal }),
     fetchNativeFundingSnapshot(signal),
   ]);
 

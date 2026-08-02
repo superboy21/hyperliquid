@@ -393,6 +393,8 @@ export default function CrossExchangeSearch() {
   const LIGHTER_DETAIL_CONCURRENCY = 1;
   const LIGHTER_DETAIL_DELAY_MS = 200;
   const BITGET_DETAIL_CONCURRENCY = 1;
+  const OKX_DETAIL_CONCURRENCY = 1;
+  const OKX_DETAIL_DELAY_MS = 200;
 
   const startDetailFetching = useCallback(
     (rates: SearchExchangeRate[]) => {
@@ -439,6 +441,9 @@ export default function CrossExchangeSearch() {
       }
       if (lanes.bitget.length > 0) {
         void batchFetchDetails(lanes.bitget, onUpdate, signal, BITGET_DETAIL_CONCURRENCY, 0);
+      }
+      if (lanes.okx.length > 0) {
+        void batchFetchDetails(lanes.okx, onUpdate, signal, OKX_DETAIL_CONCURRENCY, OKX_DETAIL_DELAY_MS);
       }
     },
     [],
