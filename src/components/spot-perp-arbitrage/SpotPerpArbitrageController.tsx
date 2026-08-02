@@ -642,6 +642,12 @@ export default function SpotPerpArbitrageController() {
                   type="button"
                   aria-pressed={chartInterval === interval}
                   onClick={() => {
+                    if (interval === chartInterval) return;
+                    chartAbortRef.current?.abort();
+                    chartGenerationRef.current += 1;
+                    setChartPayload(null);
+                    setChartLoading(true);
+                    setChartError(null);
                     setChartInterval(interval);
                     setChartRange((current) => normalizeChartRange(interval, current, singleSpotChart));
                   }}
@@ -672,8 +678,11 @@ export default function SpotPerpArbitrageController() {
         </section>
       )}
 
-      {selection.leg1 && selection.leg2 && chartPayload?.kind === "spot-combo" && chartPayload.result.composition === "mixed" && (
+      {selection.leg1 && selection.leg2 && chartPayload?.kind === "spot-combo" && (
         <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={chartPayload.result} range={activeChartRange} />
+      )}
+      {selection.leg1 && selection.leg2 && chartPayload?.kind === "perp-combo" && (
+        <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={chartPayload.result} range={activeChartRange} />
       )}
     </div>
   );

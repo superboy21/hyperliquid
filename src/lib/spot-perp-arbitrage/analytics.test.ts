@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ComboCandleResult } from "../combo";
-import type { MixedCombinationResult } from "./combine";
+import type { MixedCombinationResult, SpotSpotCombinationResult } from "./combine";
 import {
-  dashboardAnalytics, distributionAnalytics, filterAlignedRange, filterLegacyComboRange,
-  relativeGapPercent, visibleDashboardAnalytics, type TailTrimPercent,
+  dashboardAnalytics, distributionAnalytics, filterAlignedRange, filterLegacyComboRange, pairDashboardAnalytics,
+  relativeGapPercent, visibleDashboardAnalytics, visiblePairDashboardAnalytics, type TailTrimPercent,
 } from "./analytics";
 import { asPerpMarket, asSpotMarket } from "./model";
 import type { SearchExchangeRate } from "../search";
@@ -17,6 +17,11 @@ const perp = asPerpMarket({
 const spot = asSpotMarket({
   exchange: "OKX", exchangeColor: "green", pair: "BTC/USDT", baseAsset: "BTC", quoteAsset: "USDT",
   rawSymbol: "BTC-USDT", marketKey: "BTC-USDT", midPrice: 1, change24h: 0,
+  quoteVolume: 0, baseVolume: 0, fetchedAt: 1,
+} satisfies SpotMarketRow);
+const secondSpot = asSpotMarket({
+  exchange: "Binance", exchangeColor: "yellow", pair: "ETH/USDT", baseAsset: "ETH", quoteAsset: "USDT",
+  rawSymbol: "ETHUSDT", marketKey: "ETHUSDT", midPrice: 1, change24h: 0,
   quoteVolume: 0, baseVolume: 0, fetchedAt: 1,
 } satisfies SpotMarketRow);
 
@@ -160,6 +165,19 @@ describe("legacy combo range", () => {
         { time: 1_010 + day, rate: 0, annualizedRate: 0, sampleCount: 0 },
         { time: 1_000 + 2 * day, rate: 2, annualizedRate: 2, sampleCount: 1 },
       ],
+      dashboardFundingRates: [
+        { time: 1_000, rate: 1, annualizedRate: 1 },
+        { time: 1_000 + 2 * day, rate: 2, annualizedRate: 2 },
+      ],
+      firstQuoteTurnover: [
+        { time: 1_000, value: 10 },
+        { time: 1_010 + day, value: 20 },
+        { time: 1_000 + 2 * day, value: 30 },
+      ],
+      secondQuoteTurnover: [
+        { time: 1_000, value: 40 },
+        { time: 1_000 + 2 * day, value: 60 },
+      ],
       interval: "1h",
       exchange: "Binance",
       symbol: "BTC-ETH",
@@ -173,7 +191,72 @@ describe("legacy combo range", () => {
     expect(visible.candles.map((point) => point.openTime)).toEqual([1_010 + day, 1_000 + 2 * day]);
     expect(visible.fundingRates).toHaveLength(2);
     expect((visible.fundingRates[0] as typeof visible.fundingRates[number] & { sampleCount?: number }).sampleCount).toBe(0);
+    expect(visible.dashboardFundingRates?.map((point) => point.time)).toEqual([1_000 + 2 * day]);
+    expect(visible.firstQuoteTurnover?.map((point) => point.value)).toEqual([20, 30]);
+    expect(visible.secondQuoteTurnover?.map((point) => point.value)).toEqual([60]);
     expect(filterAlignedRange(legacy, "1d")).toEqual(visible);
     expect(filterLegacyComboRange(legacy, "all").fundingRates).toEqual(legacy.fundingRates);
+  });
+});
+
+describe("two-leg dashboard analytics", () => {
+  test("perp pair averages actual funding differences and each leg turnover independently", () => {
+    const combo: ComboCandleResult = {
+      candles: [
+        { openTime: 10, closeTime: 20, open: "1", high: "", low: "", close: "2", volume: "1", quoteVolume: "20" },
+        { openTime: 20, closeTime: 30, open: "2", high: "", low: "", close: "3", volume: "1", quoteVolume: "30" },
+      ],
+      fundingRates: [],
+      dashboardFundingRates: [
+        { time: 10, rate: 0.01, annualizedRate: 0.1 },
+        { time: 20, rate: -0.002, annualizedRate: -0.02 },
+      ],
+      firstQuoteTurnover: [{ time: 10, value: 0 }, { time: 20, value: 100 }],
+      secondQuoteTurnover: [{ time: 10, value: 20 }],
+      interval: "1h",
+      exchange: "Binance",
+      symbol: "BTC-ETH",
+      mode: "spread",
+      firstSymbol: "BTC",
+      firstExchange: "Binance",
+      secondSymbol: "ETH",
+      secondExchange: "OKX",
+    };
+
+    const dashboard = pairDashboardAnalytics(combo, 0);
+    expect(dashboard.fundingAnnualized).toEqual({ mean: 0.04, count: 2 });
+    expect(dashboard.leg1Turnover).toEqual({ mean: 50, count: 2 });
+    expect(dashboard.leg2Turnover).toEqual({ mean: 20, count: 1 });
+  });
+
+  test("spot pair has no funding metric and keeps true-zero turnover without filling missing values", () => {
+    const spotPair: SpotSpotCombinationResult = {
+      kind: "spot-containing",
+      composition: "spot-spot",
+      mode: "ratio",
+      interval: "1h",
+      leg1: spot,
+      leg2: secondSpot,
+      points: [
+        {
+          openTime: 10, closeTime: 20, open: 1, close: 1,
+          leg1Turnover: { value: 0, provenance: "official-quote" },
+          leg2Turnover: null,
+          minimumTurnover: null,
+        },
+        {
+          openTime: 20, closeTime: 30, open: 1, close: 1,
+          leg1Turnover: { value: 100, provenance: "official-quote" },
+          leg2Turnover: { value: 40, provenance: "official-quote" },
+          minimumTurnover: 40,
+        },
+      ],
+      funding: [],
+    };
+
+    const { dashboard } = visiblePairDashboardAnalytics(spotPair, "all", 0);
+    expect(dashboard.fundingAnnualized).toBeNull();
+    expect(dashboard.leg1Turnover).toEqual({ mean: 50, count: 2 });
+    expect(dashboard.leg2Turnover).toEqual({ mean: 40, count: 1 });
   });
 });

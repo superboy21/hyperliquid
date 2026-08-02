@@ -78,9 +78,13 @@ describe("alignComboData", () => {
 
     const spreadResult = alignComboData(first, second, "spread");
     expect(spreadResult.candles[0].quoteVolume).toBe("80"); // min(100, 80)
+    expect(spreadResult.firstQuoteTurnover).toEqual([{ time: 1000, value: 100 }]);
+    expect(spreadResult.secondQuoteTurnover).toEqual([{ time: 1000, value: 80 }]);
 
     const ratioResult = alignComboData(first, second, "ratio");
     expect(ratioResult.candles[0].quoteVolume).toBe("80"); // min(100, 80)
+    expect(ratioResult.firstQuoteTurnover).toEqual([{ time: 1000, value: 100 }]);
+    expect(ratioResult.secondQuoteTurnover).toEqual([{ time: 1000, value: 80 }]);
   });
 
   test("timestamp intersection", () => {
@@ -211,5 +215,41 @@ describe("alignComboData", () => {
     expect(result.fundingRates).toHaveLength(1);
     expect(result.fundingRates[0].time).toBe(1000);
     expect(result.fundingRates[0].rate).toBe(0.005);
+  });
+
+  test("dashboard funding uses leg1 minus leg2 only when both buckets are actual", () => {
+    const first = makeCandleResult({
+      fundingRates: [
+        { time: 1000, rate: 0.01, annualizedRate: 0.1, sampleCount: 1 },
+        { time: 2000, rate: 0, annualizedRate: 0, sampleCount: 1 },
+        { time: 3000, rate: 0.03, annualizedRate: 0.3, sampleCount: 0 },
+        { time: 4000, rate: 0.04, annualizedRate: 0.4 },
+      ],
+    });
+    const second = makeCandleResult({
+      exchange: "OKX",
+      symbol: "ETH",
+      fundingRates: [
+        { time: 1000, rate: 0.004, annualizedRate: 0.04, sampleCount: 2 },
+        { time: 2000, rate: 0.002, annualizedRate: 0.02, sampleCount: 1 },
+        { time: 3000, rate: 0.01, annualizedRate: 0.1, sampleCount: 1 },
+        { time: 4000, rate: 0.01, annualizedRate: 0.1 },
+      ],
+    });
+
+    const forward = alignComboData(first, second, "ratio");
+    const reverse = alignComboData(second, first, "spread");
+
+    expect(forward.dashboardFundingRates?.map((point) => [point.time, point.annualizedRate])).toEqual([
+      [1000, 0.060000000000000005],
+      [2000, -0.02],
+      [4000, 0.30000000000000004],
+    ]);
+    expect(reverse.dashboardFundingRates?.map((point) => point.annualizedRate)).toEqual([
+      -0.060000000000000005,
+      0.02,
+      -0.30000000000000004,
+    ]);
+    expect(forward.fundingRates).toHaveLength(4);
   });
 });

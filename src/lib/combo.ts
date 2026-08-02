@@ -15,6 +15,14 @@ export interface ComboCandleResult extends SearchCandleResult {
   firstExchange: string;
   secondSymbol: string;
   secondExchange: string;
+  firstQuoteTurnover?: ComboAnalysisValuePoint[];
+  secondQuoteTurnover?: ComboAnalysisValuePoint[];
+  dashboardFundingRates?: FundingRatePoint[];
+}
+
+export interface ComboAnalysisValuePoint {
+  time: number;
+  value: number;
 }
 
 function minimumOfficialQuoteVolume(
@@ -27,6 +35,18 @@ function minimumOfficialQuoteVolume(
   return Number.isFinite(firstValue) && Number.isFinite(secondValue)
     ? String(Math.min(firstValue, secondValue))
     : undefined;
+}
+
+function officialQuoteTurnover(candle: SearchCandlePoint): number | null {
+  if (candle.quoteVolume === undefined) return null;
+  const value = Number(candle.quoteVolume);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function hasActualFundingSample(point: FundingRatePoint): boolean {
+  return Number.isFinite(point.rate)
+    && Number.isFinite(point.annualizedRate)
+    && (point.sampleCount === undefined || point.sampleCount > 0);
 }
 
 export function alignComboData(
@@ -49,6 +69,8 @@ export function alignComboData(
   }
 
   const alignedCandles: SearchCandlePoint[] = [];
+  const firstQuoteTurnover: ComboAnalysisValuePoint[] = [];
+  const secondQuoteTurnover: ComboAnalysisValuePoint[] = [];
   for (const { first: firstCandle, second: secondCandle } of candleMap.values()) {
     if (!secondCandle) continue;
     const quoteVolume = minimumOfficialQuoteVolume(firstCandle, secondCandle);
@@ -80,9 +102,16 @@ export function alignComboData(
         ...(quoteVolume === undefined ? {} : { quoteVolume }),
       });
     }
+
+    const firstTurnover = officialQuoteTurnover(firstCandle);
+    const secondTurnover = officialQuoteTurnover(secondCandle);
+    if (firstTurnover !== null) firstQuoteTurnover.push({ time: firstCandle.openTime, value: firstTurnover });
+    if (secondTurnover !== null) secondQuoteTurnover.push({ time: secondCandle.openTime, value: secondTurnover });
   }
 
   alignedCandles.sort((a, b) => a.openTime - b.openTime);
+  firstQuoteTurnover.sort((a, b) => a.time - b.time);
+  secondQuoteTurnover.sort((a, b) => a.time - b.time);
 
   // 2. Funding rate alignment
   const fundingMap = new Map<number, { first: FundingRatePoint; second: FundingRatePoint }>();
@@ -99,16 +128,22 @@ export function alignComboData(
   }
 
   const alignedFundingRates: FundingRatePoint[] = [];
+  const dashboardFundingRates: FundingRatePoint[] = [];
   for (const { first: firstFr, second: secondFr } of fundingMap.values()) {
     if (!secondFr) continue;
-    alignedFundingRates.push({
+    const difference = {
       time: firstFr.time,
       rate: firstFr.rate - secondFr.rate,
       annualizedRate: firstFr.annualizedRate - secondFr.annualizedRate,
-    });
+    };
+    alignedFundingRates.push(difference);
+    if (hasActualFundingSample(firstFr) && hasActualFundingSample(secondFr)) {
+      dashboardFundingRates.push(difference);
+    }
   }
 
   alignedFundingRates.sort((a, b) => a.time - b.time);
+  dashboardFundingRates.sort((a, b) => a.time - b.time);
 
   return {
     candles: alignedCandles,
@@ -121,6 +156,9 @@ export function alignComboData(
     firstExchange: first.exchange,
     secondSymbol: second.symbol,
     secondExchange: second.exchange,
+    firstQuoteTurnover,
+    secondQuoteTurnover,
+    dashboardFundingRates,
   };
 }
 

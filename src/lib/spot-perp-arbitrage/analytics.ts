@@ -1,5 +1,5 @@
 import type { ComboCandleResult } from "../combo";
-import type { MixedCombinationResult, SpotContainingCombinationResult } from "./combine";
+import type { MixedCombinationResult, SpotContainingCombinationResult, SpotSpotCombinationResult } from "./combine";
 
 export type ArbitrageChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
 export type TailTrimPercent = 0 | 1 | 2.5 | 5 | 10;
@@ -51,6 +51,16 @@ export interface MixedDashboardAnalytics {
   perpTurnover: AverageAnalytics;
 }
 
+export interface PairDashboardAnalytics {
+  derivedClose: DistributionAnalytics;
+  currentDerivedClose: ValueWithRelativeGap;
+  fundingAnnualized: AverageAnalytics | null;
+  leg1Turnover: AverageAnalytics;
+  leg2Turnover: AverageAnalytics;
+}
+
+export type PairDashboardResult = ComboCandleResult | SpotSpotCombinationResult;
+
 export function relativeGapPercent(
   value: number | null | undefined,
   mean: number | null | undefined,
@@ -82,7 +92,7 @@ function distributionBands(
   };
 }
 
-function latestVisibleClose(visible: MixedCombinationResult): number | null {
+function latestVisibleClose(visible: SpotContainingCombinationResult): number | null {
   let latestCloseTime = Number.NEGATIVE_INFINITY;
   let latestValue: number | null = null;
   for (const point of visible.points) {
@@ -106,7 +116,14 @@ export function filterLegacyComboRange(
   range: ArbitrageChartRange,
 ): ComboCandleResult {
   if (range === "all" || result.candles.length === 0) {
-    return { ...result, candles: [...result.candles], fundingRates: [...result.fundingRates] };
+    return {
+      ...result,
+      candles: [...result.candles],
+      fundingRates: [...result.fundingRates],
+      ...(result.firstQuoteTurnover ? { firstQuoteTurnover: [...result.firstQuoteTurnover] } : {}),
+      ...(result.secondQuoteTurnover ? { secondQuoteTurnover: [...result.secondQuoteTurnover] } : {}),
+      ...(result.dashboardFundingRates ? { dashboardFundingRates: [...result.dashboardFundingRates] } : {}),
+    };
   }
   const duration = RANGE_MS[range];
   if (duration === null) return result;
@@ -117,6 +134,15 @@ export function filterLegacyComboRange(
     ...result,
     candles: result.candles.filter((point) => point.openTime >= cutoff && point.openTime <= dataEnd),
     fundingRates: result.fundingRates.filter((point) => point.time >= cutoff && point.time <= dataEnd),
+    ...(result.firstQuoteTurnover
+      ? { firstQuoteTurnover: result.firstQuoteTurnover.filter((point) => point.time >= cutoff && point.time <= dataEnd) }
+      : {}),
+    ...(result.secondQuoteTurnover
+      ? { secondQuoteTurnover: result.secondQuoteTurnover.filter((point) => point.time >= cutoff && point.time <= dataEnd) }
+      : {}),
+    ...(result.dashboardFundingRates
+      ? { dashboardFundingRates: result.dashboardFundingRates.filter((point) => point.time >= cutoff && point.time <= dataEnd) }
+      : {}),
   };
 }
 
@@ -219,6 +245,50 @@ export function dashboardAnalytics(
     spotTurnover: average(spotTurnovers),
     perpTurnover: average(perpTurnovers),
   };
+}
+
+export function pairDashboardAnalytics(
+  visible: PairDashboardResult,
+  trimPercent: TailTrimPercent,
+): PairDashboardAnalytics {
+  if ("candles" in visible) {
+    const derivedClose = distributionAnalytics(visible.candles.map((point) => Number(point.close)), trimPercent);
+    let latestCloseTime = Number.NEGATIVE_INFINITY;
+    let latestClose: number | null = null;
+    for (const point of visible.candles) {
+      if (!Number.isFinite(point.closeTime) || point.closeTime <= latestCloseTime) continue;
+      latestCloseTime = point.closeTime;
+      const close = Number(point.close);
+      latestClose = Number.isFinite(close) ? close : null;
+    }
+    return {
+      derivedClose,
+      currentDerivedClose: valueWithRelativeGap(latestClose, derivedClose.mean),
+      fundingAnnualized: average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate)),
+      leg1Turnover: average((visible.firstQuoteTurnover ?? []).map((point) => point.value)),
+      leg2Turnover: average((visible.secondQuoteTurnover ?? []).map((point) => point.value)),
+    };
+  }
+
+  const derivedClose = distributionAnalytics(visible.points.map((point) => point.close), trimPercent);
+  return {
+    derivedClose,
+    currentDerivedClose: valueWithRelativeGap(latestVisibleClose(visible), derivedClose.mean),
+    fundingAnnualized: null,
+    leg1Turnover: average(visible.points.flatMap((point) => point.leg1Turnover ? [point.leg1Turnover.value] : [])),
+    leg2Turnover: average(visible.points.flatMap((point) => point.leg2Turnover ? [point.leg2Turnover.value] : [])),
+  };
+}
+
+export function visiblePairDashboardAnalytics(
+  result: PairDashboardResult,
+  range: ArbitrageChartRange,
+  trimPercent: TailTrimPercent,
+): { visible: PairDashboardResult; dashboard: PairDashboardAnalytics } {
+  const visible: PairDashboardResult = "candles" in result
+    ? filterLegacyComboRange(result, range)
+    : filterAlignedRange(result, range);
+  return { visible, dashboard: pairDashboardAnalytics(visible, trimPercent) };
 }
 
 export function visibleDashboardAnalytics(

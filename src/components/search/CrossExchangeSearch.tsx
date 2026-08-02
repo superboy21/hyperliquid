@@ -29,6 +29,8 @@ import {
 import SearchCandlesChart from "./SearchCandlesChart";
 import ComboSearchCandlesChart from "./ComboSearchCandlesChart";
 import { parseComboSearch, isComboSearch, alignComboData, type ComboSelection, type ComboCandleResult } from "@/lib/combo";
+import { filterAlignedRange } from "@/lib/spot-perp-arbitrage";
+import ArbitrageAnalyticsDashboard from "@/components/spot-perp-arbitrage/MixedAnalyticsDashboard";
 
 // ==================== Types ====================
 
@@ -383,18 +385,7 @@ export default function CrossExchangeSearch() {
   // Filter combo chart data by selected time range
   const filteredComboChartData = useMemo(() => {
     if (!comboChartData) return null;
-    if (chartRange === "all") return comboChartData;
-    const rangeMs = RANGE_MS[chartRange];
-    if (!rangeMs) return comboChartData;
-
-    const now = Date.now();
-    const cutoff = now - rangeMs;
-
-    return {
-      ...comboChartData,
-      candles: comboChartData.candles.filter((c) => c.openTime >= cutoff),
-      fundingRates: comboChartData.fundingRates.filter((f) => f.time >= cutoff),
-    };
+    return filterAlignedRange(comboChartData, chartRange);
   }, [comboChartData, chartRange]);
 
   // Auto-load all detail for the filtered set after debounce (concurrency 4)
@@ -807,6 +798,7 @@ export default function CrossExchangeSearch() {
     setChartLoading(true);
 
     if (request.kind === "combo") {
+      setComboChartData(null);
       void fetchComboCandles(request.first, request.second, chartInterval, request.mode, signal);
       return () => controllerCleanup();
     }
@@ -1460,7 +1452,8 @@ export default function CrossExchangeSearch() {
 
       {/* Candlestick Chart */}
       {(selectedRate || isComboMode) && (
-        <div className="mt-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
+        <>
+          <div className="mt-4 rounded-lg border border-gray-700 bg-gray-800 p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               {isComboMode ? (
@@ -1530,12 +1523,17 @@ export default function CrossExchangeSearch() {
                 <button
                   key={iv}
                   onClick={() => {
+                    if (iv === chartInterval) return;
                     if (isComboMode && iv === "1m") {
                       setComboSelection({ first: null, second: null, mode: null });
                       setComboChartData(null);
                       return;
                     }
                     setChartInterval(iv);
+                    if (isComboMode) {
+                      setComboChartData(null);
+                      setChartLoading(true);
+                    }
                     // When switching to 1m, force time range to 1d if it's not 1d or 4h
                     if (iv === "1m" && chartRange !== "1d" && chartRange !== "4h") {
                       setChartRange("1d");
@@ -1610,7 +1608,17 @@ export default function CrossExchangeSearch() {
               <p className="text-gray-500">暂无K线数据</p>
             </div>
           )}
-        </div>
+          </div>
+          {isComboMode && comboChartData && comboChartData.candles.length > 0 && (
+            <div className="mt-4">
+              <ArbitrageAnalyticsDashboard
+                key={`${comboChartData.firstExchange}:${comboChartData.firstSymbol}:${comboChartData.secondExchange}:${comboChartData.secondSymbol}`}
+                result={comboChartData}
+                range={chartRange}
+              />
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -7,7 +7,7 @@
 The project now includes funding monitoring plus perpetual and spot search for Hyperliquid, Gate.io, Binance, OKX, Lighter, and Bitget, with:
 - Public market data for perpetual contracts and Hyperliquid HIP-3 markets
 - Six-exchange spot search with normalized pair identity, market comparison, and single-market charts
-- `/spot_perp_arbitrage` unified Spot+Perp search with source charts, ordered two-leg combinations, and mixed visible-range analytics
+- `/spot_perp_arbitrage` unified Spot+Perp search with source charts, ordered two-leg combinations, and visible-range analytics for Mixed, Perp/Perp, and Spot/Spot
 - Annualized funding rate display
 - 7-day and 30-day historical averages
 - Five-minute funding-list refresh, progressive search details, and on-demand charts
@@ -74,6 +74,8 @@ The project now includes funding monitoring plus perpetual and spot search for H
 - [x] **Arbitrage Binance OI hydration**: `/spot_perp_arbitrage` now mirrors Perp Search's search-gated `hydrateSearchBinanceOpenInterest` flow, replacing Binance's temporary 24h-turnover notional placeholder with actual open interest × mark price through abort/generation-safe immutable updates.
 - [x] **Arbitrage default ranking**: Search results on `/spot_perp_arbitrage` now default to 24h quote turnover descending, while retaining sortable table headers.
 - [x] **Mixed current-value and mean-gap metrics**: The mixed dashboard now shows the latest visible spread/ratio close and annotates it plus all four ±1σ/±2σ bands with relative distance to the trimmed mean, using `(value - mean) / |mean| × 100` and `--` for a zero/unavailable mean.
+- [x] **Two-leg pair dashboards**: `/spot_perp_arbitrage` now shows the visible-range dashboard for Perp/Perp and Spot/Spot, and `/search` shows it for Perp/Perp. Perp pairs use the actual-sample mean of leg 1 annualized funding minus leg 2 and preserve separate turnover means; Spot pairs omit funding and preserve separate Spot turnover means.
+- [x] **Dashboard methodology notes**: Every shared combination dashboard now uses compact, chart-legend-style emoji rows to explain visible-range alignment, current-value direction, symmetric tail trimming, population σ, relative-gap formula, composition-specific funding treatment, per-leg turnover averaging, and effective sample counts.
 
 ## Current Structure
 
@@ -91,7 +93,7 @@ The project now includes funding monitoring plus perpetual and spot search for H
 | `src/components/funding/BitgetFundingMonitor.tsx` | Bitget funding monitor integration | ✅ Ready |
 | `src/components/spotsearch/SpotMarketSearch.tsx` | Spot table, gated detail/impact loading, and chart selection | ✅ Ready |
 | `src/components/spotsearch/SpotSearchCandlesChart.tsx` | Two-panel spot candle and turnover/volume chart | ✅ Ready |
-| `src/components/spot-perp-arbitrage/` | Unified table/controller, spot-containing charts, and mixed dashboard | ✅ Ready |
+| `src/components/spot-perp-arbitrage/` | Unified table/controller, spot-containing charts, and shared combination dashboard | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
 | `src/lib/adapters/bitget.ts` | Bitget canonical adapter and shared scheduler | ✅ Ready |
 | `src/lib/spot-search.ts` | Spot market normalization, identity, lists, and details | ✅ Ready |
@@ -118,7 +120,7 @@ The project now includes funding monitoring plus perpetual and spot search for H
 2. **Explicit Ordered Grammar**: One `-` or `/` selects spread or ratio terms, and click order defines both legs (`BTC/USDT` is a ratio query)
 3. **Source and Combination Charts**: Source single charts plus legacy Perp/Perp and aligned Spot/Spot or mixed charts
 4. **Shorter Exact Overlap**: Combinations intersect exact candle timestamps and use the shorter aligned history
-5. **Visible Mixed Dashboard**: Data-end range statistics with per-tail trimming, population σ, signed observed funding, and separate Spot/Perp turnover means
+5. **Visible Combination Dashboard**: Mixed, Perp/Perp, and Spot/Spot data-end range statistics with per-tail trimming, population σ, sample-aware funding where applicable, and separate leg turnover means; Perp Search reuses the Perp/Perp dashboard
 6. **Analysis Only**: No automated arbitrage execution or order placement
 
 ### API Integration
@@ -132,7 +134,7 @@ The project now includes funding monitoring plus perpetual and spot search for H
 
 ## Current Focus
 
-Funding, perpetual Search, six-exchange Spot Search, and `/spot_perp_arbitrage` analysis are complete with final Oracle GO. Preserve browser-direct Bitget perpetual transport, five-minute funding refresh, exact raw-symbol dispatch, bounded request scheduling, search-gated expensive spot detail calls, compact ordered query semantics, exact aligned overlap, and visible-range mixed analytics. The Spot/Perp page is analytical only and must not imply automated execution.
+Funding, perpetual Search, six-exchange Spot Search, and `/spot_perp_arbitrage` analysis are complete with final Oracle GO. Preserve browser-direct Bitget perpetual transport, five-minute funding refresh, exact raw-symbol dispatch, bounded request scheduling, search-gated expensive spot detail calls, compact ordered query semantics, exact aligned overlap, and visible-range combination analytics. The Spot/Perp page is analytical only and must not imply automated execution.
 
 ## Quick Start Guide
 
@@ -221,3 +223,5 @@ export async function GET() {
 | 2026-08-02 | Fixed Binance持仓价值 on `/spot_perp_arbitrage` by hydrating only matched pending Binance perps and replacing the quote-volume placeholder with actual OI notional. Focused tests, typecheck, scoped ESLint, production build, and live BTCUSDT verification passed; live notional and 24h turnover differed as expected. |
 | 2026-08-02 | Changed `/spot_perp_arbitrage` result-table default sorting to 24h quote turnover descending; typecheck and scoped ESLint pass. |
 | 2026-08-02 | Added visible-range spread/ratio current value and relative-to-mean percentages for the current value and all four σ bands. Current value remains untrimmed while its reference mean follows the selected per-tail trim. Validation passed with 38 focused tests/139 assertions, typecheck, scoped ESLint, and production build. |
+| 2026-08-02 | Extended the shared visible-range dashboard to Perp/Perp and Spot/Spot on `/spot_perp_arbitrage` and Perp/Perp on `/search`. Perp funding uses actual aligned samples of leg 1 minus leg 2, each leg keeps an independent turnover mean, and Spot/Spot omits funding. Validation passed with 165 tests/545 assertions, typecheck, scoped ESLint, and production build. |
+| 2026-08-02 | Added responsive, composition-aware calculation notes below every shared combination dashboard, then compacted them into professional emoji-led chart-legend rows. Scoped ESLint, typecheck, and production build pass. |
