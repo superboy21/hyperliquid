@@ -362,6 +362,7 @@ export default function SpotPerpArbitrageController() {
       runBounded(lanes.generic, 4, controller.signal, fetchPerp),
       runBounded(lanes.lighter, 1, controller.signal, fetchPerp, 200),
       runBounded(lanes.bitget, 1, controller.signal, fetchPerp),
+      runBounded(lanes.okx, 1, controller.signal, fetchPerp, 200),
       runBounded(spotRows, 3, controller.signal, fetchSpot),
     ]);
     return () => controller.abort();
