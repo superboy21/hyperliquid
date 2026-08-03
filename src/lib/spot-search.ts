@@ -143,7 +143,7 @@ export const spotMarketKey = spotMarketIdentity;
 export function filterSpotMarkets(rows: readonly SpotMarketRow[], keyword: string): SpotMarketRow[] {
   const query = keyword.trim().toLowerCase();
   if (!query) return [...rows];
-  return rows.filter((row) => [row.pair, row.baseAsset, row.quoteAsset, row.exchange]
+  return rows.filter((row) => [row.pair, row.baseAsset, row.quoteAsset]
     .some((value) => value.toLowerCase().includes(query)));
 }
 

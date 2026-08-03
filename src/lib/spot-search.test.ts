@@ -14,12 +14,13 @@ const row: SpotMarketRow = {
 };
 
 describe("spot search contracts", () => {
-  test("identity is exchange plus transport market key and filtering covers published fields", () => {
+  test("identity is exchange plus transport market key; filtering covers published market fields but never the exchange name", () => {
     const rows = [row, { ...row, exchange: "OKX" as const, exchangeColor: "emerald", rawSymbol: "ETH-USDC", marketKey: "ETH-USDC", pair: "ETH/USDC", baseAsset: "ETH", quoteAsset: "USDC" }];
     expect(spotMarketIdentity(row)).toBe("Binance:BTCUSDT");
     expect(filterSpotMarkets(rows, "  ")).toEqual(rows);
     expect(filterSpotMarkets(rows, "usdc")).toHaveLength(1);
-    expect(filterSpotMarkets(rows, "okx")).toHaveLength(1);
+    expect(filterSpotMarkets(rows, "okx")).toHaveLength(0);
+    expect(filterSpotMarkets(rows, "binance")).toHaveLength(0);
   });
 
   test("uses PURR/USDC transport for PURR and @index transport for other Hyperliquid spot markets", () => {

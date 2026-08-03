@@ -31,11 +31,10 @@ export function parseArbitrageQuery(input: string): ParsedArbitrageQuery {
 function identifiers(market: ArbitrageMarket): string[] {
   if (market.kind === "perp") {
     const source = market.source;
-    return [source.exchange, source.symbol, source.rawSymbol ?? "", source.marketId?.toString() ?? ""];
+    return [source.symbol, source.rawSymbol ?? "", source.marketId?.toString() ?? ""];
   }
   const source = market.source;
   return [
-    source.exchange,
     source.pair,
     source.baseAsset,
     source.quoteAsset,

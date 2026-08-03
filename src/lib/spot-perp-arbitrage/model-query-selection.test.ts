@@ -118,7 +118,7 @@ describe("strict query grammar and matching", () => {
     }
   });
 
-  test("normal matching covers display, transport, market ID, and exchange", () => {
+  test("normal matching covers display, transport, and market ID but never the exchange name", () => {
     const markets = [
       asPerpMarket(perp({ symbol: "Bitcoin", rawSymbol: "XBTUSDT", marketId: 71 })),
       asSpotMarket(spot({ pair: "WBTC/USDT", rawSymbol: "WBTC-USDT", marketKey: "spot-42", marketId: 42 })),
@@ -126,7 +126,8 @@ describe("strict query grammar and matching", () => {
     expect(searchArbitrageMarkets(markets, "bitcoin").markets).toEqual([markets[0]]);
     expect(searchArbitrageMarkets(markets, "xbtusdt").markets).toEqual([markets[0]]);
     expect(searchArbitrageMarkets(markets, "spot-42").markets).toEqual([markets[1]]);
-    expect(searchArbitrageMarkets(markets, "OKX").markets).toEqual([markets[1]]);
+    expect(searchArbitrageMarkets(markets, "OKX").markets).toEqual([]);
+    expect(searchArbitrageMarkets(markets, "binance").markets).toEqual([]);
     expect(searchArbitrageMarkets(markets, "").markets).toEqual([]);
   });
 
