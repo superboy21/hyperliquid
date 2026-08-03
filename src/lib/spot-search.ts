@@ -1,4 +1,5 @@
 import { fetchSpotCandlesWithLimit, type SpotCandlePoint } from "./spot-search-candles";
+import { spotFetch } from "./spot-fetch";
 
 export type SpotExchangeName =
   | "Hyperliquid"
@@ -273,14 +274,11 @@ export function normalizeSpotMarkets(exchange: SpotExchangeName, payload: unknow
   }
 }
 
-const EXCHANGE_SLUGS: Array<[SpotExchangeName, string]> = [
-  ["Hyperliquid", "hyperliquid"], ["Gate.io", "gateio"], ["Binance", "binance"],
-  ["Lighter", "lighter"], ["OKX", "okx"], ["Bitget", "bitget"],
-];
+const EXCHANGES: SpotExchangeName[] = ["Hyperliquid", "Gate.io", "Binance", "Lighter", "OKX", "Bitget"];
 
 export async function fetchAllSpotMarkets(signal?: AbortSignal): Promise<SpotMarketRow[]> {
-  const settled = await Promise.allSettled(EXCHANGE_SLUGS.map(async ([exchange, slug]) => {
-    const response = await fetch(`/api/spot/${slug}?action=list`, { cache: "no-store", signal });
+  const settled = await Promise.allSettled(EXCHANGES.map(async (exchange) => {
+    const response = await spotFetch(exchange, new URLSearchParams({ action: "list" }), { signal });
     if (!response.ok) throw new Error(`${exchange} spot list failed (${response.status})`);
     return normalizeSpotMarkets(exchange, await response.json());
   }));
@@ -313,10 +311,6 @@ function bookQuery(row: SpotMarketRow, limit: number): string {
   return params.toString();
 }
 
-function slug(exchange: SpotExchangeName): string {
-  return EXCHANGE_SLUGS.find(([name]) => name === exchange)?.[1] ?? "";
-}
-
 function readBestPrices(exchange: SpotExchangeName, payload: unknown): { bestBid?: number; bestAsk?: number } {
   const root = object(payload);
   let bids: unknown = root?.bids;
@@ -339,7 +333,7 @@ function readBestPrices(exchange: SpotExchangeName, payload: unknown): { bestBid
 export async function fetchSpotDetail(row: SpotMarketRow, signal?: AbortSignal): Promise<SpotDetailResult> {
   const [candles, bookResponse] = await Promise.all([
     fetchSpotCandlesWithLimit(row, "1d", 30, signal),
-    fetch(`/api/spot/${slug(row.exchange)}?${bookQuery(row, 1)}`, { cache: "no-store", signal }),
+    spotFetch(row.exchange, new URLSearchParams(bookQuery(row, 1)), { signal }),
   ]);
   if (!bookResponse.ok) throw new Error(`${row.exchange} spot book failed (${bookResponse.status})`);
   const prices = readBestPrices(row.exchange, await bookResponse.json());

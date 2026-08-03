@@ -5,6 +5,7 @@
 import { fetchL2Book } from "./hyperliquid";
 import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
+import { okxFetch } from "./adapters/okx";
 import { fetchBitgetImpactSpread } from "./adapters/bitget";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
 import {
@@ -57,7 +58,7 @@ async function getOkxCtVal(instId: string, signal?: AbortSignal): Promise<number
   if (!okxCtValFetchPromise) {
     okxCtValFetchPromise = (async () => {
       try {
-        const response = await fetch(
+        const response = await okxFetch(
           "/api/okx?endpoint=public/instruments&instType=SWAP",
           { signal, cache: "no-store" },
         );
@@ -216,7 +217,7 @@ async function fetchOkxBook(
 ): Promise<NormalizedOrderBook | null> {
   try {
     const endpoint = depthLimit > 400 ? "market/books-full" : "market/books";
-    const response = await fetch(
+    const response = await okxFetch(
       `/api/okx?endpoint=${endpoint}&instId=${encodeURIComponent(instId)}&sz=${depthLimit}`,
       { signal, cache: "no-store" },
     );

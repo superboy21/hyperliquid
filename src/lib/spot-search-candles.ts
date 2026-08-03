@@ -1,4 +1,5 @@
 import type { SpotExchangeName, SpotMarketRow } from "./spot-search";
+import { spotFetch } from "./spot-fetch";
 
 export type SpotChartInterval = "1w" | "1d" | "4h" | "1h" | "5m" | "1m";
 
@@ -111,11 +112,6 @@ export function aggregateSpotDailyToWeekly(points: readonly SpotCandlePoint[]): 
   });
 }
 
-const SLUGS: Record<SpotExchangeName, string> = {
-  Hyperliquid: "hyperliquid", "Gate.io": "gateio", Binance: "binance",
-  Lighter: "lighter", OKX: "okx", Bitget: "bitget",
-};
-
 export async function fetchSpotCandlesWithLimit(
   row: SpotMarketRow,
   interval: SpotChartInterval,
@@ -127,7 +123,7 @@ export async function fetchSpotCandlesWithLimit(
   const params = new URLSearchParams({ action: "candles", interval: effectiveInterval, limit: String(limit) });
   if (row.exchange === "Lighter" && row.marketId !== undefined) params.set("marketId", String(row.marketId));
   else params.set("symbol", row.rawSymbol);
-  const response = await fetch(`/api/spot/${SLUGS[row.exchange]}?${params}`, { cache: "no-store", signal });
+  const response = await spotFetch(row.exchange, params, { signal });
   if (!response.ok) throw new Error(`${row.exchange} spot candles failed (${response.status})`);
   let candles = normalizeSpotCandles(row.exchange, await response.json(), effectiveInterval);
   if (row.exchange === "Lighter" && interval === "1w") candles = aggregateSpotDailyToWeekly(candles);

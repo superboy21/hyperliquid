@@ -4,14 +4,11 @@ import {
   resolveSpotImpactDepth,
   type ImpactDepthMode,
 } from "./order-book-impact";
+import { spotFetch } from "./spot-fetch";
 import type { SpotExchangeName, SpotMarketRow } from "./spot-search";
 
 export const SPOT_IMPACT_PRESETS = [200, 1000, 5000, 10000] as const;
 export type SpotImpactResult = number | "insufficient" | null;
-
-const SLUG: Record<SpotExchangeName, string> = {
-  Binance: "binance", OKX: "okx", "Gate.io": "gateio", Bitget: "bitget", Hyperliquid: "hyperliquid", Lighter: "lighter",
-};
 
 export function fetchSpotImpactSpread(
   row: SpotMarketRow,
@@ -43,7 +40,7 @@ export async function fetchSpotImpactSpread(
   if (row.exchange === "Lighter" && row.marketId !== undefined) params.set("marketId", String(row.marketId));
   else params.set("symbol", row.rawSymbol);
   try {
-    const response = await fetch(`/api/spot/${SLUG[row.exchange]}?${params}`, { cache: "no-store", signal });
+    const response = await spotFetch(row.exchange, params, { signal });
     if (!response.ok) return null;
     const book = normalizeSpotOrderBook(row.exchange, await response.json());
     return book ? computeOrderBookImpactSpread(book, quoteNotional) : null;

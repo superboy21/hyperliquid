@@ -10,6 +10,7 @@ export const OKX_MIN_INTERVAL_MS = 200;
 const OKX_MAX_ATTEMPTS = 3;
 const OKX_DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000] as const;
 const OKX_FUNDING_SNAPSHOT_TTL_MS = 10_000;
+const OKX_API_BASE = "https://www.okx.com/api/v5";
 
 let okxFetchQueue: Promise<unknown> = Promise.resolve();
 let lastOkxFetchAt = 0;
@@ -99,6 +100,39 @@ function shouldRetryOkxResponse(response: Response): boolean {
   return response.status === 429 || response.status >= 500;
 }
 
+/**
+ * Resolve the direct and proxy URLs for an OKX request.
+ * Relative `/api/okx?endpoint=...` URLs are translated to the direct public
+ * API so the browser can call OKX straight from the user's network (OKX
+ * rejects some server egress IPs), while absolute URLs are used as-is.
+ */
+function resolveOkxEndpoints(input: RequestInfo | URL): { direct: string; proxy: string } {
+  const raw = typeof input === "string" ? input : input.toString();
+  if (!raw.startsWith("/api/okx")) return { direct: raw, proxy: raw };
+  const question = raw.indexOf("?");
+  const query = question >= 0 ? raw.slice(question + 1) : "";
+  const params = new URLSearchParams(query);
+  const endpoint = params.get("endpoint") ?? "";
+  params.delete("endpoint");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return { direct: `${OKX_API_BASE}/${endpoint}${suffix}`, proxy: raw };
+}
+
+/**
+ * Fetch once for a resolved OKX request: try the direct URL first, and only
+ * fall back to the proxy when the direct request throws (CORS/network).
+ * Direct HTTP responses are authoritative so the retry loop sees the real
+ * upstream status.
+ */
+async function okxFetchOnce(direct: string, proxy: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(direct, init);
+  } catch (error) {
+    if (init.signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
+    return fetch(proxy, { ...init, cache: "no-store" });
+  }
+}
+
 /** Serialize and retry all OKX HTTP attempts to smooth client-side request bursts. */
 export async function okxFetch(
   input: RequestInfo | URL,
@@ -106,9 +140,10 @@ export async function okxFetch(
   retryDelays: readonly number[] = OKX_DEFAULT_RETRY_DELAYS_MS,
 ): Promise<Response> {
   const signal = init.signal ?? undefined;
+  const { direct, proxy } = resolveOkxEndpoints(input);
 
   for (let attempt = 0; attempt < OKX_MAX_ATTEMPTS; attempt += 1) {
-    const response = await throttleOkxFetch(() => fetch(input, init), signal);
+    const response = await throttleOkxFetch(() => okxFetchOnce(direct, proxy, init), signal);
     if (!shouldRetryOkxResponse(response) || attempt === OKX_MAX_ATTEMPTS - 1) {
       return response;
     }

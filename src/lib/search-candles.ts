@@ -5,7 +5,7 @@
 import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as hlGetFundingHistoryForDays } from "./hyperliquid";
 import { getFundingHistoryAll as gateGetFundingHistoryAll } from "./gateio";
 import { getFundingHistoryAll as lighterGetFundingHistoryAll, lighterFetch } from "./lighter";
-import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical } from "./adapters/okx";
+import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical, okxFetch } from "./adapters/okx";
 import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
@@ -391,7 +391,7 @@ async function fetchOkxCandles(
           url += `&after=${after}`;
         }
 
-        const response = await fetch(url, { cache: "no-store", signal });
+        const response = await okxFetch(url, { cache: "no-store", signal });
         if (!response.ok) break;
 
         const payload = await response.json();
@@ -428,7 +428,7 @@ async function fetchOkxCandles(
 
     // Non-1m intervals: single request (existing behavior)
     const url = `/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(bar)}&limit=${limit}`;
-    const response = await fetch(url, { cache: "no-store", signal });
+    const response = await okxFetch(url, { cache: "no-store", signal });
 
     if (!response.ok) return [];
 
