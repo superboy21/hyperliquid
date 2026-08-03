@@ -50,6 +50,8 @@ export function marketMatches(market: ArbitrageMarket, term: string): boolean {
   return needle.length > 0 && identifiers(market).some((value) => value.toLowerCase().includes(needle));
 }
 
+export type MarketKindFilter = "all" | "spot" | "perp";
+
 export interface MarketSearchResult {
   query: ParsedArbitrageQuery;
   markets: ArbitrageMarket[];
@@ -59,10 +61,13 @@ export function searchArbitrageMarkets(
   markets: readonly ArbitrageMarket[],
   input: string,
   quote: SpotQuoteFilter = DEFAULT_SPOT_QUOTE_FILTER,
+  kind: MarketKindFilter = "all",
 ): MarketSearchResult {
   const query = parseArbitrageQuery(input);
   if (query.kind === "empty" || query.kind === "invalid") return { query, markets: [] };
-  const eligible = applySpotQuoteFilter(markets, quote);
+  const eligible = applySpotQuoteFilter(markets, quote).filter(
+    (market) => kind === "all" || market.kind === kind,
+  );
   if (query.kind === "normal") {
     return { query, markets: eligible.filter((market) => marketMatches(market, query.term)) };
   }

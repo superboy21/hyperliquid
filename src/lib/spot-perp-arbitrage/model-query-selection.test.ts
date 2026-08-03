@@ -137,6 +137,26 @@ describe("strict query grammar and matching", () => {
     const found = searchArbitrageMarkets([both, btc, usdt], "BTC/USDT").markets;
     expect(found.map(marketId)).toEqual([marketId(both), marketId(btc), marketId(usdt)]);
   });
+
+  test("kind filter narrows results to spot-only or perp-only, defaulting to all", () => {
+    const markets = [
+      asPerpMarket(perp({ symbol: "Bitcoin", rawSymbol: "XBTUSDT" })),
+      asSpotMarket(spot({ pair: "BTC/USDT" })),
+      asSpotMarket(spot({ pair: "ETH/USDT", baseAsset: "ETH", marketKey: "eth" })),
+    ];
+    expect(searchArbitrageMarkets(markets, "usdt").markets.map(marketId)).toEqual([
+      marketId(markets[0]), marketId(markets[1]), marketId(markets[2]),
+    ]);
+    expect(searchArbitrageMarkets(markets, "usdt", DEFAULT_SPOT_QUOTE_FILTER, "spot").markets.map(marketId)).toEqual([
+      marketId(markets[1]), marketId(markets[2]),
+    ]);
+    expect(searchArbitrageMarkets(markets, "usdt", DEFAULT_SPOT_QUOTE_FILTER, "perp").markets.map(marketId)).toEqual([
+      marketId(markets[0]),
+    ]);
+    expect(searchArbitrageMarkets(markets, "usdt", DEFAULT_SPOT_QUOTE_FILTER, "all").markets.map(marketId)).toEqual([
+      marketId(markets[0]), marketId(markets[1]), marketId(markets[2]),
+    ]);
+  });
 });
 
 describe("ordered selection transition", () => {
