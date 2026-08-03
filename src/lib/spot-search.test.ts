@@ -23,7 +23,11 @@ describe("spot search contracts", () => {
     expect(filterSpotMarkets(rows, "binance")).toHaveLength(0);
   });
 
-  test("uses PURR/USDC transport for PURR and @index transport for other Hyperliquid spot markets", () => {
+  test("uses PURR/USDC transport for PURR and @index transport for other Hyperliquid spot markets, with assetCtxs read by market index (gaps after delistings)", () => {
+    const contexts: Array<Record<string, unknown> | undefined> = [];
+    contexts[0] = { midPx: "0.1", prevDayPx: "0.1", dayNtlVlm: "100", dayBaseVlm: "1000" };
+    contexts[1] = { midPx: "0.01", prevDayPx: "0.02", dayNtlVlm: "5", dayBaseVlm: "500" };
+    contexts[107] = { midPx: "20", prevDayPx: "10", dayNtlVlm: "1000", dayBaseVlm: "50" };
     const rows = normalizeSpotMarkets("Hyperliquid", [
       {
         tokens: [{ index: 0, name: "USDC" }, { index: 1, name: "PURR" }, { index: 2, name: "HYPE" }],
@@ -32,13 +36,11 @@ describe("spot search contracts", () => {
           { index: 107, name: "@107", tokens: [2, 0] },
         ],
       },
-      [
-        { midPx: "0.1", prevDayPx: "0.1", dayNtlVlm: "100", dayBaseVlm: "1000" },
-        { midPx: "20", prevDayPx: "10", dayNtlVlm: "1000", dayBaseVlm: "50" },
-      ],
+      contexts,
     ], 123);
     expect(rows[0]).toMatchObject({ pair: "PURR/USDC", rawSymbol: "PURR/USDC", marketKey: "PURR/USDC" });
-    expect(rows[1]).toMatchObject({ pair: "HYPE/USDC", rawSymbol: "@107", marketKey: "@107", change24h: 100, fetchedAt: 123 });
+    expect(rows[1]).toMatchObject({ pair: "HYPE/USDC", rawSymbol: "@107", marketKey: "@107", change24h: 100, quoteVolume: 1000, fetchedAt: 123 });
+    expect(rows[1].midPrice).toBe(20);
   });
 
   test("normalizes documented Bitget field variants", () => {

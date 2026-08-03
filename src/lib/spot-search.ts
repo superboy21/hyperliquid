@@ -161,9 +161,10 @@ function normalizeHyperliquid(payload: unknown, fetchedAt: number): SpotMarketRo
   const result: SpotMarketRow[] = [];
   universe.forEach((marketValue, position) => {
     const market = object(marketValue);
-    const context = object(contexts[position]);
-    const tokens = Array.isArray(market?.tokens) ? market.tokens : [];
     const marketIndex = number(market?.index) ?? position;
+    // assetCtxs is indexed by market index, not universe position (indices have gaps after delistings)
+    const context = object(contexts[marketIndex]);
+    const tokens = Array.isArray(market?.tokens) ? market.tokens : [];
     const base = tokenNames.get(number(tokens[0]) ?? -1);
     const quote = tokenNames.get(number(tokens[1]) ?? -1);
     const fallback = typeof market?.name === "string" ? splitPair(market.name) : ["", ""];
