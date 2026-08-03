@@ -158,6 +158,25 @@ describe("strict query grammar and matching", () => {
       marketId(markets[0]), marketId(markets[1]), marketId(markets[2]),
     ]);
   });
+
+  test("excluded exchanges are dropped from normal and combo results, defaulting to none excluded", () => {
+    const binancePerp = asPerpMarket(perp({ symbol: "Bitcoin", rawSymbol: "XBTUSDT" }));
+    const okxSpot = asSpotMarket(spot({ pair: "BTC/USDT" }));
+    const binanceSpot = asSpotMarket(spot({ exchange: "Binance", exchangeColor: "yellow", pair: "ETH/USDT", baseAsset: "ETH", marketKey: "eth" }));
+    const markets = [binancePerp, okxSpot, binanceSpot];
+    const excludedBinance = new Set<"Binance">(["Binance"]);
+
+    expect(searchArbitrageMarkets(markets, "usdt").markets.map(marketId)).toEqual([
+      marketId(binancePerp), marketId(okxSpot), marketId(binanceSpot),
+    ]);
+    expect(searchArbitrageMarkets(markets, "usdt", DEFAULT_SPOT_QUOTE_FILTER, "all", excludedBinance).markets.map(marketId)).toEqual([
+      marketId(okxSpot),
+    ]);
+    expect(searchArbitrageMarkets(markets, "btc", DEFAULT_SPOT_QUOTE_FILTER, "all", excludedBinance).markets.map(marketId)).toEqual([
+      marketId(okxSpot),
+    ]);
+    expect(searchArbitrageMarkets(markets, "usdt", DEFAULT_SPOT_QUOTE_FILTER, "all", new Set<"Binance" | "OKX">(["Binance", "OKX"])).markets).toEqual([]);
+  });
 });
 
 describe("ordered selection transition", () => {

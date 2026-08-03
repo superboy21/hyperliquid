@@ -51,6 +51,11 @@ export function marketMatches(market: ArbitrageMarket, term: string): boolean {
 
 export type MarketKindFilter = "all" | "spot" | "perp";
 
+/** The six exchanges shared by spot and perp universes. */
+export type ArbitrageExchange = "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX" | "Bitget";
+
+const EMPTY_EXCLUDED_EXCHANGES: ReadonlySet<ArbitrageExchange> = new Set();
+
 export interface MarketSearchResult {
   query: ParsedArbitrageQuery;
   markets: ArbitrageMarket[];
@@ -61,11 +66,12 @@ export function searchArbitrageMarkets(
   input: string,
   quote: SpotQuoteFilter = DEFAULT_SPOT_QUOTE_FILTER,
   kind: MarketKindFilter = "all",
+  excludedExchanges: ReadonlySet<ArbitrageExchange> = EMPTY_EXCLUDED_EXCHANGES,
 ): MarketSearchResult {
   const query = parseArbitrageQuery(input);
   if (query.kind === "empty" || query.kind === "invalid") return { query, markets: [] };
   const eligible = applySpotQuoteFilter(markets, quote).filter(
-    (market) => kind === "all" || market.kind === kind,
+    (market) => (kind === "all" || market.kind === kind) && !excludedExchanges.has(market.source.exchange),
   );
   if (query.kind === "normal") {
     return { query, markets: eligible.filter((market) => marketMatches(market, query.term)) };
