@@ -62,6 +62,11 @@ function formatSignedPercent(value: number, digits = 2): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
+/** Green for positive funding rates, red for negative, gray at zero (matches the perp search page). */
+function rateSignClass(value: number): string {
+  return value > 0 ? "text-green-400" : value < 0 ? "text-red-400" : "text-gray-400";
+}
+
 function annualizedLabel(row: ArbitrageTableRow, value: number, average = false): string {
   if (row.market.kind === "spot") return "--";
   if (row.exchange === "Lighter") {
@@ -300,10 +305,10 @@ export default function ArbitrageMarketTable({
                     <span className="text-xs text-red-400">缺少合约乘数</span>
                   ) : displayNumber(spreadMode === "top" ? row.topSpread : row.impactSpread, (value) => `${value.toFixed(4)}%`)}
                 </td>
-                <td className="px-2.5 py-2 text-right">{row.latestSettlementRate === null ? <span className="text-gray-600">--</span> : <span className="whitespace-nowrap font-mono text-xs text-gray-300">{annualizedLabel(row, row.latestSettlementRate)}</span>}</td>
-                <td className="px-2.5 py-2 text-right">{row.averageFundingRate2d === null ? <span className="text-gray-600">--</span> : <span className="whitespace-nowrap font-mono text-xs text-gray-300">{annualizedLabel(row, row.averageFundingRate2d, true)}</span>}</td>
-                <td className="px-2.5 py-2 text-right">{row.averageFundingRate7d === null ? <span className="text-gray-600">--</span> : <span className="whitespace-nowrap font-mono text-xs text-gray-300">{annualizedLabel(row, row.averageFundingRate7d, true)}</span>}</td>
-                <td className="px-2.5 py-2 text-right">{row.averageFundingRate30d === null ? <span className="text-gray-600">--</span> : <span className="whitespace-nowrap font-mono text-xs text-gray-300">{annualizedLabel(row, row.averageFundingRate30d, true)}</span>}</td>
+                <td className="px-2.5 py-2 text-right">{row.latestSettlementRate === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.latestSettlementRate)}`}>{annualizedLabel(row, row.latestSettlementRate)}</span>}</td>
+                <td className="px-2.5 py-2 text-right">{row.averageFundingRate2d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate2d)}`}>{annualizedLabel(row, row.averageFundingRate2d, true)}</span>}</td>
+                <td className="px-2.5 py-2 text-right">{row.averageFundingRate7d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate7d)}`}>{annualizedLabel(row, row.averageFundingRate7d, true)}</span>}</td>
+                <td className="px-2.5 py-2 text-right">{row.averageFundingRate30d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate30d)}`}>{annualizedLabel(row, row.averageFundingRate30d, true)}</span>}</td>
               </tr>
             );
           })}
