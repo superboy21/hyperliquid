@@ -18,10 +18,10 @@ import {
 import {
   DEFAULT_IMPACT_NOTIONAL,
   IMPACT_NOTIONAL_PRESETS,
-  fetchSearchImpactSpread,
-  type ImpactSpreadResult,
+  fetchSearchImpactSpreadDetail,
+  type ImpactSpreadDetailResult,
 } from "@/lib/impact-price";
-import { fetchSpotImpactSpread } from "@/lib/spot-impact-price";
+import { fetchSpotImpactSpreadDetail } from "@/lib/spot-impact-price";
 import type { ImpactDepthMode } from "@/lib/order-book-impact";
 import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candles";
@@ -205,7 +205,7 @@ export default function SpotPerpArbitrageController() {
   const [customNotional, setCustomNotional] = useState(String(DEFAULT_IMPACT_NOTIONAL));
   const [editingCustomNotional, setEditingCustomNotional] = useState(false);
   const [impactDepthMode, setImpactDepthMode] = useState<ImpactDepthMode>("standard");
-  const [impactResults, setImpactResults] = useState<Map<string, ImpactSpreadResult>>(new Map());
+  const [impactResults, setImpactResults] = useState<Map<string, ImpactSpreadDetailResult>>(new Map());
   const [impactLoading, setImpactLoading] = useState<Set<string>>(new Set());
   const [impactErrors, setImpactErrors] = useState<Set<string>>(new Set());
   const impactAbortRef = useRef<AbortController | null>(null);
@@ -393,8 +393,8 @@ export default function SpotPerpArbitrageController() {
       const id = String(marketId(market));
       try {
         const result = market.kind === "perp"
-          ? await fetchSearchImpactSpread(market.source, controller.signal, impactNotional, impactDepthMode)
-          : await fetchSpotImpactSpread(market.source, impactNotional, controller.signal, impactDepthMode);
+          ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, impactNotional, impactDepthMode)
+          : await fetchSpotImpactSpreadDetail(market.source, impactNotional, controller.signal, impactDepthMode);
         if (!controller.signal.aborted) setImpactResults((current) => new Map(current).set(id, result));
       } catch (error) {
         if (!controller.signal.aborted && !isAbortError(error)) {
@@ -419,7 +419,7 @@ export default function SpotPerpArbitrageController() {
     const impact = impactResults.get(id);
     return toTableRow(market, {
       ...details.get(id),
-      impactSpread: typeof impact === "number" ? impact : null,
+      impactSpread: impact !== null && typeof impact === "object" ? impact.spread : null,
     });
   }), [details, impactResults, searchResult.markets]);
 

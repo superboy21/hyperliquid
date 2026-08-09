@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { fetchSpotImpactSpread } from "./spot-impact-price";
+import { fetchSpotImpactSpread, fetchSpotImpactSpreadDetail } from "./spot-impact-price";
 import type { SpotMarketRow } from "./spot-search";
 
 const row: SpotMarketRow = {
@@ -57,5 +57,19 @@ describe("Spot impact depth mode", () => {
       ...row, exchange: "Bybit", exchangeColor: "orange", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
     };
     expect(await fetchSpotImpactSpread(bybitRow, 10000, undefined, "max")).toBe("insufficient");
+  });
+
+  test("detail fetch resolves bid/ask VWAP prices and sub-spreads", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ bids: [["99", "20"]], asks: [["101", "20"]] }),
+    );
+
+    const detail = await fetchSpotImpactSpreadDetail(row, 1000);
+    expect(detail).not.toBeNull();
+    expect(typeof detail).not.toBe("string");
+    if (detail === null || detail === "insufficient") throw new Error("expected detail object");
+    expect(detail.spread).toBeCloseTo(2, 12);
+    expect(detail.buyImpactSpread).toBeCloseTo(1, 12);
+    expect(detail.sellImpactSpread).toBeCloseTo(1, 12);
   });
 });

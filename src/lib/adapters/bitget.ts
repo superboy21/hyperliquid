@@ -1,6 +1,6 @@
 import type { AssetCategory, CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
 import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
-import { computeOrderBookImpactSpread, resolvePerpImpactDepth } from "@/lib/order-book-impact";
+import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
 
 export type BitgetCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
 export type BitgetAction = "instruments" | "tickers" | "current-fund-rate" | "history-fund-rate" | "candles" | "history-candles" | "orderbook";
@@ -617,14 +617,49 @@ export async function fetchBitgetCanonicalDetail(
 
 export type BitgetImpactSpreadResult = number | "insufficient" | null;
 
+export function computeBitgetImpactSpreadDetail(
+  book: NormalizedBitgetOrderBook,
+  notionalUsd: number,
+): OrderBookImpactDetailResult {
+  return computeOrderBookImpactDetail({
+    bids: book.bids.map((level) => ({ price: level.price, quantity: level.baseQty })),
+    asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
+  }, notionalUsd);
+}
+
 export function computeBitgetImpactSpread(
   book: NormalizedBitgetOrderBook,
   notionalUsd: number,
 ): BitgetImpactSpreadResult {
-  return computeOrderBookImpactSpread({
-    bids: book.bids.map((level) => ({ price: level.price, quantity: level.baseQty })),
-    asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
-  }, notionalUsd);
+  const detail = computeBitgetImpactSpreadDetail(book, notionalUsd);
+  if (detail === null || detail === "insufficient") return detail;
+  return detail.spread;
+}
+
+export function fetchBitgetImpactSpreadDetail(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  request?: BitgetRequest,
+  requestedLimit?: number,
+): Promise<OrderBookImpactDetailResult>;
+export function fetchBitgetImpactSpreadDetail(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  requestedLimit?: number,
+): Promise<OrderBookImpactDetailResult>;
+export async function fetchBitgetImpactSpreadDetail(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  requestOrLimit: BitgetRequest | number = requestBitget,
+  requestedLimit: number = resolvePerpImpactDepth("Bitget"),
+): Promise<OrderBookImpactDetailResult> {
+  const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBitget;
+  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
+  const book = await fetchBitgetOrderBook(rawSymbol, limit, signal, request);
+  return computeBitgetImpactSpreadDetail(book, notionalUsd);
 }
 
 export function fetchBitgetImpactSpread(
@@ -649,6 +684,7 @@ export async function fetchBitgetImpactSpread(
 ): Promise<BitgetImpactSpreadResult> {
   const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBitget;
   const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
-  const book = await fetchBitgetOrderBook(rawSymbol, limit, signal, request);
-  return computeBitgetImpactSpread(book, notionalUsd);
+  const detail = await fetchBitgetImpactSpreadDetail(rawSymbol, notionalUsd, signal, request, limit);
+  if (detail === null || detail === "insufficient") return detail;
+  return detail.spread;
 }

@@ -4,6 +4,7 @@ import {
   buildBybitUrl,
   computeBybitBboSpread,
   computeBybitImpactSpread,
+  computeBybitImpactSpreadDetail,
   createBybitCandleCache,
   createBybitFundingHistoryCache,
   createBybitInstrumentCache,
@@ -13,6 +14,7 @@ import {
   fetchBybitCanonicalDetail,
   fetchBybitFundingHistory,
   fetchBybitImpactSpread,
+  fetchBybitImpactSpreadDetail,
   fetchLatestBybitSettlement,
   filterBybitInstruments,
   hydrateBybitLatestSettlementRates,
@@ -30,7 +32,7 @@ import {
   selectBybitDetailCandles,
   type BybitRequest,
 } from "./bybit";
-import { computeOrderBookImpactSpread, resolvePerpImpactDepth } from "../order-book-impact";
+import { computeOrderBookImpactDetail, computeOrderBookImpactSpread, resolvePerpImpactDepth } from "../order-book-impact";
 
 describe("Bybit successful-payload parsing and list normalization", () => {
   test("rejects envelopes and malformed successful payloads", () => {
@@ -739,6 +741,7 @@ describe("Bybit candles and books", () => {
       asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
     };
     expect(computeBybitImpactSpread(book, 1000)).toBe(computeOrderBookImpactSpread(sharedBook, 1000));
+    expect(computeBybitImpactSpreadDetail(book, 1000)).toEqual(computeOrderBookImpactDetail(sharedBook, 1000));
   });
 
   test("uses the local Bybit perpetual impact depth by default and propagates overrides", async () => {
@@ -754,6 +757,19 @@ describe("Bybit candles and books", () => {
     // The adapter resolves depths from the shared Bybit perpetual registry.
     expect(resolveBybitImpactDepth()).toBe(resolvePerpImpactDepth("Bybit"));
     expect(resolveBybitImpactDepth("max")).toBe(resolvePerpImpactDepth("Bybit", "max"));
+  });
+
+  test("detail fetch mirrors the spread fetch with the same request overloads", async () => {
+    const requestedLimits: string[] = [];
+    const request: BybitRequest = async (_action, params) => {
+      requestedLimits.push(params.limit);
+      return { bids: [["99", "20"]], asks: [["101", "20"]] };
+    };
+    const standard = await fetchBybitImpactSpreadDetail("BTCUSDT", 1000, undefined, request);
+    const max = await fetchBybitImpactSpreadDetail("BTCUSDT", 1000, undefined, request, resolveBybitImpactDepth("max"));
+    expect(requestedLimits).toEqual([String(resolveBybitImpactDepth()), String(resolveBybitImpactDepth("max"))]);
+    expect(standard).not.toBeNull();
+    expect(max).not.toBeNull();
   });
 });
 

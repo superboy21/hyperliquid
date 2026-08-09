@@ -6,6 +6,24 @@ export type BookSide = "bid" | "ask";
 export type OrderBookImpactResult = number | "insufficient" | null;
 export type ImpactDepthMode = "standard" | "max";
 
+export interface OrderBookImpactDetail {
+  /** 冲击买价 (bid VWAP): 价格 at which selling base for the quote notional executes */
+  bidPrice: number;
+  /** 冲击卖价 (ask VWAP): 价格 at which acquiring base for the quote notional executes */
+  askPrice: number;
+  /** 冲击中间价 mid = (bidPrice + askPrice) / 2 */
+  mid: number;
+  /** BBO 中间价 = (bestBid + bestAsk) / 2 */
+  bboMid: number;
+  /** total impact spread % = (askPrice - bidPrice) / mid * 100 */
+  spread: number;
+  /** buy impact spread % = (askPrice - bboMid) / bboMid * 100 */
+  buyImpactSpread: number;
+  /** sell impact spread % = (bboMid - bidPrice) / bboMid * 100 */
+  sellImpactSpread: number;
+}
+export type OrderBookImpactDetailResult = OrderBookImpactDetail | "insufficient" | null;
+
 export const STANDARD_SPOT_IMPACT_DEPTH_LIMITS = {
   Hyperliquid: 20,
   "Gate.io": 100,
@@ -117,10 +135,10 @@ export function computeQuoteNotionalVwap(
 
 export const computeSpotVwap = computeQuoteNotionalVwap;
 
-export function computeOrderBookImpactSpread(
+export function computeOrderBookImpactDetail(
   book: NormalizedOrderBook,
   quoteNotional: number,
-): OrderBookImpactResult {
+): OrderBookImpactDetailResult {
   // Every caller gets best-to-worst execution regardless of transport order.
   // Sorting copies is intentional: cached/normalized source books stay untouched.
   const bids = [...book.bids].sort((a, b) => b.price - a.price);
@@ -130,5 +148,27 @@ export function computeOrderBookImpactSpread(
   if (bid === null || ask === null) return null;
   if (bid === "insufficient" || ask === "insufficient") return "insufficient";
   const mid = (bid + ask) / 2;
-  return mid > 0 ? ((ask - bid) / mid) * 100 : null;
+  if (mid <= 0) return null;
+  const bestBid = bids.length > 0 ? bids[0].price : null;
+  const bestAsk = asks.length > 0 ? asks[0].price : null;
+  const bboMid = bestBid !== null && bestAsk !== null ? (bestBid + bestAsk) / 2 : null;
+  if (bboMid === null || bboMid <= 0) return null;
+  return {
+    bidPrice: bid,
+    askPrice: ask,
+    mid,
+    bboMid,
+    spread: ((ask - bid) / mid) * 100,
+    buyImpactSpread: ((ask - bboMid) / bboMid) * 100,
+    sellImpactSpread: ((bboMid - bid) / bboMid) * 100,
+  };
+}
+
+export function computeOrderBookImpactSpread(
+  book: NormalizedOrderBook,
+  quoteNotional: number,
+): OrderBookImpactResult {
+  const detail = computeOrderBookImpactDetail(book, quoteNotional);
+  if (detail === null || detail === "insufficient") return detail;
+  return detail.spread;
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { fetchImpactSpread, normalizeGatePerpOrderBook } from "./impact-price";
+import { fetchImpactSpread, fetchImpactSpreadDetail, normalizeGatePerpOrderBook } from "./impact-price";
 import type { BybitRequest } from "./adapters/bybit";
 
 const gateBook = {
@@ -69,5 +69,33 @@ describe("Perp impact depth mode", () => {
   test("Bybit perp impact fails as insufficient instead of fabricating values on thin books", async () => {
     const request: BybitRequest = async () => ({ s: "BTCUSDT", b: [["99", "1"]], a: [["101", "1"]] });
     expect(await fetchImpactSpread("Bybit", "BTCUSDT", undefined, 10000, "max", request)).toBe("insufficient");
+  });
+
+  test("detail fetch resolves bid/ask VWAP prices and sub-spreads for Binance", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ bids: [["99", "20"]], asks: [["101", "20"]] }),
+    );
+
+    const detail = await fetchImpactSpreadDetail("Binance", "BTCUSDT", undefined, 1000);
+    expect(detail).not.toBeNull();
+    expect(typeof detail).not.toBe("string");
+    if (detail === null || detail === "insufficient") throw new Error("expected detail object");
+    expect(detail.bidPrice).toBeCloseTo(99, 12);
+    expect(detail.askPrice).toBeCloseTo(101, 12);
+    expect(detail.spread).toBeCloseTo(2, 12);
+    expect(detail.buyImpactSpread).toBeCloseTo(1, 12);
+    expect(detail.sellImpactSpread).toBeCloseTo(1, 12);
+  });
+
+  test("Bybit detail fetch uses the core adapter book and resolves sub-spreads", async () => {
+    const request: BybitRequest = async () => ({ s: "BTCUSDT", b: [["99", "20"]], a: [["101", "20"]] });
+
+    const detail = await fetchImpactSpreadDetail("Bybit", "BTCUSDT", undefined, 1000, "standard", request);
+    expect(detail).not.toBeNull();
+    expect(typeof detail).not.toBe("string");
+    if (detail === null || detail === "insufficient") throw new Error("expected detail object");
+    expect(detail.spread).toBeCloseTo(2, 10);
+    expect(detail.buyImpactSpread).toBeCloseTo(1, 10);
+    expect(detail.sellImpactSpread).toBeCloseTo(1, 10);
   });
 });

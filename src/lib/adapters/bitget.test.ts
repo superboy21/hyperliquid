@@ -4,11 +4,13 @@ import {
   buildBitgetUrl,
   computeBitgetBboSpread,
   computeBitgetImpactSpread,
+  computeBitgetImpactSpreadDetail,
   createBitgetScheduler,
   fetchBitgetCandles,
   fetchBitgetCanonicalDetail,
   fetchBitgetFundingHistory,
   fetchBitgetImpactSpread,
+  fetchBitgetImpactSpreadDetail,
   fetchLatestBitgetSettlement,
   latestBitgetFundingPoint,
   normalizeBitgetCandles,
@@ -18,7 +20,7 @@ import {
   selectBitgetDetailCandles,
   type BitgetRequest,
 } from "./bitget";
-import { computeOrderBookImpactSpread, resolvePerpImpactDepth } from "../order-book-impact";
+import { computeOrderBookImpactDetail, computeOrderBookImpactSpread, resolvePerpImpactDepth } from "../order-book-impact";
 
 describe("Bitget successful-payload parsing and list normalization", () => {
   test("rejects envelopes and malformed successful payloads", () => {
@@ -353,6 +355,7 @@ describe("Bitget candles and books", () => {
       asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
     };
     expect(computeBitgetImpactSpread(book, 1000)).toBe(computeOrderBookImpactSpread(sharedBook, 1000));
+    expect(computeBitgetImpactSpreadDetail(book, 1000)).toEqual(computeOrderBookImpactDetail(sharedBook, 1000));
   });
 
   test("uses the centralized Bitget perpetual impact depth", async () => {
@@ -374,6 +377,20 @@ describe("Bitget candles and books", () => {
     };
     await fetchBitgetImpactSpread("BTCUSDT", 1000, undefined, request, resolvePerpImpactDepth("Bitget", "max"));
     expect(requestedLimit).toBe("1000");
+  });
+
+  test("detail fetch mirrors the spread fetch with the same request overloads", async () => {
+    const requestedLimits: string[] = [];
+    const request: BitgetRequest = async (_action, params) => {
+      expect(_action).toBe("orderbook");
+      requestedLimits.push(params.limit);
+      return { bids: [["99", "20"]], asks: [["101", "20"]] };
+    };
+    const standard = await fetchBitgetImpactSpreadDetail("BTCUSDT", 1000, undefined, request);
+    const max = await fetchBitgetImpactSpreadDetail("BTCUSDT", 1000, undefined, request, resolvePerpImpactDepth("Bitget", "max"));
+    expect(requestedLimits).toEqual([String(resolvePerpImpactDepth("Bitget")), "1000"]);
+    expect(standard).not.toBeNull();
+    expect(max).not.toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 import type { CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
 import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
-import { computeOrderBookImpactSpread, resolvePerpImpactDepth } from "@/lib/order-book-impact";
+import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
 
 export type BybitCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
 export type BybitAction = "instruments" | "tickers" | "funding-history" | "kline" | "orderbook";
@@ -933,14 +933,49 @@ export async function fetchBybitCanonicalDetail(
 
 export type BybitImpactSpreadResult = number | "insufficient" | null;
 
+export function computeBybitImpactSpreadDetail(
+  book: NormalizedBybitOrderBook,
+  notionalUsd: number,
+): OrderBookImpactDetailResult {
+  return computeOrderBookImpactDetail({
+    bids: book.bids.map((level) => ({ price: level.price, quantity: level.baseQty })),
+    asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
+  }, notionalUsd);
+}
+
 export function computeBybitImpactSpread(
   book: NormalizedBybitOrderBook,
   notionalUsd: number,
 ): BybitImpactSpreadResult {
-  return computeOrderBookImpactSpread({
-    bids: book.bids.map((level) => ({ price: level.price, quantity: level.baseQty })),
-    asks: book.asks.map((level) => ({ price: level.price, quantity: level.baseQty })),
-  }, notionalUsd);
+  const detail = computeBybitImpactSpreadDetail(book, notionalUsd);
+  if (detail === null || detail === "insufficient") return detail;
+  return detail.spread;
+}
+
+export function fetchBybitImpactSpreadDetail(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  request?: BybitRequest,
+  requestedLimit?: number,
+): Promise<OrderBookImpactDetailResult>;
+export function fetchBybitImpactSpreadDetail(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  requestedLimit?: number,
+): Promise<OrderBookImpactDetailResult>;
+export async function fetchBybitImpactSpreadDetail(
+  rawSymbol: string,
+  notionalUsd: number,
+  signal?: AbortSignal,
+  requestOrLimit: BybitRequest | number = requestBybit,
+  requestedLimit: number = resolveBybitImpactDepth(),
+): Promise<OrderBookImpactDetailResult> {
+  const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBybit;
+  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
+  const book = await fetchBybitOrderBook(rawSymbol, limit, signal, request);
+  return computeBybitImpactSpreadDetail(book, notionalUsd);
 }
 
 export function fetchBybitImpactSpread(
@@ -965,6 +1000,7 @@ export async function fetchBybitImpactSpread(
 ): Promise<BybitImpactSpreadResult> {
   const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBybit;
   const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
-  const book = await fetchBybitOrderBook(rawSymbol, limit, signal, request);
-  return computeBybitImpactSpread(book, notionalUsd);
+  const detail = await fetchBybitImpactSpreadDetail(rawSymbol, notionalUsd, signal, request, limit);
+  if (detail === null || detail === "insufficient") return detail;
+  return detail.spread;
 }

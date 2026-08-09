@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  computeOrderBookImpactDetail,
   computeOrderBookImpactSpread,
   computeQuoteNotionalVwap,
   MAX_PERP_IMPACT_DEPTH_LIMITS,
@@ -94,5 +95,45 @@ describe("spot quote-notional VWAP", () => {
     expect(typeof ask).toBe("number");
     expect(spread).toBeCloseTo((((ask as number) - (bid as number)) / (((ask as number) + (bid as number)) / 2)) * 100, 12);
     expect(book).toEqual(original);
+  });
+
+  test("computes the full impact detail with bid/ask VWAP prices and sub-spreads", () => {
+    const book = {
+      bids: [{ price: 100, quantity: 1 }, { price: 99, quantity: 10 }],
+      asks: [{ price: 101, quantity: 1 }, { price: 102, quantity: 10 }],
+    };
+    const detail = computeOrderBookImpactDetail(book, 150);
+    expect(detail).not.toBeNull();
+    expect(typeof detail).not.toBe("string");
+    if (detail === null || detail === "insufficient") throw new Error("expected detail object");
+
+    const bid = 150 / (1 + 50 / 99);
+    const ask = 150 / (1 + 49 / 102);
+    const mid = (bid + ask) / 2;
+    const bboMid = 100.5; // (bestBid 100 + bestAsk 101) / 2
+    expect(detail.bidPrice).toBeCloseTo(bid, 12);
+    expect(detail.askPrice).toBeCloseTo(ask, 12);
+    expect(detail.mid).toBeCloseTo(mid, 12);
+    expect(detail.bboMid).toBeCloseTo(bboMid, 12);
+    expect(detail.spread).toBeCloseTo(((ask - bid) / mid) * 100, 12);
+    expect(detail.buyImpactSpread).toBeCloseTo(((ask - bboMid) / bboMid) * 100, 12);
+    expect(detail.sellImpactSpread).toBeCloseTo(((bboMid - bid) / bboMid) * 100, 12);
+    expect(computeOrderBookImpactSpread(book, 150)).toBeCloseTo(detail.spread, 12);
+  });
+
+  test("detail reports insufficient on thin books", () => {
+    const book = {
+      bids: [{ price: 100, quantity: 1 }],
+      asks: [{ price: 101, quantity: 1 }],
+    };
+    expect(computeOrderBookImpactDetail(book, 10000)).toBe("insufficient");
+  });
+
+  test("detail returns null for an invalid quote notional", () => {
+    const book = {
+      bids: [{ price: 100, quantity: 1 }],
+      asks: [{ price: 101, quantity: 1 }],
+    };
+    expect(computeOrderBookImpactDetail(book, 0)).toBeNull();
   });
 });

@@ -6,15 +6,18 @@ import { fetchL2Book } from "./hyperliquid";
 import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
 import { okxFetch } from "./adapters/okx";
-import { fetchBitgetImpactSpread } from "./adapters/bitget";
-import { fetchBybitImpactSpread, type BybitRequest } from "./adapters/bybit";
+import { fetchBitgetImpactSpread, fetchBitgetImpactSpreadDetail } from "./adapters/bitget";
+import { fetchBybitImpactSpread, fetchBybitImpactSpreadDetail, type BybitRequest } from "./adapters/bybit";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
 import {
+  computeOrderBookImpactDetail,
   computeOrderBookImpactSpread,
   resolvePerpImpactDepth,
   type ImpactDepthMode,
   type NormalizedBookLevel,
   type NormalizedOrderBook,
+  type OrderBookImpactDetail,
+  type OrderBookImpactDetailResult,
 } from "./order-book-impact";
 
 export const DEFAULT_IMPACT_NOTIONAL = 1000;
@@ -24,6 +27,7 @@ export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
 
 /** Result of an impact spread computation. */
 export type ImpactSpreadResult = number | "insufficient" | "no_ctVal" | "no_multiplier" | null;
+export type ImpactSpreadDetailResult = OrderBookImpactDetail | "insufficient" | "no_ctVal" | "no_multiplier" | null;
 
 // ==================== Gate.io Multiplier Cache ====================
 
@@ -304,6 +308,23 @@ async function fetchLighterBook(
 
 // ==================== Unified Entry Point ====================
 
+/** Fetches the normalized order book for the book-based exchanges. */
+async function fetchImpactOrderBook(
+  exchange: string,
+  rawSymbol: string,
+  signal: AbortSignal | undefined,
+  depthMode: ImpactDepthMode,
+): Promise<NormalizedOrderBook | "no_ctVal" | "no_multiplier" | null> {
+  switch (exchange) {
+    case "Hyperliquid": return fetchHyperliquidBook(rawSymbol, signal);
+    case "Gate.io": { const b = await fetchGateioBook(rawSymbol, resolvePerpImpactDepth("Gate.io", depthMode), signal); return b === "no_multiplier" ? b : b; }
+    case "Binance": return fetchBinanceBook(rawSymbol, resolvePerpImpactDepth("Binance", depthMode), signal);
+    case "OKX": { const ctVal = await getOkxCtVal(rawSymbol, signal); if (ctVal === null) return "no_ctVal"; return fetchOkxBook(rawSymbol, ctVal, resolvePerpImpactDepth("OKX", depthMode), signal); }
+    case "Lighter": return fetchLighterBook(rawSymbol, resolvePerpImpactDepth("Lighter", depthMode), signal);
+    default: return null;
+  }
+}
+
 /**
  * Fetch order book depth and compute impact spread for any exchange.
  *
@@ -320,43 +341,29 @@ export async function fetchImpactSpread(
   depthMode: ImpactDepthMode = "standard",
   bybitRequest?: BybitRequest,
 ): Promise<ImpactSpreadResult> {
-  let book: NormalizedOrderBook | null = null;
-
-  switch (exchange) {
-    case "Hyperliquid":
-      book = await fetchHyperliquidBook(rawSymbol, signal);
-      break;
-    case "Gate.io":
-      {
-        const gateBook = await fetchGateioBook(rawSymbol, resolvePerpImpactDepth("Gate.io", depthMode), signal);
-        if (gateBook === "no_multiplier") return gateBook;
-        book = gateBook;
-      }
-      break;
-    case "Binance":
-      book = await fetchBinanceBook(rawSymbol, resolvePerpImpactDepth("Binance", depthMode), signal);
-      break;
-    case "OKX": {
-      // OKX order book sz is in contracts — need ctVal to convert to base qty
-      const ctVal = await getOkxCtVal(rawSymbol, signal);
-      if (ctVal === null) return "no_ctVal";
-      book = await fetchOkxBook(rawSymbol, ctVal, resolvePerpImpactDepth("OKX", depthMode), signal);
-      break;
-    }
-    case "Lighter":
-      book = await fetchLighterBook(rawSymbol, resolvePerpImpactDepth("Lighter", depthMode), signal);
-      break;
-    case "Bitget":
-      return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
-    case "Bybit":
-      // Core adapter linear order book + shared impact mechanism; never bulk-poll per-symbol books.
-      return fetchBybitImpactSpread(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode));
-    default:
-      return null;
-  }
-
+  if (exchange === "Bitget") return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
+  if (exchange === "Bybit") return fetchBybitImpactSpread(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode));
+  const book = await fetchImpactOrderBook(exchange, rawSymbol, signal, depthMode);
+  if (book === "no_ctVal" || book === "no_multiplier") return book;
   if (!book) return null; // fetch error
   return computeOrderBookImpactSpread(book, notionalUsd);
+}
+
+/** Fetch order book depth and compute the full impact detail for any exchange. */
+export async function fetchImpactSpreadDetail(
+  exchange: string,
+  rawSymbol: string,
+  signal?: AbortSignal,
+  notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
+  depthMode: ImpactDepthMode = "standard",
+  bybitRequest?: BybitRequest,
+): Promise<ImpactSpreadDetailResult> {
+  if (exchange === "Bitget") return fetchBitgetImpactSpreadDetail(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
+  if (exchange === "Bybit") return fetchBybitImpactSpreadDetail(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode));
+  const book = await fetchImpactOrderBook(exchange, rawSymbol, signal, depthMode);
+  if (book === "no_ctVal" || book === "no_multiplier") return book;
+  if (!book) return null; // fetch error
+  return computeOrderBookImpactDetail(book, notionalUsd);
 }
 
 /** Search dispatch that prevents display-symbol fallback for Bitget. */
@@ -382,6 +389,33 @@ export async function fetchSearchImpactSpread(
 ): Promise<ImpactSpreadResult> {
   const rawSymbol = requireBitgetRawSymbol(rate);
   const fetcher = typeof depthModeOrFetcher === "function" ? depthModeOrFetcher : fetchImpactSpread;
+  const depthMode = typeof depthModeOrFetcher === "function" ? depthModeAfterFetcher : depthModeOrFetcher;
+  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd, depthMode);
+}
+
+/** Search dispatch for the impact detail fetcher that prevents display-symbol fallback for Bitget. */
+export function fetchSearchImpactSpreadDetail(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+  signal?: AbortSignal,
+  notionalUsd?: number,
+  depthMode?: ImpactDepthMode,
+): Promise<ImpactSpreadDetailResult>;
+export function fetchSearchImpactSpreadDetail(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+  signal?: AbortSignal,
+  notionalUsd?: number,
+  fetcher?: typeof fetchImpactSpreadDetail,
+  depthMode?: ImpactDepthMode,
+): Promise<ImpactSpreadDetailResult>;
+export async function fetchSearchImpactSpreadDetail(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+  signal?: AbortSignal,
+  notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
+  depthModeOrFetcher: ImpactDepthMode | typeof fetchImpactSpreadDetail = "standard",
+  depthModeAfterFetcher: ImpactDepthMode = "standard",
+): Promise<ImpactSpreadDetailResult> {
+  const rawSymbol = requireBitgetRawSymbol(rate);
+  const fetcher = typeof depthModeOrFetcher === "function" ? depthModeOrFetcher : fetchImpactSpreadDetail;
   const depthMode = typeof depthModeOrFetcher === "function" ? depthModeAfterFetcher : depthModeOrFetcher;
   return fetcher(rate.exchange, rawSymbol, signal, notionalUsd, depthMode);
 }

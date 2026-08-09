@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { ImpactSpreadResult } from "@/lib/impact-price";
+import type { ImpactSpreadDetailResult } from "@/lib/impact-price";
 import type { ImpactDepthMode } from "@/lib/order-book-impact";
 import type { ArbitrageTableRow } from "@/lib/spot-perp-arbitrage";
 import { formatAnnualizedRate, formatPrice, formatVolume } from "@/lib/types";
@@ -34,7 +34,7 @@ interface Props {
   detailErrors: ReadonlySet<string>;
   impactLoading: ReadonlySet<string>;
   impactErrors: ReadonlySet<string>;
-  impactResults: ReadonlyMap<string, ImpactSpreadResult>;
+  impactResults: ReadonlyMap<string, ImpactSpreadDetailResult>;
   spreadMode: SpreadMode;
   onSpreadModeChange: (mode: SpreadMode) => void;
   impactNotional: number;
@@ -304,7 +304,17 @@ export default function ArbitrageMarketTable({
                     <span className="text-xs text-red-400">No ctVal</span>
                   ) : spreadMode === "impact" && impact === "no_multiplier" ? (
                     <span className="text-xs text-red-400">缺少合约乘数</span>
-                  ) : displayNumber(spreadMode === "top" ? row.topSpread : row.impactSpread, (value) => `${value.toFixed(4)}%`)}
+                  ) : (
+                    <div className="flex flex-col items-end gap-px">
+                      {displayNumber(spreadMode === "top" ? row.topSpread : row.impactSpread, (value) => `${value.toFixed(4)}%`)}
+                      {spreadMode === "impact" && impact !== null && typeof impact === "object" && (
+                        <>
+                          <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="买入冲击价差">买入 {formatSignedPercent(impact.buyImpactSpread, 4)}</span>
+                          <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="卖出冲击价差">卖出 {formatSignedPercent(impact.sellImpactSpread, 4)}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td className="px-2.5 py-2 text-right">{row.latestSettlementRate === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.latestSettlementRate)}`}>{annualizedLabel(row, row.latestSettlementRate)}</span>}</td>
                 <td className="px-2.5 py-2 text-right">{row.averageFundingRate2d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate2d)}`}>{annualizedLabel(row, row.averageFundingRate2d, true)}</span>}</td>
