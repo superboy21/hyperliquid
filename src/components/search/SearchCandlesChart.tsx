@@ -162,10 +162,12 @@ export default function SearchCandlesChart({
     });
 
     // Funding rate data (only for non-1m intervals)
+    // sampleCount === 0 marks a period with no funding samples: render a null gap
+    // (no line segment, no fake 0%) while an observed zero still renders as 0%.
     const fundingData = is1m
       ? []
       : fundingRates.map((f) => ({
-          value: f.annualizedRate * 100,
+          value: f.sampleCount === 0 ? null : f.annualizedRate * 100,
           rawRate: f.rate,
         }));
 
@@ -232,7 +234,7 @@ export default function SearchCandlesChart({
         lines.push(`${subLabel}: ${Number.isFinite(value) ? formatVolume(value) : "N/A"}`);
       }
 
-      if (fundingItem) {
+      if (fundingItem && fundingItem.value != null) {
         const annualized = fundingItem.value as number;
         const rawRate = fundingItem.data?.rawRate as number | undefined;
         const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;

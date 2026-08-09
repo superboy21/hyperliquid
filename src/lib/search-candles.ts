@@ -8,8 +8,9 @@ import { getFundingHistoryAll as lighterGetFundingHistoryAll, lighterFetch } fro
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical, okxFetch } from "./adapters/okx";
 import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget";
+import { fetchBybitCandles, fetchBybitFundingHistory, resolveBybitFundingHistoryWindowMs } from "./adapters/bybit";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
-import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
+import { requireBitgetRawSymbol, requireBybitRawSymbol, type SearchExchangeRate } from "./search";
 
 // ==================== Types ====================
 
@@ -84,6 +85,7 @@ const MAX_CANDLES: Record<string, number> = {
   okx: 300,
   lighter: 500,
   bitget: 9000,
+  bybit: 1000,
 };
 
 // ==================== Interval → Days Mapping ====================
@@ -578,6 +580,24 @@ export async function fetchBitgetSearchCandles(
   return candles.map((candle) => ({ ...candle }));
 }
 
+// ==================== Bybit Candles ====================
+
+/**
+ * V5 kline rows arrive newest-first; the adapter normalizes them, but this
+ * layer re-asserts ascending order and dedupes so the app chart always
+ * receives chronological candles regardless of transport ordering.
+ */
+export async function fetchBybitSearchCandles(
+  rawSymbol: string,
+  interval: SearchChartInterval,
+  signal?: AbortSignal,
+  fetchCandles: typeof fetchBybitCandles = fetchBybitCandles,
+): Promise<SearchCandlePoint[]> {
+  const candles = await fetchCandles(rawSymbol, interval, { signal });
+  const sorted = [...candles].sort((a, b) => a.openTime - b.openTime);
+  return sorted.filter((candle, index) => index === 0 || candle.openTime !== sorted[index - 1].openTime);
+}
+
 // ==================== Funding History Fetch Functions ====================
 
 async function fetchHyperliquidFundingHistory(
@@ -714,6 +734,21 @@ export async function fetchBitgetSearchFundingHistory(
   return history.map((item) => ({ time: item.timestamp, rate: item.fundingRate }));
 }
 
+export async function fetchBybitSearchFundingHistory(
+  rawSymbol: string,
+  cutoffTime: number,
+  options: { signal?: AbortSignal; windowMs?: number; maxPages?: number } = {},
+  fetchFundingHistory: typeof fetchBybitFundingHistory = fetchBybitFundingHistory,
+): Promise<{ time: number; rate: number }[]> {
+  const history = await fetchFundingHistory(rawSymbol, {
+    cutoffTime,
+    signal: options.signal,
+    ...(options.windowMs === undefined ? {} : { windowMs: options.windowMs }),
+    ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
+  });
+  return history.map((item) => ({ time: item.timestamp, rate: item.fundingRate }));
+}
+
 export interface BitgetSearchChartDependencies {
   fetchCandles: typeof fetchBitgetSearchCandles;
   fetchFundingHistory: typeof fetchBitgetSearchFundingHistory;
@@ -738,6 +773,66 @@ export async function fetchBitgetSearchChart(
 
   const cutoffTime = Math.min(...candles.map((candle) => candle.openTime));
   const fundingHistory = await dependencies.fetchFundingHistory(rawSymbol, cutoffTime, signal);
+  return {
+    candles,
+    fundingRates: aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval),
+  };
+}
+
+export interface BybitSearchChartDependencies {
+  fetchCandles: typeof fetchBybitSearchCandles;
+  fetchFundingHistory: typeof fetchBybitSearchFundingHistory;
+  /**
+   * Interval-aware funding-history window resolver. Defaults to the adapter
+   * contract helper (resolveBybitFundingHistoryWindowMs); tests inject a
+   * deterministic resolver to assert window/maxPages propagation.
+   */
+  resolveFundingWindowMs?: (fundingIntervalSeconds: number, pageSize?: number) => number;
+}
+
+const BYBIT_SEARCH_CHART_DEPENDENCIES: BybitSearchChartDependencies = {
+  fetchCandles: fetchBybitSearchCandles,
+  fetchFundingHistory: fetchBybitSearchFundingHistory,
+};
+
+/** Funding overlay horizon: at most the latest 90 days of the chart window. */
+export const BYBIT_SEARCH_FUNDING_HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
+/** One full V5 funding-history page (200 rows), matching the adapter default. */
+export const BYBIT_SEARCH_FUNDING_PAGE_SIZE = 200;
+
+/**
+ * Candle-first Bybit chart flow. The full price-candle range (up to the
+ * adapter's 1000-candle API cap) is preserved, but the funding overlay fetch
+ * horizon is capped at the latest 90 days of the chart window: funding data
+ * older than that stays unavailable (sampleCount 0) rather than fabricated.
+ * The history request uses an interval-aware windowMs and a bounded maxPages
+ * (90d / windowMs) so 4h/1d/1w selections cannot trigger tens or hundreds of
+ * sequential funding-history calls (8h funding ≈ 2 requests, 4h ≈ 3, 1h ≈ 11).
+ */
+export async function fetchBybitSearchChart(
+  rate: SearchExchangeRate,
+  interval: SearchChartInterval,
+  signal?: AbortSignal,
+  dependencies: BybitSearchChartDependencies = BYBIT_SEARCH_CHART_DEPENDENCIES,
+): Promise<Pick<SearchCandleResult, "candles" | "fundingRates">> {
+  const rawSymbol = requireBybitRawSymbol(rate);
+  const candles = await dependencies.fetchCandles(rawSymbol, interval, signal);
+  throwIfAborted(signal);
+  if (candles.length === 0) return { candles: [], fundingRates: [] };
+
+  const oldestCandleTime = Math.min(...candles.map((candle) => candle.openTime));
+  const newestCandleTime = Math.max(...candles.map((candle) => candle.openTime));
+  const cutoffTime = Math.max(oldestCandleTime, newestCandleTime - BYBIT_SEARCH_FUNDING_HORIZON_MS);
+
+  const resolveWindowMs = dependencies.resolveFundingWindowMs ?? resolveBybitFundingHistoryWindowMs;
+  const windowMs = resolveWindowMs(rate.fundingInterval, BYBIT_SEARCH_FUNDING_PAGE_SIZE);
+  const maxPages = Math.max(1, Math.ceil(BYBIT_SEARCH_FUNDING_HORIZON_MS / windowMs));
+
+  const fundingHistory = await dependencies.fetchFundingHistory(rawSymbol, cutoffTime, {
+    signal,
+    windowMs,
+    maxPages,
+  });
   return {
     candles,
     fundingRates: aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval),
@@ -805,6 +900,10 @@ export async function fetchSearchCandles(
     }
     case "Bitget": {
       const result = await fetchBitgetSearchChart(rate, interval, signal);
+      return { ...empty, ...result };
+    }
+    case "Bybit": {
+      const result = await fetchBybitSearchChart(rate, interval, signal);
       return { ...empty, ...result };
     }
     default:

@@ -131,11 +131,19 @@ export function alignComboData(
   const dashboardFundingRates: FundingRatePoint[] = [];
   for (const { first: firstFr, second: secondFr } of fundingMap.values()) {
     if (!secondFr) continue;
-    const difference = {
-      time: firstFr.time,
-      rate: firstFr.rate - secondFr.rate,
-      annualizedRate: firstFr.annualizedRate - secondFr.annualizedRate,
-    };
+    // A leg with sampleCount 0 is explicitly unavailable (gap), never an
+    // observed zero. The derived difference must be marked unavailable too —
+    // computing `0 - validRate` would fabricate a real-looking spread. The
+    // numeric zero + sampleCount 0 shape matches aggregateFundingRatesToCandles,
+    // so the visual lane renders these as gaps via sampleCount.
+    const unavailable = firstFr.sampleCount === 0 || secondFr.sampleCount === 0;
+    const difference: FundingRatePoint = unavailable
+      ? { time: firstFr.time, rate: 0, annualizedRate: 0, sampleCount: 0 }
+      : {
+          time: firstFr.time,
+          rate: firstFr.rate - secondFr.rate,
+          annualizedRate: firstFr.annualizedRate - secondFr.annualizedRate,
+        };
     alignedFundingRates.push(difference);
     if (hasActualFundingSample(firstFr) && hasActualFundingSample(secondFr)) {
       dashboardFundingRates.push(difference);

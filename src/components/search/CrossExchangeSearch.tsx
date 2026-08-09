@@ -30,6 +30,7 @@ import SearchCandlesChart from "./SearchCandlesChart";
 import ComboSearchCandlesChart from "./ComboSearchCandlesChart";
 import { parseComboSearch, isComboSearch, alignComboData, type ComboSelection, type ComboCandleResult } from "@/lib/combo";
 import { filterAlignedRange } from "@/lib/spot-perp-arbitrage";
+import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import ArbitrageAnalyticsDashboard from "@/components/spot-perp-arbitrage/MixedAnalyticsDashboard";
 
 // ==================== Types ====================
@@ -126,6 +127,7 @@ const EXCHANGE_DOT_COLORS: Record<string, string> = {
   Lighter: "bg-purple-400",
   OKX: "bg-emerald-400",
   Bitget: "bg-teal-400",
+  Bybit: "bg-orange-400",
 };
 
 function formatSearchAnnualizedRate(rate: number, fundingInterval: number, exchange: string): string {
@@ -389,12 +391,13 @@ export default function CrossExchangeSearch() {
   }, [comboChartData, chartRange]);
 
   // Auto-load all detail for the filtered set after debounce (concurrency 4)
-  const DEFAULT_DETAIL_CONCURRENCY = 4;
-  const LIGHTER_DETAIL_CONCURRENCY = 1;
-  const LIGHTER_DETAIL_DELAY_MS = 200;
-  const BITGET_DETAIL_CONCURRENCY = 1;
-  const OKX_DETAIL_CONCURRENCY = 1;
-  const OKX_DETAIL_DELAY_MS = 200;
+  const DEFAULT_DETAIL_CONCURRENCY = DETAIL_LANE_PROFILE.generic.concurrency;
+  const LIGHTER_DETAIL_CONCURRENCY = DETAIL_LANE_PROFILE.lighter.concurrency;
+  const LIGHTER_DETAIL_DELAY_MS = DETAIL_LANE_PROFILE.lighter.delayMs;
+  const BITGET_DETAIL_CONCURRENCY = DETAIL_LANE_PROFILE.bitget.concurrency;
+  const BYBIT_DETAIL_CONCURRENCY = DETAIL_LANE_PROFILE.bybit.concurrency;
+  const OKX_DETAIL_CONCURRENCY = DETAIL_LANE_PROFILE.okx.concurrency;
+  const OKX_DETAIL_DELAY_MS = DETAIL_LANE_PROFILE.okx.delayMs;
 
   const startDetailFetching = useCallback(
     (rates: SearchExchangeRate[]) => {
@@ -441,6 +444,9 @@ export default function CrossExchangeSearch() {
       }
       if (lanes.bitget.length > 0) {
         void batchFetchDetails(lanes.bitget, onUpdate, signal, BITGET_DETAIL_CONCURRENCY, 0);
+      }
+      if (lanes.bybit.length > 0) {
+        void batchFetchDetails(lanes.bybit, onUpdate, signal, BYBIT_DETAIL_CONCURRENCY, 0);
       }
       if (lanes.okx.length > 0) {
         void batchFetchDetails(lanes.okx, onUpdate, signal, OKX_DETAIL_CONCURRENCY, OKX_DETAIL_DELAY_MS);

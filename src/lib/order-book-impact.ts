@@ -13,6 +13,8 @@ export const STANDARD_SPOT_IMPACT_DEPTH_LIMITS = {
   OKX: 100,
   Lighter: 100,
   Bitget: 100,
+  // V5 spot orderbook accepts exactly 1/50/200 levels.
+  Bybit: 50,
 } as const;
 
 export const MAX_SPOT_IMPACT_DEPTH_LIMITS = {
@@ -22,6 +24,7 @@ export const MAX_SPOT_IMPACT_DEPTH_LIMITS = {
   OKX: 5000,
   Lighter: 250,
   Bitget: 150,
+  Bybit: 200,
 } as const;
 
 export const STANDARD_PERP_IMPACT_DEPTH_LIMITS = {
@@ -31,6 +34,8 @@ export const STANDARD_PERP_IMPACT_DEPTH_LIMITS = {
   OKX: 100,
   Lighter: 100,
   Bitget: 100,
+  // V5 linear orderbook accepts exactly 1/25/100/500 levels; mirrors the Bybit adapter.
+  Bybit: 100,
 } as const;
 
 export const MAX_PERP_IMPACT_DEPTH_LIMITS = {
@@ -40,6 +45,7 @@ export const MAX_PERP_IMPACT_DEPTH_LIMITS = {
   OKX: 5000,
   Lighter: 250,
   Bitget: 1000,
+  Bybit: 500,
 } as const;
 
 /** Compatibility alias for the original standard perpetual policy. */
@@ -81,6 +87,10 @@ export function normalizeSpotOrderBook(exchange: SpotExchangeName, payload: unkn
   }
   if (exchange === "Bitget" && root.data) {
     const book = object(root.data); bids = book?.bids; asks = book?.asks;
+  }
+  if (exchange === "Bybit" && root.result) {
+    // V5 envelope: { retCode, result: { b: [[price, qty]...desc], a: [[price, qty]...asc] } }
+    const book = object(root.result); bids = book?.b; asks = book?.a;
   }
   if (!Array.isArray(bids) || !Array.isArray(asks)) return null;
   return { bids: normalizeBookLevels(bids, "bid"), asks: normalizeBookLevels(asks, "ask") };

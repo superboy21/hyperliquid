@@ -1,6 +1,6 @@
 // ==================== 交易所标识 ====================
 
-export type ExchangeId = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx" | "bitget";
+export type ExchangeId = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx" | "bitget" | "bybit";
 
 export interface ExchangeInfo {
   id: ExchangeId;
@@ -45,6 +45,12 @@ export const EXCHANGES: Record<ExchangeId, ExchangeInfo> = {
     name: "Bitget",
     color: "teal",
     accentColor: "bg-teal-600",
+  },
+  bybit: {
+    id: "bybit",
+    name: "Bybit",
+    color: "orange",
+    accentColor: "bg-orange-600",
   },
 };
 

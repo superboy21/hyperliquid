@@ -48,12 +48,16 @@ import {
   fetchBitgetCanonicalDetail,
   fetchBitgetCanonicalRates,
 } from "@/lib/adapters/bitget";
+import {
+  fetchBybitCanonicalDetail,
+  fetchBybitCanonicalRates,
+} from "@/lib/adapters/bybit";
 import type { CanonicalFundingRateRow } from "@/lib/types";
 
 // ==================== Interfaces ====================
 
 export interface SearchExchangeRate {
-  exchange: "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX" | "Bitget";
+  exchange: "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX" | "Bitget" | "Bybit";
   exchangeColor: string;
   symbol: string;
   rawSymbol?: string;
@@ -286,13 +290,14 @@ function computeAvgFundingRate2d(
 // ==================== Fetch All Rates ====================
 
 export async function fetchAllRates(): Promise<SearchExchangeRate[]> {
-  const [hyperliquidRates, gateioRates, binanceRates, lighterRates, okxRates, bitgetRates] = await Promise.allSettled([
+  const [hyperliquidRates, gateioRates, binanceRates, lighterRates, okxRates, bitgetRates, bybitRates] = await Promise.allSettled([
     fetchHyperliquidRates(),
     fetchGateioRates(),
     fetchBinanceRates(),
     fetchLighterRates(),
     fetchOkxRates(),
     fetchBitgetRates(),
+    fetchBybitRates(),
   ]);
 
   const results: SearchExchangeRate[] = [];
@@ -331,6 +336,12 @@ export async function fetchAllRates(): Promise<SearchExchangeRate[]> {
     results.push(...bitgetRates.value);
   } else {
     console.error("[Search] Bitget fetch failed:", bitgetRates.reason);
+  }
+
+  if (bybitRates.status === "fulfilled") {
+    results.push(...bybitRates.value);
+  } else {
+    console.error("[Search] Bybit fetch failed:", bybitRates.reason);
   }
 
   return results;
@@ -437,6 +448,34 @@ export function mapBitgetSearchRate(row: CanonicalFundingRateRow): SearchExchang
 async function fetchBitgetRates(): Promise<SearchExchangeRate[]> {
   const rows = await fetchBitgetCanonicalRates();
   return rows.map(mapBitgetSearchRate);
+}
+
+// ==================== Bybit Rates ====================
+
+export function mapBybitSearchRate(row: CanonicalFundingRateRow): SearchExchangeRate {
+  return {
+    exchange: "Bybit",
+    exchangeColor: "orange",
+    symbol: row.symbol,
+    rawSymbol: row.rawSymbol,
+    fundingRate: row.fundingRate,
+    markPrice: row.markPrice,
+    indexPrice: row.indexPrice ?? null,
+    lastPrice: row.lastPrice,
+    change24h: row.change24h,
+    quoteVolume: row.quoteVolume,
+    openInterest: row.openInterest,
+    notionalValue: row.notionalValue,
+    fundingInterval: row.fundingIntervalSeconds,
+    assetCategory: row.assetCategory,
+    bestBid: row.bestBid ?? undefined,
+    bestAsk: row.bestAsk ?? undefined,
+  };
+}
+
+async function fetchBybitRates(): Promise<SearchExchangeRate[]> {
+  const rows = await fetchBybitCanonicalRates();
+  return rows.map(mapBybitSearchRate);
 }
 
 // ==================== Lighter Rates ====================
@@ -590,10 +629,12 @@ export function filterByKeyword(
 
 export interface SearchDetailDependencies {
   fetchBitgetCanonicalDetail: typeof fetchBitgetCanonicalDetail;
+  fetchBybitCanonicalDetail: typeof fetchBybitCanonicalDetail;
 }
 
 const SEARCH_DETAIL_DEPENDENCIES: SearchDetailDependencies = {
   fetchBitgetCanonicalDetail,
+  fetchBybitCanonicalDetail,
 };
 
 export async function fetchDetailForSymbol(
@@ -612,6 +653,8 @@ export async function fetchDetailForSymbol(
       return fetchOkxDetail(rate.rawSymbol ?? `${rate.symbol}-USDT-SWAP`, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Bitget":
       return fetchBitgetDetail(rate, signal, dependencies.fetchBitgetCanonicalDetail);
+    case "Bybit":
+      return fetchBybitDetail(rate, signal, dependencies.fetchBybitCanonicalDetail);
     case "Lighter":
       return fetchLighterDetail(rate.marketId, rate.symbol, rate.bestBid, rate.bestAsk, signal);
   }
@@ -630,6 +673,16 @@ export function requireBitgetRawSymbol(
   return rate.rawSymbol;
 }
 
+/** Bybit display symbols are not transport identifiers either (raw BTCUSDT). */
+export function requireBybitRawSymbol(
+  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
+): string {
+  if (typeof rate.rawSymbol !== "string" || rate.rawSymbol.trim().length === 0) {
+    throw new TypeError(`Bybit rawSymbol is required for ${rate.symbol}`);
+  }
+  return rate.rawSymbol;
+}
+
 // ==================== Bitget Detail ====================
 
 async function fetchBitgetDetail(
@@ -638,6 +691,39 @@ async function fetchBitgetDetail(
   fetchCanonicalDetail: typeof fetchBitgetCanonicalDetail = fetchBitgetCanonicalDetail,
 ): Promise<DetailResult> {
   const rawSymbol = requireBitgetRawSymbol(rate);
+  const detail = await fetchCanonicalDetail({
+    symbol: rate.symbol,
+    rawSymbol,
+    marketKey: rawSymbol,
+    fundingIntervalSeconds: rate.fundingInterval,
+    bestBid: rate.bestBid,
+    bestAsk: rate.bestAsk,
+  }, "1d", { signal });
+  const fundingHistory = detail.fundingHistory.map((item) => ({
+    time: item.timestamp,
+    fundingRate: String(item.fundingRate),
+  }));
+  const historicalVolatility = computeHistoricalVolatility(detail.candles);
+  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+
+  return {
+    lastSettlementRate: detail.lastSettlementRate,
+    avgFundingRate2d: computeAvgFundingRate2d(fundingHistory),
+    historicalVolatility,
+    bidAskSpread: detail.bidAskSpread ?? computeBidAskSpread(rate.bestBid, rate.bestAsk),
+    avgFundingRate7d: avg7d,
+    avgFundingRate30d: avg30d,
+  };
+}
+
+// ==================== Bybit Detail ====================
+
+async function fetchBybitDetail(
+  rate: SearchExchangeRate,
+  signal?: AbortSignal,
+  fetchCanonicalDetail: typeof fetchBybitCanonicalDetail = fetchBybitCanonicalDetail,
+): Promise<DetailResult> {
+  const rawSymbol = requireBybitRawSymbol(rate);
   const detail = await fetchCanonicalDetail({
     symbol: rate.symbol,
     rawSymbol,
@@ -938,16 +1024,18 @@ export interface ProgressiveDetailLanes {
   generic: SearchExchangeRate[];
   lighter: SearchExchangeRate[];
   bitget: SearchExchangeRate[];
+  bybit: SearchExchangeRate[];
   okx: SearchExchangeRate[];
 }
 
 export function partitionProgressiveDetailRates(
   rates: readonly SearchExchangeRate[],
 ): ProgressiveDetailLanes {
-  const lanes: ProgressiveDetailLanes = { generic: [], lighter: [], bitget: [], okx: [] };
+  const lanes: ProgressiveDetailLanes = { generic: [], lighter: [], bitget: [], bybit: [], okx: [] };
   for (const rate of rates) {
     if (rate.exchange === "Lighter") lanes.lighter.push(rate);
     else if (rate.exchange === "Bitget") lanes.bitget.push(rate);
+    else if (rate.exchange === "Bybit") lanes.bybit.push(rate);
     else if (rate.exchange === "OKX") lanes.okx.push(rate);
     else lanes.generic.push(rate);
   }

@@ -56,6 +56,7 @@ const EXCHANGE_DOT_COLORS: Record<string, string> = {
   Lighter: "bg-purple-400",
   OKX: "bg-emerald-400",
   Bitget: "bg-teal-400",
+  Bybit: "bg-orange-400",
 };
 
 function formatSignedPercent(value: number, digits = 2): string {

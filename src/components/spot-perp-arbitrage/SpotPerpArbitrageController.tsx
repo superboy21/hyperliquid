@@ -23,6 +23,7 @@ import {
 } from "@/lib/impact-price";
 import { fetchSpotImpactSpread } from "@/lib/spot-impact-price";
 import type { ImpactDepthMode } from "@/lib/order-book-impact";
+import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candles";
 import type { SpotCandleResult } from "@/lib/spot-search-candles";
 import type { ComboCandleResult } from "@/lib/combo";
@@ -54,7 +55,7 @@ import {
 } from "@/lib/spot-perp-arbitrage";
 import SearchCandlesChart from "@/components/search/SearchCandlesChart";
 import ComboSearchCandlesChart from "@/components/search/ComboSearchCandlesChart";
-import SpotSearchCandlesChart from "@/components/spotsearch/SpotSearchCandlesChart";
+import SpotSearchCandlesChart from "@/components/spot-perp-arbitrage/SpotSearchCandlesChart";
 import ArbitrageMarketTable from "./ArbitrageMarketTable";
 import SpotContainingCombinationChart from "./SpotContainingCombinationChart";
 import MixedAnalyticsDashboard from "./MixedAnalyticsDashboard";
@@ -85,7 +86,7 @@ const QUOTE_LABELS: Record<SpotQuoteFilter, string> = {
   all: "全部",
 };
 
-const ALL_EXCHANGES: ArbitrageExchange[] = ["Hyperliquid", "Gate.io", "Binance", "Lighter", "OKX", "Bitget"];
+const ALL_EXCHANGES: ArbitrageExchange[] = ["Hyperliquid", "Gate.io", "Binance", "Lighter", "OKX", "Bitget", "Bybit"];
 
 export function normalizeChartRange(
   interval: SearchChartInterval,
@@ -365,10 +366,11 @@ export default function SpotPerpArbitrageController() {
     };
 
     void Promise.all([
-      runBounded(lanes.generic, 4, controller.signal, fetchPerp),
-      runBounded(lanes.lighter, 1, controller.signal, fetchPerp, 200),
-      runBounded(lanes.bitget, 1, controller.signal, fetchPerp),
-      runBounded(lanes.okx, 1, controller.signal, fetchPerp, 200),
+      runBounded(lanes.generic, DETAIL_LANE_PROFILE.generic.concurrency, controller.signal, fetchPerp),
+      runBounded(lanes.lighter, DETAIL_LANE_PROFILE.lighter.concurrency, controller.signal, fetchPerp, DETAIL_LANE_PROFILE.lighter.delayMs),
+      runBounded(lanes.bitget, DETAIL_LANE_PROFILE.bitget.concurrency, controller.signal, fetchPerp),
+      runBounded(lanes.bybit, DETAIL_LANE_PROFILE.bybit.concurrency, controller.signal, fetchPerp),
+      runBounded(lanes.okx, DETAIL_LANE_PROFILE.okx.concurrency, controller.signal, fetchPerp, DETAIL_LANE_PROFILE.okx.delayMs),
       runBounded(spotRows, 3, controller.signal, fetchSpot),
     ]);
     return () => controller.abort();

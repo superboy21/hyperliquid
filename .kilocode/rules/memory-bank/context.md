@@ -2,15 +2,20 @@
 
 ## Current State
 
-**Template Status**: ✅ Active Development - Six-Exchange Perpetual, Spot, and Combination Analysis Toolkit
+**Template Status**: ✅ Active Development - Seven-Exchange Perpetual, Spot, and Combination Analysis Toolkit
 
-The project now includes funding monitoring plus perpetual and spot search for Hyperliquid, Gate.io, Binance, OKX, Lighter, and Bitget, with:
+The project now includes funding monitoring plus perpetual search and Spot+Perp analysis for Hyperliquid, Gate.io, Binance, OKX, Lighter, Bitget, and Bybit, with:
 - Public market data for perpetual contracts and Hyperliquid HIP-3 markets
-- Six-exchange spot search with normalized pair identity, market comparison, and single-market charts
-- `/spot_perp_arbitrage` unified Spot+Perp search with source charts, ordered two-leg combinations, and visible-range analytics for Mixed, Perp/Perp, and Spot/Spot
+- `/spot_perp_arbitrage` unified seven-exchange Spot+Perp search with source charts, ordered two-leg combinations, and visible-range analytics for Mixed, Perp/Perp, and Spot/Spot; spot lists, candles, books, and Impact depth come from the shared spot data layer (`/api/spot/[exchange]`, `src/lib/spot-*`, `src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`) — the standalone `/spotsearch` page and its `SpotMarketSearch` UI were removed
+- Bybit implemented across `/funding`, perpetual `/search`, and `/spot_perp_arbitrage` (spot support enables the arbitrage leg)
+- Bybit perp scope: Trading USDT LinearPerpetual instruments via paginated/cacheable metadata and bulk linear tickers (funding/L1/OI/volume), exact raw symbols, variable interval-driven annualization, lazy settled funding history, ascending normalized V5 candles, on-demand depth
+- Bybit spot and perp categories namespace identical `BTCUSDT` symbols; spot uses bulk V5 tickers/candles/books, and arbitrage keeps kind-qualified market IDs
+- Bybit direct-first public V5 transport with a strict same-origin `/api/bybit` fallback and a globally shared controlled-throughput profile (max 2 in-flight requests, min 100ms between starts, <=10 starts/sec — deliberately far below Bybit's 600 requests/5 seconds/IP public cap); retry/backoff/Retry-After, timeout, FIFO, abort, and envelope guards remain; depth policies are spot 50/200 and perp 100/500
+- Bybit request-reduction: settled funding-history windows are interval-aware (one V5 request holds up to 200 rows) and capped at a conservative 90 days, cutting the 30-day detail history to 1 request for 4h/8h/1d funding and 4 for 1h; module-level TTL caches (settled history 5m, candles 120s) use raw-symbol/interval keys with strict range containment, defensive copies, and no writes on abort/failure; current ticker vs settled history semantics stay separate
 - Annualized funding rate display
 - 7-day and 30-day historical averages
 - Five-minute funding-list refresh, progressive search details, and on-demand charts
+- Existing indicators/charts retain the established logic: funding lists refresh every 5 minutes, list sampling avoids per-symbol order books, and history/details load on demand
 
 ## Recently Completed
 
@@ -83,6 +88,10 @@ The project now includes funding monitoring plus perpetual and spot search for H
 - [x] **Hyperliquid spot assetCtxs indexed by market index, not position**: `spotMetaAndAssetCtxs` returns 712 asset contexts indexed by spot market index (indices have gaps after delistings) while the spot universe has 321 entries. `normalizeHyperliquid` read `contexts[position]`, so every market after the first index gap (index 71) got the wrong context — e.g. HYPE/USDC (position 105, index 107) showed the dead market at index 105 with 0 volume. Now reads `contexts[marketIndex]` (`market.index ?? position`); test updated with a decoy context at position 1 to catch misalignment. Other consumers (hyperliquid.ts, normalizers/hyperliquid.ts) already index correctly.
 - [x] **Exchange exclusion filter on arbitrage search**: `searchArbitrageMarkets` gained a 5th param `excludedExchanges: ReadonlySet<ArbitrageExchange>` (new exported union of the six exchanges), applied to the eligible pool before matching (normal and combo). The arbitrage page renders six toggle chips (Hyperliquid/Gate.io/Binance/Lighter/OKX/Bitget) in the status row below the search box, left of the Perp/Spot readiness text; all on by default, clicking toggles an exchange off/on (excluded shows dimmed with line-through), selection/chart reset on change, and a dedicated message appears when all six are excluded. Validation passed with 176 tests/582 assertions, typecheck, and ESLint.
 - [x] **Funding-rate sign coloring in arbitrage table**: the 最新结算费率 / 平均费率（2天/7天/30天）cells in `ArbitrageMarketTable` now color by sign — green-400 for positive, red-400 for negative, gray-400 at zero — matching the perp `/search` page (`rateSignClass` helper; sign is preserved through annualization so raw-value sign matches the displayed value). Null cells stay "--". Validation passed with 176 tests/582 assertions and typecheck.
+- [x] **Bybit integration completed (2026-08-09)**: Bybit implemented in `/funding`, perpetual `/search`, `/spotsearch`, and `/spot_perp_arbitrage`. Canonical V5 adapter (paginated/cached Trading USDT LinearPerpetual metadata, bulk linear tickers, lazy 30-day funding history, ascending normalized candles, on-demand books) with exact raw symbols, variable-interval annualization, raw-keyed settlement hydration, direct-first transport with strict same-origin `/api/bybit` fallback, and spot 50/200 + perp 100/500 depth policies. Verified: typecheck, 273 tests/969 assertions, and production build pass.
+- [x] **Bybit controlled-throughput experiment (2026-08-09)**: `BYBIT_SCHEDULER_PROFILE` is globally shared by all Bybit traffic — max 2 in-flight requests with min 100ms between starts (<=10 starts/sec), deliberately far below Bybit's 600 requests/5 seconds/IP public cap; retry/backoff/Retry-After, timeout, FIFO, abort, direct-first/proxy fallback, and envelope guards unchanged. Independent Bybit detail rows on `/search` and `/spot_perp_arbitrage` run at concurrency 2 (via `src/lib/search-detail-lanes.ts`); all other exchange lane profiles are unchanged and single-symbol funding-history pagination stays sequential. Validation: targeted 60 tests, full suite 278 tests/983 assertions, typecheck, and production build all pass.
+- [x] **Bybit request-reduction optimization (2026-08-09)**: settled funding-history windows are now interval-aware (one V5 request holds up to 200 rows) and capped at a conservative 90 days, cutting the 30-day detail history from 5 requests to 1 for 4h/8h/1d funding and from 5 to 4 for 1h — the controlled scheduler stays at max 2 in-flight with 100ms start spacing, no rate increase. Module-level caches: settled funding history TTL 5m and candles TTL 120s, keyed by raw symbol/interval with strict range containment, defensive copies, and no cache writes on abort/failure; current ticker vs settled history semantics remain separate. `/search` keeps full price candle history but bounds only the Bybit funding overlay to the latest 90 days, so missing historical samples render chart gaps rather than fake zeros; combo and mixed charts preserve observed-zero vs missing semantics. `/api/bybit` permits funding-history windows up to 90 days under strict validation. Verified: live official 30d history query returns retCode 0; full suite 306 tests/1074 assertions, typecheck, and production build pass.
+- [x] **Standalone `/spotsearch` removed (2026-08-09)**: removed the standalone spot-search route and its page-only `SpotMarketSearch` component; `/spot_perp_arbitrage` retains all spot functionality through the shared data layer (`/api/spot/[exchange]`, `src/lib/spot-*`, `src/lib/spot-upstream.ts`, `src/lib/spot-fetch.ts`) and the moved `src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`; obsolete `/spotsearch` nav links removed from funding/search/arbitrage pages. Product routes are now `/funding`, `/search`, and `/spot_perp_arbitrage`. Verified: typecheck and production build pass; `/spotsearch` no longer appears as a generated route.
 
 ## Current Structure
 
@@ -92,23 +101,25 @@ The project now includes funding monitoring plus perpetual and spot search for H
 | `src/app/layout.tsx` | Root layout | ✅ Ready |
 | `src/app/globals.css` | Global styles | ✅ Ready |
 | `src/app/funding/page.tsx` | Funding rate monitor page | ✅ Ready |
-| `src/app/spotsearch/page.tsx` | Six-exchange spot search page | ✅ Ready |
-| `src/app/spot_perp_arbitrage/page.tsx` | Unified six-exchange Spot/Perp analysis page | ✅ Ready |
-| `src/app/api/spot/[exchange]/route.ts` | Strict six-exchange spot list/candle/book facade (uses shared `spot-upstream` builder) | ✅ Ready |
+| `src/app/spot_perp_arbitrage/page.tsx` | Unified seven-exchange Spot/Perp analysis page | ✅ Ready |
+| `src/app/api/spot/[exchange]/route.ts` | Strict seven-exchange spot list/candle/book facade (uses shared `spot-upstream` builder) | ✅ Ready |
 | `src/lib/spot-upstream.ts` | Shared spot upstream URL/init builder (server proxy + browser direct) | ✅ Ready |
 | `src/lib/spot-fetch.ts` | Direct-first spot fetch with proxy fallback | ✅ Ready |
 | `src/app/api/bitget/route.ts` | Legacy/diagnostic Bitget proxy (Cloudflare egress is blocked upstream) | ⚠️ Not used by browser adapter |
+| `src/app/api/bybit/route.ts` | Strict allowlisted Bybit V5 proxy; direct-first fallback target | ✅ Ready |
 | `src/components/funding/FundingMonitor.tsx` | Main funding monitor component | ✅ Ready |
 | `src/components/funding/BitgetFundingMonitor.tsx` | Bitget funding monitor integration | ✅ Ready |
-| `src/components/spotsearch/SpotMarketSearch.tsx` | Spot table, gated detail/impact loading, and chart selection | ✅ Ready |
-| `src/components/spotsearch/SpotSearchCandlesChart.tsx` | Two-panel spot candle and turnover/volume chart | ✅ Ready |
+| `src/components/funding/BybitFundingMonitor.tsx` | Bybit funding monitor integration | ✅ Ready |
+| `src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx` | Two-panel spot candle and turnover/volume chart (shared; moved from spotsearch) | ✅ Ready |
 | `src/components/spot-perp-arbitrage/` | Unified table/controller, spot-containing charts, and shared combination dashboard | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
 | `src/lib/adapters/bitget.ts` | Bitget canonical adapter and shared scheduler | ✅ Ready |
+| `src/lib/adapters/bybit.ts` | Bybit canonical V5 adapter and shared FIFO scheduler | ✅ Ready |
+| `src/lib/search-detail-lanes.ts` | Shared per-exchange detail lane profile (Bybit concurrency 2) | ✅ Ready |
 | `src/lib/spot-search.ts` | Spot market normalization, identity, lists, and details | ✅ Ready |
 | `src/lib/spot-search-candles.ts` | Spot candle transport and normalization | ✅ Ready |
 | `src/lib/spot-impact-price.ts` | Max-depth spot Impact spread requests | ✅ Ready |
-| `src/lib/spot-combo.ts` | Spot candle combination utility (not wired to Spot Search UI) | ✅ Ready |
+| `src/lib/spot-combo.ts` | Spot candle combination utility (not wired to any page UI) | ✅ Ready |
 | `src/lib/spot-perp-arbitrage/` | Unified market/query/selection, candle alignment, combination, and analytics domain | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
 
@@ -125,7 +136,7 @@ The project now includes funding monitoring plus perpetual and spot search for H
 
 ### Spot/Perp Analysis Features
 
-1. **Unified Search**: Six-exchange Spot+Perp results; Spot defaults to USDT and supports USDC/U/USD1/USD/all
+1. **Unified Search**: Seven-exchange Spot+Perp results; Spot defaults to USDT and supports USDC/U/USD1/USD/all
 2. **Explicit Ordered Grammar**: One `-` or `/` selects spread or ratio terms, and click order defines both legs (`BTC/USDT` is a ratio query)
 3. **Source and Combination Charts**: Source single charts plus legacy Perp/Perp and aligned Spot/Spot or mixed charts
 4. **Shorter Exact Overlap**: Combinations intersect exact candle timestamps and use the shorter aligned history
@@ -139,11 +150,13 @@ The project now includes funding monitoring plus perpetual and spot search for H
 - `spotMetaAndAssetCtxs`: HyperCore spot metadata/context (not HIP-3 funding)
 - `fundingHistory`: Historical funding data (up to 30 days)
 - Direct `https://api.bitget.com/api/v3/market/*` browser requests for Bitget public market data, scoped to online USDT perpetuals
-- Bitget Funding/Search: Canonical rates load with the six-exchange universe; search details progress only after a matching query and charts load when selected
+- Bitget Funding/Search: Canonical rates load with the seven-exchange universe; search details progress only after a matching query and charts load when selected
+- Direct-first `https://api.bybit.com/v5/*` browser requests for Bybit public market data, scoped to Trading USDT LinearPerpetuals, with a strict same-origin `/api/bybit` fallback on transient/network/CORS/geo failures only (validation and business errors never fall back; proxy parameters are allowlisted)
+- Bybit Funding/Search/Spot/Arbitrage: Canonical rates load with the seven-exchange universe; search details progress only after a matching query and charts load when selected
 
 ## Current Focus
 
-Funding, perpetual Search, six-exchange Spot Search, and `/spot_perp_arbitrage` analysis are complete with final Oracle GO. Preserve browser-direct Bitget perpetual transport, five-minute funding refresh, exact raw-symbol dispatch, bounded request scheduling, search-gated expensive spot detail calls, compact ordered query semantics, exact aligned overlap, and visible-range combination analytics. The Spot/Perp page is analytical only and must not imply automated execution.
+Funding, perpetual Search, and `/spot_perp_arbitrage` Spot+Perp analysis are complete; the standalone `/spotsearch` page was removed, but the shared spot data layer (lists, candles, books, Impact depth) is preserved as a dependency of the arbitrage page. Preserve direct-first Bybit transport with its strict same-origin `/api/bybit` fallback, browser-direct Bitget perpetual transport, five-minute funding refresh, exact raw-symbol dispatch, bounded request scheduling, search-gated expensive spot detail calls, compact ordered query semantics, exact aligned overlap, and visible-range combination analytics. The Spot/Perp page is analytical only and must not imply automated execution.
 
 ## Quick Start Guide
 
@@ -242,3 +255,7 @@ export async function GET() {
 | 2026-08-04 | Fixed Hyperliquid spot 24h volume showing 0 (e.g. HYPE/USDC): `normalizeHyperliquid` read assetCtxs by universe position instead of market index; `spotMetaAndAssetCtxs` indexes contexts by market index with gaps after delistings (712 ctxs vs 321 universe entries), so all markets after the first gap read the wrong (often dead, 0-volume) context. Now `contexts[marketIndex]`; live API check: HYPE/USDC dayNtlVlm 33.9M. Validation passed with 175 tests/578 assertions and typecheck. |
 | 2026-08-04 | Added per-exchange toggle chips to `/spot_perp_arbitrage` (below search box, left of Perp/Spot readiness): all six exchanges on by default, click to exclude/include; `searchArbitrageMarkets` gained `excludedExchanges` param applied before matching. Selection/chart reset on change; dedicated message when all excluded. Validation passed with 176 tests/582 assertions, typecheck, and ESLint. |
 | 2026-08-04 | Arbitrage table funding-rate columns (最新结算费率, 平均费率 2d/7d/30d) now colored by sign: green positive / red negative / gray zero, same as the perp `/search` page. Validation passed with 176 tests/582 assertions and typecheck. |
+| 2026-08-09 | Completed Bybit integration across `/funding`, `/search`, `/spotsearch`, and `/spot_perp_arbitrage`: canonical V5 adapter (paginated/cached Trading USDT LinearPerpetual metadata, bulk linear tickers, lazy 30-day funding history, ascending normalized V5 candles, on-demand books), exact raw symbols with raw-keyed settlement hydration, variable-interval annualization, direct-first public V5 transport with strict same-origin `/api/bybit` fallback (interval-aware proxy validation, allowlisted parameters), and shared depth policies (spot 50/200, perp 100/500). Verified: typecheck, 273 tests/969 assertions, and production build pass. |
+| 2026-08-09 | Bybit controlled-throughput experiment: globally shared `BYBIT_SCHEDULER_PROFILE` caps at 2 in-flight requests with 100ms minimum start spacing (<=10 starts/sec, deliberately far below Bybit's 600 requests/5 seconds/IP public cap); retry/backoff/Retry-After, timeout, FIFO, abort, direct-first/proxy fallback, and envelope guards preserved. Bybit detail lanes run at concurrency 2 on `/search` and `/spot_perp_arbitrage` (`src/lib/search-detail-lanes.ts`); other exchange lanes and single-symbol pagination unchanged. Validation: targeted 60 tests, full suite 278 tests/983 assertions, typecheck, and production build pass. |
+| 2026-08-09 | Bybit request-reduction optimization: settled funding-history windows are interval-aware (one V5 request holds up to 200 rows) and capped at a conservative 90 days, cutting the 30-day detail history from 5 to 1 requests for 4h/8h/1d funding and from 5 to 4 for 1h; module TTL caches (settled history 5m, candles 120s) with raw-symbol/interval/range containment, defensive copies, and no writes on abort/failure; current ticker vs settled history semantics stay separate. `/search` retains full price candle history while bounding only the Bybit funding overlay to the latest 90 days (missing samples render chart gaps, never fake zeros; combo/mixed charts preserve observed-zero vs missing semantics); `/api/bybit` permits up-to-90-day history windows under strict validation. Verified: live official 30d history query returns retCode 0; full suite 306 tests/1074 assertions, typecheck, and production build pass. |
+| 2026-08-09 | Removed standalone `/spotsearch` page and its page-only `SpotMarketSearch` component; `/spot_perp_arbitrage` retains spot functionality via the shared data layer (`/api/spot/[exchange]`, `src/lib/spot-*`) and the moved `src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`; obsolete `/spotsearch` nav links removed from funding/search/arbitrage pages. Product routes are now `/funding`, `/search`, `/spot_perp_arbitrage`. Verified: typecheck and production build pass. |

@@ -1,12 +1,11 @@
 # HyperTools - 跨交易所市场工具包
 
-一个面向加密市场交易者的跨交易所工具包，提供 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 六家交易所的永续合约资金费率监控、合约/现货搜索与 Spot/Perp 组合分析。
+一个面向加密市场交易者的跨交易所工具包，提供 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 六家交易所的永续合约资金费率监控、永续搜索与 Spot/Perp 组合分析。
 
 ## 功能特性
 
 - **六交易所资金费率监控**：追踪 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 的永续合约资金费率
-- **六交易所现货搜索**：统一搜索和比较六家交易所的现货价格、成交额、波动率与盘口价差
-- **Spot/Perp 组合分析**：统一搜索六家交易所的现货与永续市场，按选择顺序分析 Perp/Perp、Spot/Spot 或混合价差与比率
+- **Spot/Perp 组合分析**：统一搜索六家交易所的现货与永续市场，按选择顺序分析 Perp/Perp、Spot/Spot 或混合价差与比率；现货侧涵盖价格、成交额、波动率与盘口价差
 - **历史数据分析**：查看 30 天资金费率历史及统计指标
 - **智能排序与筛选**：按费率、价格、成交量、持仓量、24h 涨跌幅排序
 - **资产类型筛选**：按标准资产、XYZ-Hip3、Vntl-Hip3、Para-Hip3、Km-Hip3 分类查看
@@ -29,7 +28,6 @@ src/
 ├── app/                    # Next.js App Router
 │   ├── funding/            # 资金费率监控页面
 │   ├── search/             # 跨交易所搜索页面
-│   ├── spotsearch/         # 跨交易所现货搜索页面
 │   ├── spot_perp_arbitrage/ # Spot/Perp 组合分析页面
 │   ├── api/spot/[exchange] # 六交易所现货公开市场严格代理
 │   ├── api/bitget/         # Bitget V3 UTA 公开市场 API 服务端代理
@@ -42,10 +40,8 @@ src/
 │   │   └── ...
 │   ├── search/             # 永续合约搜索组件
 │   │   └── CrossExchangeSearch.tsx
-│   ├── spotsearch/         # 现货搜索与图表组件
-│   │   ├── SpotMarketSearch.tsx
-│   │   └── SpotSearchCandlesChart.tsx
-│   └── spot-perp-arbitrage/ # 统一市场表、组合图表与混合分析面板
+│   └── spot-perp-arbitrage/ # 统一市场表、组合图表、混合分析面板与共享现货图表
+│       └── SpotSearchCandlesChart.tsx
 ├── lib/                    # 工具函数与服务
 │   ├── hyperliquid.ts      # Hyperliquid API 封装
 │   ├── gateio.ts           # Gate.io API 封装
@@ -87,8 +83,8 @@ Hyperliquid 资金费率监控主组件，包含：
 - 组合图表（Spread/Ratio 模式）
 - 历史资金费率与成交额子图
 
-### SpotMarketSearch.tsx
-六交易所现货搜索与比较工具，表格包含六列：交易所交易对、中间价、24 小时涨跌、24 小时成交额、历史波动率和买卖价差（Top/Impact）。首次仅加载市场列表；输入有效搜索并命中结果后，才渐进获取波动率与 Top 价差。Impact 默认使用 Hyperliquid 20 档、其他交易所 100 档，也可切换到各交易所最大 REST 深度。点击单个市场后按需加载双面板图表：上方为 K 线，下方可切换报价币成交额或基础币成交量；现货图表不包含资金费率。
+### SpotSearchCandlesChart.tsx
+现货双面板图表（共享组件，位于 `src/components/spot-perp-arbitrage/`）：上方为 K 线，下方可切换报价币成交额或基础币成交量；现货图表不包含资金费率。该组件由 `/spot_perp_arbitrage` 的选中现货市场来源图表复用。独立的 `/spotsearch` 页面及其 `SpotMarketSearch` 控制器已移除；现货列表、K 线、订单簿与 Impact 计算继续由共享数据层（`/api/spot/[exchange]`、`src/lib/spot-*`）提供。
 
 ### SpotPerpArbitrageController.tsx
 `/spot_perp_arbitrage` 是仅用于市场分析的六交易所 Spot+Perp 统一搜索页。现货默认筛选 `USDT`，可切换 `USDC`、`U`、`USD1`、`USD` 或全部；普通查询可选择单市场并复用来源图表。紧凑语法 `A-B`/`A/B` 分别生成价差/比率，点击顺序确定第一、第二腿；其中 `BTC/USDT` 明确按 BTC 与 USDT 两项的比率查询解析，而不是精确现货交易对查询。
@@ -173,13 +169,9 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 - `ETH-BTC`：价差图（Spread）
 - `ETH/BTC`：比率图（Ratio）
 
-### 跨交易所现货搜索
-
-`/spotsearch` 通过统一现货市场身份搜索 Hyperliquid、Gate.io、Binance、Lighter、OKX 和 Bitget。市场列表并行加载；历史波动率、Top/Impact 价差仅在搜索命中后渐进请求，单市场 K 线在点击结果后按需请求。
-
 ### Spot/Perp 组合分析
 
-`/spot_perp_arbitrage` 将六家交易所的 Spot 与 Perp 市场合并到同一查询和结果表中。页面支持来源单市场图表，以及按选择顺序生成的 Perp/Perp、Spot/Spot 和混合组合图；组合窗口以精确对齐后的较短历史为准，混合统计与图表共享同一可见范围。本功能用于观察与统计，不包含自动套利执行。
+`/spot_perp_arbitrage` 将六家交易所的 Spot 与 Perp 市场合并到同一查询和结果表中。页面支持来源单市场图表，以及按选择顺序生成的 Perp/Perp、Spot/Spot 和混合组合图；组合窗口以精确对齐后的较短历史为准，混合统计与图表共享同一可见范围。现货列表、K 线、订单簿与 Impact 深度继续由共享数据层提供（`/api/spot/[exchange]`、`src/lib/spot-*`、`src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`）。本功能用于观察与统计，不包含自动套利执行。
 
 ### 数据更新频率
 

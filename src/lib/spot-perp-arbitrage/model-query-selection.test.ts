@@ -177,6 +177,20 @@ describe("strict query grammar and matching", () => {
     ]);
     expect(searchArbitrageMarkets(markets, "usdt", DEFAULT_SPOT_QUOTE_FILTER, "all", new Set<"Binance" | "OKX">(["Binance", "OKX"])).markets).toEqual([]);
   });
+
+  test("Bybit joins the arbitrage exchange union for matching and exclusion, keeping perp/spot market IDs separate", () => {
+    const bybitSpot = asSpotMarket(spot({ exchange: "Bybit", exchangeColor: "orange", pair: "BTC/USDT", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT" }));
+    const bybitPerp = asPerpMarket(perp({ exchange: "Bybit", symbol: "BTC", rawSymbol: "BTCUSDT" }));
+    const markets = [bybitSpot, bybitPerp];
+
+    expect(marketId(bybitSpot)).toBe("spot:Bybit:BTCUSDT");
+    expect(marketId(bybitPerp)).toBe("perp:Bybit:BTCUSDT");
+    expect(searchArbitrageMarkets(markets, "btc").markets.map(marketId)).toEqual([
+      marketId(bybitSpot), marketId(bybitPerp),
+    ]);
+    expect(searchArbitrageMarkets(markets, "btc", DEFAULT_SPOT_QUOTE_FILTER, "all", new Set<"Bybit">(["Bybit"])).markets).toEqual([]);
+    expect(searchArbitrageMarkets(markets, "btc", DEFAULT_SPOT_QUOTE_FILTER, "spot").markets.map(marketId)).toEqual([marketId(bybitSpot)]);
+  });
 });
 
 describe("ordered selection transition", () => {

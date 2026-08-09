@@ -8,9 +8,10 @@ import BinanceFundingMonitor from "@/components/funding/BinanceFundingMonitor";
 import LighterFundingMonitor from "@/components/funding/LighterFundingMonitor";
 import OkxFundingMonitor from "@/components/funding/OkxFundingMonitor";
 import BitgetFundingMonitor from "@/components/funding/BitgetFundingMonitor";
+import BybitFundingMonitor from "@/components/funding/BybitFundingMonitor";
 import { FUNDING_THEME_CLASSES, type FundingThemeKey } from "@/components/funding/fundingThemes";
 
-type Exchange = "hyperliquid" | "gate" | "binance" | "lighter" | "okx" | "bitget";
+type Exchange = "hyperliquid" | "gate" | "binance" | "lighter" | "okx" | "bitget" | "bybit";
 
 interface ExchangeConfig {
   id: Exchange;
@@ -63,6 +64,13 @@ const EXCHANGE_CONFIG: ExchangeConfig[] = [
     iconPath: "M4 7h10l-3-3m3 3-3 3m9 7H10l3 3m-3-3 3-3",
     component: <BitgetFundingMonitor />,
   },
+  {
+    id: "bybit",
+    name: "Bybit",
+    color: "orange",
+    iconPath: "M7 4h10M7 4v16M7 10h8M7 16h10",
+    component: <BybitFundingMonitor />,
+  },
 ];
 
 export default function FundingPage() {
@@ -94,12 +102,6 @@ export default function FundingPage() {
                 className="inline-flex items-center gap-2 rounded-lg border border-indigo-600 bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:border-indigo-500 hover:bg-indigo-500"
               >
                 永续合约搜索
-              </Link>
-              <Link
-                href="/spotsearch"
-                className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:border-emerald-500 hover:bg-emerald-500"
-              >
-                现货市场搜索
               </Link>
             </nav>
           </div>

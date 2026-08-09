@@ -51,8 +51,8 @@ export function marketMatches(market: ArbitrageMarket, term: string): boolean {
 
 export type MarketKindFilter = "all" | "spot" | "perp";
 
-/** The six exchanges shared by spot and perp universes. */
-export type ArbitrageExchange = "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX" | "Bitget";
+/** The exchanges shared by spot and perp universes. */
+export type ArbitrageExchange = "Hyperliquid" | "Gate.io" | "Binance" | "Lighter" | "OKX" | "Bitget" | "Bybit";
 
 const EMPTY_EXCLUDED_EXCHANGES: ReadonlySet<ArbitrageExchange> = new Set();
 

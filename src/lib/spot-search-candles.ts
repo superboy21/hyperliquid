@@ -27,7 +27,7 @@ const INTERVAL_MS: Record<SpotChartInterval, number> = {
 };
 
 const MAX_CANDLES: Record<SpotExchangeName, number> = {
-  Binance: 1000, OKX: 300, "Gate.io": 1000, Bitget: 1000, Hyperliquid: 5000, Lighter: 500,
+  Binance: 1000, OKX: 300, "Gate.io": 1000, Bitget: 1000, Hyperliquid: 5000, Lighter: 500, Bybit: 1000,
 };
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -59,6 +59,11 @@ export function normalizeSpotCandles(
   if (exchange === "Lighter") {
     rows = Array.isArray(root?.candles) ? root.candles : Array.isArray(root?.c) ? root.c : rows;
   }
+  if (exchange === "Bybit") {
+    // V5 envelope: { retCode, result: { list: [[start,open,high,low,close,volume,turnover], ...] } }
+    const result = object(root?.result);
+    rows = Array.isArray(result?.list) ? result.list : rows;
+  }
   const result: SpotCandlePoint[] = [];
   for (const value of rows) {
     let normalized: SpotCandlePoint | null = null;
@@ -68,6 +73,9 @@ export function normalizeSpotCandles(
         normalized = candle(value[0], [value[5], value[3], value[4], value[2], value[6], value[1]], interval);
       } else if (exchange === "Bitget") {
         // [timestamp, open, high, low, close, base volume, quote volume, USDT volume]
+        normalized = candle(value[0], [value[1], value[2], value[3], value[4], value[5], value[6]], interval);
+      } else if (exchange === "Bybit") {
+        // [start, open, high, low, close, volume, turnover] — turnover is quote currency
         normalized = candle(value[0], [value[1], value[2], value[3], value[4], value[5], value[6]], interval);
       } else {
         normalized = candle(value[0], [value[1], value[2], value[3], value[4], value[5], value[7] ?? value[6]], interval);

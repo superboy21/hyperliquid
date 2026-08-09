@@ -20,7 +20,6 @@ export default function SpotPerpArbitragePage() {
             </div>
             <nav className="flex flex-wrap items-center gap-2" aria-label="市场工具导航">
               <Link href="/search" className="rounded-lg border border-indigo-600/70 bg-indigo-600/15 px-3 py-2 text-sm font-medium text-indigo-200 transition-colors hover:bg-indigo-600/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300">永续搜索</Link>
-              <Link href="/spotsearch" className="rounded-lg border border-emerald-600/70 bg-emerald-600/15 px-3 py-2 text-sm font-medium text-emerald-200 transition-colors hover:bg-emerald-600/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300">现货搜索</Link>
               <Link href="/" className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm font-medium text-gray-300 transition-colors hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">工具首页</Link>
             </nav>
           </div>

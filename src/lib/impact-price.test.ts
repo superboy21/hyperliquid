@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { fetchImpactSpread, normalizeGatePerpOrderBook } from "./impact-price";
+import type { BybitRequest } from "./adapters/bybit";
 
 const gateBook = {
   bids: [{ p: "100", s: 3 }, { p: "99", s: 7 }],
@@ -45,5 +46,28 @@ describe("Perp impact depth mode", () => {
 
     expect(new URL(urls[0]).searchParams.get("limit")).toBe("100");
     expect(new URL(urls[1]).searchParams.get("limit")).toBe("1000");
+  });
+
+  test("Bybit perp impact uses the core linear adapter book at shared resolved depths, never polling tickers", async () => {
+    const calls: Array<{ action: string; limit?: string }> = [];
+    const request: BybitRequest = async (action, params) => {
+      calls.push({ action, limit: params.limit });
+      return { s: "BTCUSDT", b: [["99", "20"]], a: [["101", "20"]] };
+    };
+
+    const standard = await fetchImpactSpread("Bybit", "BTCUSDT", undefined, 1000, "standard", request);
+    const max = await fetchImpactSpread("Bybit", "BTCUSDT", undefined, 1000, "max", request);
+
+    expect(calls).toEqual([
+      { action: "orderbook", limit: "100" },
+      { action: "orderbook", limit: "500" },
+    ]);
+    expect(standard).toBeCloseTo(2, 10);
+    expect(max).toBeCloseTo(2, 10);
+  });
+
+  test("Bybit perp impact fails as insufficient instead of fabricating values on thin books", async () => {
+    const request: BybitRequest = async () => ({ s: "BTCUSDT", b: [["99", "1"]], a: [["101", "1"]] });
+    expect(await fetchImpactSpread("Bybit", "BTCUSDT", undefined, 10000, "max", request)).toBe("insufficient");
   });
 });

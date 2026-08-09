@@ -1,6 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   calculateSpotHistoricalVolatility,
+  fetchAllSpotMarkets,
+  fetchSpotDetail,
   filterSpotMarkets,
   normalizeSpotMarkets,
   spotMarketIdentity,
@@ -72,4 +74,57 @@ describe("spot search contracts", () => {
     expect(calculateSpotHistoricalVolatility(closes)).toBeCloseTo(expected, 12);
     expect(calculateSpotHistoricalVolatility(closes.slice(0, 2))).toBeNull();
   });
+
+  test("normalizes Bybit V5 spot tickers, keeping only known-quote markets and decomposing BTCUSDT exactly", () => {
+    const rows = normalizeSpotMarkets("Bybit", {
+      retCode: 0,
+      retMsg: "OK",
+      result: { list: [
+        { symbol: "BTCUSDT", lastPrice: "100", bid1Price: "99.5", ask1Price: "100.5", price24hPcnt: "0.025", turnover24h: "5000", volume24h: "50" },
+        { symbol: "ETHUSDC", lastPrice: "2000", bid1Price: "1999", ask1Price: "2001", price24hPcnt: "-0.01", turnover24h: "3000", volume24h: "1.5" },
+        { symbol: "1000PEPEUSDT", lastPrice: "0.01", bid1Price: "0.0099", ask1Price: "0.0101", price24hPcnt: "0.5", turnover24h: "700", volume24h: "70000" },
+        { symbol: "NOPEXXX", lastPrice: "1", turnover24h: "1" },
+      ] },
+    }, 1);
+
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({
+      exchange: "Bybit", exchangeColor: "orange", pair: "BTC/USDT", baseAsset: "BTC", quoteAsset: "USDT",
+      rawSymbol: "BTCUSDT", marketKey: "BTCUSDT", bestBid: 99.5, bestAsk: 100.5, midPrice: 100,
+      change24h: 2.5, quoteVolume: 5000, baseVolume: 50, fetchedAt: 1,
+    });
+    expect(rows[1]).toMatchObject({ pair: "ETH/USDC", baseAsset: "ETH", quoteAsset: "USDC", change24h: -1 });
+    expect(rows[2]).toMatchObject({ pair: "1000PEPE/USDT", baseAsset: "1000PEPE", quoteAsset: "USDT" });
+  });
+
+  test("participates in fetchAllSpotMarkets through the direct-first transport", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).includes("api.bybit.com")) {
+        return Response.json({ retCode: 0, result: { list: [
+          { symbol: "BTCUSDT", lastPrice: "100", bid1Price: "99.5", ask1Price: "100.5", price24hPcnt: "0.025", turnover24h: "5000", volume24h: "50" },
+        ] } });
+      }
+      return Response.json([]);
+    });
+    const rows = await fetchAllSpotMarkets();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ exchange: "Bybit", pair: "BTC/USDT", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT" });
+  });
+
+  test("reads Bybit best bid/ask from the V5 book envelope for spot detail", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/v5/market/kline")) return Response.json({ retCode: 0, result: { list: [] } });
+      return Response.json({ retCode: 0, result: { s: "BTCUSDT", b: [["99", "3"]], a: [["101", "3"]] } });
+    });
+    const detail = await fetchSpotDetail({ ...row, exchange: "Bybit", exchangeColor: "orange", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT" }, undefined);
+    expect(detail.bestBid).toBe(99);
+    expect(detail.bestAsk).toBe(101);
+    expect(detail.topSpread).toBeCloseTo(2, 10);
+    expect(detail.historicalVolatility).toBeNull();
+  });
+});
+
+afterEach(() => {
+  (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
 });

@@ -30,12 +30,6 @@ export default function SearchPage() {
                 现货 / 永续组合
               </Link>
               <Link
-                href="/spotsearch"
-                className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:border-emerald-500 hover:bg-emerald-500"
-              >
-                现货市场搜索
-              </Link>
-              <Link
                 href="/funding"
                 className="inline-flex items-center gap-2 rounded-lg border border-blue-600 bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:border-blue-500 hover:bg-blue-500"
               >

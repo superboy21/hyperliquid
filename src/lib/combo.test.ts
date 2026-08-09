@@ -252,4 +252,72 @@ describe("alignComboData", () => {
     ]);
     expect(forward.fundingRates).toHaveLength(4);
   });
+
+  test("derived funding is marked unavailable when either leg has sampleCount 0", () => {
+    const first = makeCandleResult({
+      fundingRates: [
+        { time: 1000, rate: 0.01, annualizedRate: 87.6, sampleCount: 1 },
+        { time: 2000, rate: 0.02, annualizedRate: 175.2, sampleCount: 1 },
+      ],
+    });
+    const second = makeCandleResult({
+      exchange: "OKX",
+      symbol: "ETH",
+      fundingRates: [
+        { time: 1000, rate: 0.005, annualizedRate: 43.8, sampleCount: 1 },
+        // Missing bucket (sampleCount 0), NOT an observed zero.
+        { time: 2000, rate: 0, annualizedRate: 0, sampleCount: 0 },
+      ],
+    });
+
+    const result = alignComboData(first, second, "spread");
+
+    expect(result.fundingRates).toHaveLength(2);
+    expect(result.fundingRates[0]).toEqual({ time: 1000, rate: 0.005, annualizedRate: 43.8 });
+    // Never computed as 0.02 - 0: the difference is unavailable, not a real spread.
+    expect(result.fundingRates[1]).toEqual({ time: 2000, rate: 0, annualizedRate: 0, sampleCount: 0 });
+    // Dashboard keeps only the actually-sampled point.
+    expect(result.dashboardFundingRates).toEqual([{ time: 1000, rate: 0.005, annualizedRate: 43.8 }]);
+  });
+
+  test("either leg's missing sample marks the derived funding unavailable", () => {
+    const first = makeCandleResult({
+      fundingRates: [
+        { time: 1000, rate: 0, annualizedRate: 0, sampleCount: 0 }, // leg 1 missing
+        { time: 2000, rate: 0.03, annualizedRate: 0.3, sampleCount: 1 },
+      ],
+    });
+    const second = makeCandleResult({
+      exchange: "OKX",
+      symbol: "ETH",
+      fundingRates: [
+        { time: 1000, rate: 0.004, annualizedRate: 0.04, sampleCount: 1 },
+        { time: 2000, rate: 0.01, annualizedRate: 0.1, sampleCount: 1 },
+      ],
+    });
+
+    const result = alignComboData(first, second, "spread");
+
+    expect(result.fundingRates[0]).toEqual({ time: 1000, rate: 0, annualizedRate: 0, sampleCount: 0 });
+    expect(result.fundingRates[1].time).toBe(2000);
+    expect(result.fundingRates[1].rate).toBeCloseTo(0.02, 12);
+    expect(result.fundingRates[1].annualizedRate).toBeCloseTo(0.2, 12);
+    expect(result.dashboardFundingRates?.map((point) => point.time)).toEqual([2000]);
+  });
+
+  test("an observed zero with a real sample still computes the spread", () => {
+    const first = makeCandleResult({
+      fundingRates: [{ time: 1000, rate: 0, annualizedRate: 0, sampleCount: 1 }],
+    });
+    const second = makeCandleResult({
+      exchange: "OKX",
+      symbol: "ETH",
+      fundingRates: [{ time: 1000, rate: 0.002, annualizedRate: 0.02, sampleCount: 1 }],
+    });
+
+    const result = alignComboData(first, second, "spread");
+
+    expect(result.fundingRates[0]).toEqual({ time: 1000, rate: -0.002, annualizedRate: -0.02 });
+    expect(result.dashboardFundingRates).toHaveLength(1);
+  });
 });

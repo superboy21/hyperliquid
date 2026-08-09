@@ -9,7 +9,7 @@ import type { SpotExchangeName } from "./spot-search";
 
 const SLUGS: Record<SpotExchangeName, string> = {
   Hyperliquid: "hyperliquid", "Gate.io": "gateio", Binance: "binance",
-  Lighter: "lighter", OKX: "okx", Bitget: "bitget",
+  Lighter: "lighter", OKX: "okx", Bitget: "bitget", Bybit: "bybit",
 };
 
 /**

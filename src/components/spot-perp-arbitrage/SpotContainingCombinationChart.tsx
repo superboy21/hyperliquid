@@ -100,7 +100,13 @@ export default function SpotContainingCombinationChart({ result }: Props) {
       value: result.composition === "spot-spot" ? point.leg1Turnover?.value ?? null : point.minimumTurnover,
       itemStyle: { color: risingColors[index] },
     }));
-    const fundingByTime = new Map(result.funding.map((point) => [point.time, point.annualizedRate * 100]));
+    // sampleCount === 0 marks a period with no funding samples: drop it so the
+    // funding line renders a gap instead of a fake 0% (observed zeros still render).
+    const fundingByTime = new Map(
+      result.funding
+        .filter((point) => point.sampleCount !== 0)
+        .map((point) => [point.time, point.annualizedRate * 100]),
+    );
     const secondSubData = result.composition === "spot-spot"
       ? result.points.map((point, index) => ({ value: point.leg2Turnover?.value ?? null, itemStyle: { color: risingColors[index] } }))
       : result.points.map((point) => fundingByTime.get(point.openTime) ?? null);

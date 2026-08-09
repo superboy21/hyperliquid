@@ -28,4 +28,34 @@ describe("Spot impact depth mode", () => {
     expect(new URL(urls[1], "http://localhost").searchParams.get("limit")).toBe("5000");
     expect(new URL(urls[2], "http://localhost").searchParams.get("limit")).toBe("5000");
   });
+
+  test("Bybit spot impact unwraps the V5 book envelope at documented 50/200 depth", async () => {
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      urls.push(String(input));
+      return Response.json({ retCode: 0, retMsg: "OK", result: { s: "BTCUSDT", b: [["99", "20"]], a: [["101", "20"]] } });
+    });
+    const bybitRow: SpotMarketRow = {
+      ...row, exchange: "Bybit", exchangeColor: "orange", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
+    };
+
+    const standard = await fetchSpotImpactSpread(bybitRow, 1000);
+    const max = await fetchSpotImpactSpread(bybitRow, 1000, undefined, "max");
+
+    expect(new URL(urls[0], "http://localhost").searchParams.get("limit")).toBe("50");
+    expect(new URL(urls[1], "http://localhost").searchParams.get("limit")).toBe("200");
+    expect(new URL(urls[0], "http://localhost").searchParams.get("category")).toBe("spot");
+    expect(standard).toBeCloseTo(2, 10);
+    expect(max).toBeCloseTo(2, 10);
+  });
+
+  test("Bybit spot impact reports insufficient rather than bogus values on thin books", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ retCode: 0, result: { s: "BTCUSDT", b: [["99", "1"]], a: [["101", "1"]] } }),
+    );
+    const bybitRow: SpotMarketRow = {
+      ...row, exchange: "Bybit", exchangeColor: "orange", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
+    };
+    expect(await fetchSpotImpactSpread(bybitRow, 10000, undefined, "max")).toBe("insufficient");
+  });
 });

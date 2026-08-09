@@ -7,6 +7,7 @@ import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
 import { okxFetch } from "./adapters/okx";
 import { fetchBitgetImpactSpread } from "./adapters/bitget";
+import { fetchBybitImpactSpread, type BybitRequest } from "./adapters/bybit";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
 import {
   computeOrderBookImpactSpread,
@@ -317,6 +318,7 @@ export async function fetchImpactSpread(
   signal?: AbortSignal,
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
   depthMode: ImpactDepthMode = "standard",
+  bybitRequest?: BybitRequest,
 ): Promise<ImpactSpreadResult> {
   let book: NormalizedOrderBook | null = null;
 
@@ -346,6 +348,9 @@ export async function fetchImpactSpread(
       break;
     case "Bitget":
       return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
+    case "Bybit":
+      // Core adapter linear order book + shared impact mechanism; never bulk-poll per-symbol books.
+      return fetchBybitImpactSpread(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode));
     default:
       return null;
   }

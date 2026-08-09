@@ -1,4 +1,4 @@
-export type FundingThemeKey = "blue" | "cyan" | "yellow" | "purple" | "emerald" | "teal";
+export type FundingThemeKey = "blue" | "cyan" | "yellow" | "purple" | "emerald" | "teal" | "orange";
 
 export interface FundingThemeClasses {
   spinner: string;
@@ -51,5 +51,12 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-teal-600 bg-teal-600 text-white",
     accentText: "text-teal-400",
     activeExchangeTab: "border-teal-600 bg-teal-600 text-white shadow-lg shadow-teal-600/25",
+  },
+  orange: {
+    spinner: "border-orange-500",
+    primaryButton: "bg-orange-600 hover:bg-orange-700",
+    activeControl: "border-orange-600 bg-orange-600 text-white",
+    accentText: "text-orange-400",
+    activeExchangeTab: "border-orange-600 bg-orange-600 text-white shadow-lg shadow-orange-600/25",
   },
 };

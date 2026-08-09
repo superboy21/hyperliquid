@@ -7,7 +7,8 @@ export type SpotExchangeName =
   | "Binance"
   | "Lighter"
   | "OKX"
-  | "Bitget";
+  | "Bitget"
+  | "Bybit";
 
 export interface SpotMarketRow {
   exchange: SpotExchangeName;
@@ -42,6 +43,7 @@ const EXCHANGE_COLORS: Record<SpotExchangeName, string> = {
   Lighter: "purple",
   OKX: "emerald",
   Bitget: "teal",
+  Bybit: "orange",
 };
 
 const QUOTES = [
@@ -264,6 +266,27 @@ function normalizeLighter(payload: unknown, fetchedAt: number): SpotMarketRow[] 
   });
 }
 
+/** V5 spot tickers envelope: `{ retCode, result: { list: [...] } }`. */
+function bybitSpotList(payload: unknown): unknown[] {
+  const result = object(object(payload)?.result);
+  return Array.isArray(result?.list) ? result.list : [];
+}
+
+function normalizeBybit(payload: unknown, fetchedAt: number): SpotMarketRow[] {
+  return bybitSpotList(payload).flatMap((value) => {
+    const row = object(value);
+    if (!row || typeof row.symbol !== "string") return [];
+    const normalized = makeRow("Bybit", row.symbol, {
+      lastPrice: number(row.lastPrice),
+      bestBid: number(row.bid1Price), bestAsk: number(row.ask1Price),
+      // V5 price24hPcnt is a fraction (e.g. "0.025" = 2.5%), same as the perp adapter.
+      change24h: (number(row.price24hPcnt) ?? 0) * 100,
+      quoteVolume: number(row.turnover24h), baseVolume: number(row.volume24h),
+    }, fetchedAt);
+    return normalized ? [normalized] : [];
+  });
+}
+
 export function normalizeSpotMarkets(exchange: SpotExchangeName, payload: unknown, fetchedAt = Date.now()): SpotMarketRow[] {
   switch (exchange) {
     case "Hyperliquid": return normalizeHyperliquid(payload, fetchedAt);
@@ -272,10 +295,11 @@ export function normalizeSpotMarkets(exchange: SpotExchangeName, payload: unknow
     case "Lighter": return normalizeLighter(payload, fetchedAt);
     case "OKX": return normalizeOkx(payload, fetchedAt);
     case "Bitget": return normalizeBitget(payload, fetchedAt);
+    case "Bybit": return normalizeBybit(payload, fetchedAt);
   }
 }
 
-const EXCHANGES: SpotExchangeName[] = ["Hyperliquid", "Gate.io", "Binance", "Lighter", "OKX", "Bitget"];
+const EXCHANGES: SpotExchangeName[] = ["Hyperliquid", "Gate.io", "Binance", "Lighter", "OKX", "Bitget", "Bybit"];
 
 export async function fetchAllSpotMarkets(signal?: AbortSignal): Promise<SpotMarketRow[]> {
   const settled = await Promise.allSettled(EXCHANGES.map(async (exchange) => {
@@ -322,6 +346,9 @@ function readBestPrices(exchange: SpotExchangeName, payload: unknown): { bestBid
   }
   if (exchange === "Bitget" && root?.data) {
     const data = object(root.data); bids = data?.bids; asks = data?.asks;
+  }
+  if (exchange === "Bybit" && root?.result) {
+    const result = object(root.result); bids = result?.b; asks = result?.a;
   }
   const priceAt = (levels: unknown): number | undefined => {
     if (!Array.isArray(levels) || levels.length === 0) return undefined;

@@ -21,15 +21,16 @@ describe("spot quote-notional VWAP", () => {
       OKX: 100,
       Lighter: 100,
       Bitget: 100,
+      Bybit: 100,
     };
-    expect(STANDARD_SPOT_IMPACT_DEPTH_LIMITS).toEqual(standard);
+    expect(STANDARD_SPOT_IMPACT_DEPTH_LIMITS).toEqual({ ...standard, Bybit: 50 });
     expect(STANDARD_PERP_IMPACT_DEPTH_LIMITS).toEqual(standard);
     expect(PERP_IMPACT_DEPTH_LIMITS).toBe(STANDARD_PERP_IMPACT_DEPTH_LIMITS);
     expect(MAX_SPOT_IMPACT_DEPTH_LIMITS).toEqual({
-      Hyperliquid: 20, "Gate.io": 100, Binance: 5000, OKX: 5000, Lighter: 250, Bitget: 150,
+      Hyperliquid: 20, "Gate.io": 100, Binance: 5000, OKX: 5000, Lighter: 250, Bitget: 150, Bybit: 200,
     });
     expect(MAX_PERP_IMPACT_DEPTH_LIMITS).toEqual({
-      Hyperliquid: 20, "Gate.io": 100, Binance: 1000, OKX: 5000, Lighter: 250, Bitget: 1000,
+      Hyperliquid: 20, "Gate.io": 100, Binance: 1000, OKX: 5000, Lighter: 250, Bitget: 1000, Bybit: 500,
     });
   });
 
@@ -42,6 +43,10 @@ describe("spot quote-notional VWAP", () => {
     expect(resolvePerpImpactDepth("Bitget", "max")).toBe(1000);
     expect(resolveSpotImpactDepth("Hyperliquid", "max")).toBe(20);
     expect(resolvePerpImpactDepth("Hyperliquid", "max")).toBe(20);
+    expect(resolveSpotImpactDepth("Bybit")).toBe(50);
+    expect(resolveSpotImpactDepth("Bybit", "max")).toBe(200);
+    expect(resolvePerpImpactDepth("Bybit")).toBe(100);
+    expect(resolvePerpImpactDepth("Bybit", "max")).toBe(500);
   });
 
   test("allows an exact fill and a partial final base-quantity level", () => {
@@ -59,6 +64,20 @@ describe("spot quote-notional VWAP", () => {
     expect(book?.bids[0].price).toBe(100);
     expect(book?.asks[0].price).toBe(101);
     expect(book && computeOrderBookImpactSpread(book, 100)).toBeCloseTo((1 / 100.5) * 100, 12);
+  });
+
+  test("unwraps the Bybit V5 book envelope with descending bids and ascending asks", () => {
+    const book = normalizeSpotOrderBook("Bybit", {
+      retCode: 0,
+      retMsg: "OK",
+      result: { s: "BTCUSDT", b: [["99", "2"], ["100", "2"]], a: [["102", "2"], ["101", "2"]] },
+    });
+    expect(book?.bids[0].price).toBe(100);
+    expect(book?.bids[1].price).toBe(99);
+    expect(book?.asks[0].price).toBe(101);
+    expect(book?.asks[1].price).toBe(102);
+    expect(book && computeOrderBookImpactSpread(book, 100)).toBeCloseTo((1 / 100.5) * 100, 12);
+    expect(normalizeSpotOrderBook("Bybit", { retCode: 0, result: { s: "BTCUSDT" } })).toBeNull();
   });
 
   test("sorts unsorted book copies best-to-worst without mutating caller input", () => {
