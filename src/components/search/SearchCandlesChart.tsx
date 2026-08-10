@@ -45,6 +45,33 @@ const EXCHANGE_COLORS: Record<string, string> = {
   Bitget: "#14B8A6",        // teal-500
 };
 
+/**
+ * Intraday intervals where funding settles sparsely inside each candle bucket
+ * (e.g. one settlement per 8h within 4h/1h/5m buckets). Actual settlements are
+ * drawn as visible points; buckets with sampleCount === 0 stay as gaps (no
+ * fill, no interpolation, no joining across missing samples).
+ */
+const SETTLEMENT_POINT_INTERVALS: ReadonlySet<SearchChartInterval> = new Set(["4h", "1h", "5m"]);
+
+/**
+ * Genuinely sparse funding data: at least one actual settlement sample AND at
+ * least one unavailable (sampleCount === 0) bucket. Dense/continuous data keeps
+ * the plain line presentation even on intraday intervals.
+ */
+function isGenuinelySparseFunding(points: readonly FundingRatePoint[]): boolean {
+  let hasActual = false;
+  let hasGap = false;
+  for (const point of points) {
+    if (point.sampleCount === 0) {
+      hasGap = true;
+    } else {
+      hasActual = true; // undefined or > 0 counts as an observed settlement
+    }
+    if (hasActual && hasGap) return true;
+  }
+  return hasActual && hasGap;
+}
+
 function formatPrice(value: number): string {
   if (value >= 10000) return value.toFixed(0);
   if (value >= 100) return value.toFixed(1);
@@ -134,6 +161,10 @@ export default function SearchCandlesChart({
     const chart = echarts.init(chartRef.current);
     const themeColor = EXCHANGE_COLORS[exchange] || exchangeColor || "#3B82F6";
     const is1m = interval === "1m";
+    const showAllSymbol = !is1m
+      && SETTLEMENT_POINT_INTERVALS.has(interval)
+      && isGenuinelySparseFunding(fundingRates);
+    const fundingName = showAllSymbol ? "资金费率(结算点)" : "资金费率";
 
     const categories = candles.map((c) => formatLabel(c.openTime, interval));
     const axisCategories = buildYearAwareCategories(candles, interval);
@@ -184,7 +215,7 @@ export default function SearchCandlesChart({
       { name: subLabel },
     ];
     if (!is1m) {
-      legendData.push({ name: "资金费率" });
+      legendData.push({ name: fundingName });
     }
 
     // Build grid config
@@ -241,6 +272,8 @@ export default function SearchCandlesChart({
         const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
         lines.push(`年化资金费率: ${annualizedStr}`);
         lines.push(`原始结算周期费率: ${rawStr}`);
+      } else if (!is1m && fundingRates[hoveredIndex]?.sampleCount === 0) {
+        lines.push(`资金费率: 该时段无资金结算样本（图中留空，不填充、不插值）`);
       }
 
       return lines.join("<br/>");
@@ -394,12 +427,29 @@ export default function SearchCandlesChart({
     if (!is1m) {
       seriesConfig.push({
         type: "line",
-        name: "资金费率",
+        name: fundingName,
         xAxisIndex: 2,
         yAxisIndex: 2,
         data: fundingData,
         smooth: false,
-        symbol: "none",
+        connectNulls: false,
+        // Genuinely sparse intraday data: render every actual settlement as a
+        // visible point (showAllSymbol) so isolated observations surrounded by
+        // sampleCount-0 gaps stay discoverable. Dense data and 1d/1w keep the
+        // continuous line with no symbols.
+        symbol: showAllSymbol ? "circle" : "none",
+        ...(showAllSymbol
+          ? {
+              showSymbol: true,
+              showAllSymbol: true,
+              symbolSize: 6,
+              itemStyle: {
+                color: themeColor,
+                borderColor: "#0F172A",
+                borderWidth: 1.5,
+              },
+            }
+          : {}),
         lineStyle: {
           color: themeColor,
           width: 1.5,
@@ -476,6 +526,9 @@ export default function SearchCandlesChart({
   }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, showVolume]);
 
   const is1m = interval === "1m";
+  const isSparseFunding = !is1m
+    && SETTLEMENT_POINT_INTERVALS.has(interval)
+    && isGenuinelySparseFunding(fundingRates);
 
   return (
     <div className="relative">
@@ -485,7 +538,10 @@ export default function SearchCandlesChart({
         <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>
         <p>• 主图：K线图，显示开盘/收盘/最高/最低价格</p>
         <p>• 副图1：{showVolume ? "成交量" : "成交额"}（可切换）</p>
-        {!is1m && <p>• 副图2：年化资金费率（%），0轴为参考线</p>}
+        {!is1m && !isSparseFunding && <p>• 副图2：年化资金费率（%），0轴为参考线</p>}
+        {!is1m && isSparseFunding && (
+          <p>• 副图2：资金费率结算点（%）：圆点仅标记实际结算样本，仅在数据含缺失结算时段时启用（连续数据仍为连续线）；无样本时段留空，不填充、不插值</p>
+        )}
         <p>• 1m间隔隐藏资金费率副图（资金费率按各合约结算周期统计）</p>
       </div>
     </div>

@@ -5,6 +5,7 @@ import * as echarts from "echarts";
 import {
   type SearchChartInterval,
   type SearchCandlePoint,
+  type FundingRatePoint,
 } from "@/lib/search-candles";
 import { type ComboCandleResult } from "@/lib/combo";
 
@@ -39,6 +40,33 @@ const INTERVAL_LABELS: Record<SearchChartInterval, string> = {
 
 const COMBO_BULL_COLOR = "#8b5cf6";
 const COMBO_BEAR_COLOR = "#ef4444";
+
+/**
+ * Intraday intervals where funding settles sparsely inside each candle bucket
+ * (e.g. one settlement per 8h within 4h/1h/5m buckets). Actual settlements are
+ * drawn as visible points; buckets with sampleCount === 0 stay as gaps (no
+ * fill, no interpolation, no joining across missing samples).
+ */
+const SETTLEMENT_POINT_INTERVALS: ReadonlySet<SearchChartInterval> = new Set(["4h", "1h", "5m"]);
+
+/**
+ * Genuinely sparse funding data: at least one actual settlement sample AND at
+ * least one unavailable (sampleCount === 0) bucket. Dense/continuous data keeps
+ * the plain line presentation even on intraday intervals.
+ */
+function isGenuinelySparseFunding(points: readonly FundingRatePoint[]): boolean {
+  let hasActual = false;
+  let hasGap = false;
+  for (const point of points) {
+    if (point.sampleCount === 0) {
+      hasGap = true;
+    } else {
+      hasActual = true; // undefined or > 0 counts as an observed settlement
+    }
+    if (hasActual && hasGap) return true;
+  }
+  return hasActual && hasGap;
+}
 
 // ==================== Formatters ====================
 
@@ -123,6 +151,10 @@ export default function ComboSearchCandlesChart({
     const { candles, fundingRates, mode, firstSymbol, firstExchange, secondSymbol, secondExchange } = data;
     const is1m = interval === "1m";
     const hasFunding = !is1m && fundingRates.length > 0;
+    const showAllSymbol = hasFunding
+      && SETTLEMENT_POINT_INTERVALS.has(interval)
+      && isGenuinelySparseFunding(fundingRates);
+    const fundingName = showAllSymbol ? "资金费率差(结算点)" : "资金费率差";
 
     const separator = mode === "spread" ? "-" : "/";
     const modeLabel = mode === "spread" ? "Spread" : "Ratio";
@@ -175,7 +207,7 @@ export default function ComboSearchCandlesChart({
       { name: subLabel },
     ];
     if (hasFunding) {
-      legendData.push({ name: "资金费率差" });
+      legendData.push({ name: fundingName });
     }
 
     const gridConfig = hasFunding
@@ -230,6 +262,8 @@ export default function ComboSearchCandlesChart({
         const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
         lines.push(`年化资金费率差: ${annualizedStr}`);
         lines.push(`原始结算周期费率差: ${rawStr}`);
+      } else if (hasFunding && fundingItem) {
+        lines.push(`资金费率差: 该时段无资金结算样本（图中留空，不填充、不插值）`);
       }
 
       return lines.join("<br/>");
@@ -380,12 +414,29 @@ export default function ComboSearchCandlesChart({
     if (hasFunding) {
       seriesConfig.push({
         type: "line",
-        name: "资金费率差",
+        name: fundingName,
         xAxisIndex: 2,
         yAxisIndex: 2,
         data: fundingData,
         smooth: false,
-        symbol: "none",
+        connectNulls: false,
+        // Genuinely sparse intraday data: render every actual settlement as a
+        // visible point (showAllSymbol) so isolated observations surrounded by
+        // sampleCount-0 gaps stay discoverable. Dense data and 1d/1w keep the
+        // continuous line with no symbols.
+        symbol: showAllSymbol ? "circle" : "none",
+        ...(showAllSymbol
+          ? {
+              showSymbol: true,
+              showAllSymbol: true,
+              symbolSize: 6,
+              itemStyle: {
+                color: COMBO_BULL_COLOR,
+                borderColor: "#0F172A",
+                borderWidth: 1.5,
+              },
+            }
+          : {}),
         lineStyle: {
           color: COMBO_BULL_COLOR,
           width: 1.5,
@@ -472,6 +523,9 @@ export default function ComboSearchCandlesChart({
   }, [data, interval, showVolume]);
 
   const hasFunding = data.fundingRates.length > 0 && interval !== "1m";
+  const isSparseFunding = hasFunding
+    && SETTLEMENT_POINT_INTERVALS.has(interval)
+    && isGenuinelySparseFunding(data.fundingRates);
   const { mode } = data;
 
   return (
@@ -482,7 +536,10 @@ export default function ComboSearchCandlesChart({
         <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>
         <p>• 主图：{mode === "spread" ? "价差 (first - second)" : "价比 (first / second)"}，仅显示开盘/收盘</p>
         <p>• 副图1：{showVolume ? "较小成交量" : "较小成交额"} = min(第一交易对, 第二交易对)</p>
-        {hasFunding && <p>• 副图2：资金费率差 = 第一交易对年化费率 - 第二交易对年化费率</p>}
+        {hasFunding && !isSparseFunding && <p>• 副图2：资金费率差 = 第一交易对年化费率 - 第二交易对年化费率</p>}
+        {hasFunding && isSparseFunding && (
+          <p>• 副图2：资金费率差（结算点）＝ 第一交易对年化费率 − 第二交易对年化费率；圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），缺失时段留空</p>
+        )}
         <p>• 数据对齐：仅保留两个交易对共同存在的时间戳（交集）</p>
       </div>
     </div>

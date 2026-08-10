@@ -25,6 +25,30 @@ interface CandleDatum {
   raw: { open: number; close: number };
 }
 
+/**
+ * Intraday intervals where funding settles sparsely inside each candle bucket
+ * (e.g. one settlement per 8h within 4h/1h/5m buckets). Actual settlements are
+ * drawn as visible points; buckets with no sample stay as gaps (no fill, no
+ * interpolation, no joining across missing samples).
+ */
+const SETTLEMENT_POINT_INTERVALS: ReadonlySet<string> = new Set(["4h", "1h", "5m"]);
+
+/**
+ * Genuinely sparse funding: the funding array holds only actual observations
+ * (normalized), so sparsity means at least one actual observation exists AND
+ * at least one chart bucket has no settlement at its openTime. Dense/continuous
+ * data keeps the plain line presentation even on intraday intervals.
+ */
+function hasFundingGaps(
+  points: readonly { openTime: number }[],
+  funding: readonly { time: number }[],
+): boolean {
+  if (funding.length === 0) return false;
+  const settled = new Set<number>();
+  for (const point of funding) settled.add(point.time);
+  return points.some((point) => !settled.has(point.openTime));
+}
+
 function compact(value: number): string {
   const absolute = Math.abs(value);
   if (absolute >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
@@ -76,6 +100,10 @@ export default function SpotContainingCombinationChart({ result }: Props) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const leg1Label = `${result.leg1.source.exchange} ${marketDisplaySymbol(result.leg1)}`;
   const leg2Label = `${result.leg2.source.exchange} ${marketDisplaySymbol(result.leg2)}`;
+  const showAllSymbol =
+    SETTLEMENT_POINT_INTERVALS.has(result.interval)
+    && result.composition !== "spot-spot"
+    && hasFundingGaps(result.points, result.funding);
 
   const turnoverNotes = useMemo(() => {
     const leg1Estimated = result.points.some((point) => point.leg1Turnover?.provenance === "estimated-base-close");
@@ -94,8 +122,16 @@ export default function SpotContainingCombinationChart({ result }: Props) {
     }));
     const risingColors = result.points.map((point) => point.close >= point.open ? "rgba(139,92,246,.58)" : "rgba(239,68,68,.52)");
 
+    const showAllSymbol =
+      SETTLEMENT_POINT_INTERVALS.has(result.interval)
+      && result.composition !== "spot-spot"
+      && hasFundingGaps(result.points, result.funding);
     const firstSubLabel = result.composition === "spot-spot" ? "腿1报价币成交额" : "较小报价币成交额";
-    const secondSubLabel = result.composition === "spot-spot" ? "腿2报价币成交额" : "有符号年化资金费率";
+    const secondSubLabel = result.composition === "spot-spot"
+      ? "腿2报价币成交额"
+      : showAllSymbol
+        ? "有符号年化资金费率(结算点)"
+        : "有符号年化资金费率";
     const firstSubData = result.points.map((point, index) => ({
       value: result.composition === "spot-spot" ? point.leg1Turnover?.value ?? null : point.minimumTurnover,
       itemStyle: { color: risingColors[index] },
@@ -134,6 +170,8 @@ export default function SpotContainingCombinationChart({ result }: Props) {
         lines.push(result.composition === "spot-spot"
           ? `${secondSubLabel}：${compact(secondValue)}`
           : `${secondSubLabel}：${secondValue >= 0 ? "+" : ""}${secondValue.toFixed(2)}%`);
+      } else if (result.composition !== "spot-spot" && secondSub) {
+        lines.push("该时段无资金结算样本（图中留空，不填充、不插值）");
       }
       if (result.composition === "spot-spot" && point) {
         if (point.leg1Turnover?.provenance === "estimated-base-close") lines.push("腿1成交额：估算");
@@ -226,8 +264,20 @@ export default function SpotContainingCombinationChart({ result }: Props) {
               xAxisIndex: 2,
               yAxisIndex: 2,
               data: secondSubData,
-              symbol: "none",
               connectNulls: false,
+              // Genuinely sparse intraday data: render every actual settlement
+              // as a visible point (showAllSymbol) so isolated observations
+              // surrounded by gaps stay discoverable. Dense data and 1d/1w keep
+              // the continuous line with no symbols.
+              symbol: showAllSymbol ? "circle" : "none",
+              ...(showAllSymbol
+                ? {
+                    showSymbol: true,
+                    showAllSymbol: true,
+                    symbolSize: 6,
+                    itemStyle: { color: "#f59e0b", borderColor: "#0F172A", borderWidth: 1.5 },
+                  }
+                : {}),
               lineStyle: { color: "#f59e0b", width: 1.5 },
               areaStyle: { color: "rgba(245,158,11,.08)" },
               markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], label: { show: false }, lineStyle: { color: "#6b7280", type: "dashed" } },
@@ -256,7 +306,11 @@ export default function SpotContainingCombinationChart({ result }: Props) {
         ) : (
           <>
             <p>副图1：同一时间点 Spot 与 Perp 报价币成交额的较小值。</p>
-            <p>副图2：有符号年化 Perp 资金费率；Perp 位于腿2时已按组合方向取反。</p>
+            {showAllSymbol ? (
+              <p>副图2：有符号年化 Perp 资金费率（结算点）；Perp 位于腿2时已按组合方向取反。圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），无样本时段留空、不插值。</p>
+            ) : (
+              <p>副图2：有符号年化 Perp 资金费率；Perp 位于腿2时已按组合方向取反。</p>
+            )}
           </>
         )}
       </div>
