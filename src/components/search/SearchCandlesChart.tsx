@@ -80,6 +80,12 @@ function formatPrice(value: number): string {
   return value.toFixed(6);
 }
 
+function formatChangePercent(open: number, close: number): string {
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open === 0) return "N/A";
+  const percent = ((close - open) / open) * 100;
+  return `${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%`;
+}
+
 function formatVolume(value: number): string {
   if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
   if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
@@ -256,6 +262,7 @@ export default function SearchCandlesChart({
       if (cd?.raw) {
         lines.push(`开盘: ${formatPrice(cd.raw.open)}`);
         lines.push(`收盘: ${formatPrice(cd.raw.close)}`);
+        lines.push(`涨跌幅: ${formatChangePercent(cd.raw.open, cd.raw.close)}`);
         lines.push(`最高: ${formatPrice(cd.raw.high)}`);
         lines.push(`最低: ${formatPrice(cd.raw.low)}`);
       }

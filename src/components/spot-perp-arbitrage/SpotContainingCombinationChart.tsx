@@ -67,6 +67,12 @@ function derivedValue(value: number, mode: "spread" | "ratio"): string {
   return value.toFixed(6);
 }
 
+function formatChangePercent(open: number, close: number): string {
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open === 0) return "N/A";
+  const percent = ((close - open) / open) * 100;
+  return `${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%`;
+}
+
 function dateLabel(timestamp: number, interval: string): string {
   const detailed = interval === "4h" || interval === "1h" || interval === "5m" || interval === "1m";
   return new Date(timestamp).toLocaleString("zh-CN", {
@@ -162,6 +168,7 @@ export default function SpotContainingCombinationChart({ result }: Props) {
       if (candle?.raw) {
         lines.push(`开盘：${derivedValue(candle.raw.open, result.mode)}`);
         lines.push(`收盘：${derivedValue(candle.raw.close, result.mode)}`);
+        lines.push(`涨跌幅：${formatChangePercent(candle.raw.open, candle.raw.close)}`);
       }
       const firstValue = numberValue(firstSub?.value);
       if (firstValue !== null) lines.push(`${firstSubLabel}：${compact(firstValue)}`);
@@ -170,8 +177,10 @@ export default function SpotContainingCombinationChart({ result }: Props) {
         lines.push(result.composition === "spot-spot"
           ? `${secondSubLabel}：${compact(secondValue)}`
           : `${secondSubLabel}：${secondValue >= 0 ? "+" : ""}${secondValue.toFixed(2)}%`);
-      } else if (result.composition !== "spot-spot" && secondSub) {
-        lines.push("该时段无资金结算样本（图中留空，不填充、不插值）");
+      } else if (result.composition !== "spot-spot") {
+        // The funding line item may be omitted entirely from axis tooltip
+        // params when its value is null — the funding lane still exists.
+        lines.push(`${secondSubLabel}：无`);
       }
       if (result.composition === "spot-spot" && point) {
         if (point.leg1Turnover?.provenance === "estimated-base-close") lines.push("腿1成交额：估算");

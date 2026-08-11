@@ -7,7 +7,7 @@ import {
   type SearchCandlePoint,
   type FundingRatePoint,
 } from "@/lib/search-candles";
-import { type ComboCandleResult } from "@/lib/combo";
+import { type ComboCandleResult, type ComboFundingLegObservation } from "@/lib/combo";
 
 // ==================== Types ====================
 
@@ -25,6 +25,20 @@ interface Props {
 interface CandleDatum {
   value: [number, number, number, number];
   raw: { open: number; close: number; low: number; high: number };
+}
+
+/**
+ * Funding lane datum: the derived difference (value = annualized % × 100,
+ * null when the bucket is unavailable) plus each leg's raw observation, or
+ * null when that leg had no actual settlement in the bucket (including the
+ * 4h/1h/5m chart-only temporary zero). Carried into the ECharts datum so the
+ * tooltip can read per-leg metadata off the hovered point.
+ */
+interface FundingDatum {
+  value: number | null;
+  rawRate: number;
+  firstFunding: ComboFundingLegObservation | null;
+  secondFunding: ComboFundingLegObservation | null;
 }
 
 // ==================== Constants ====================
@@ -79,6 +93,26 @@ function formatComboPrice(value: number, mode: "spread" | "ratio" | null): strin
   if (value >= 100) return value.toFixed(2);
   if (value >= 1) return value.toFixed(4);
   return value.toFixed(6);
+}
+
+function formatChangePercent(open: number, close: number): string {
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open === 0) return "N/A";
+  const percent = ((close - open) / open) * 100;
+  return `${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%`;
+}
+
+/**
+ * One per-leg funding row: annualized (2 decimals) then raw (4 decimals), both
+ * stored decimals multiplied by 100, positives prefixed with "+", true zero
+ * without a plus. A null observation renders as no real settlement.
+ */
+function formatLegFundingRow(label: string, observation: ComboFundingLegObservation | null): string {
+  if (observation === null) return `${label}: 无结算费率`;
+  const annualized = observation.annualizedRate * 100;
+  const raw = observation.rate * 100;
+  const annualizedStr = `${annualized > 0 ? "+" : ""}${annualized.toFixed(2)}%`;
+  const rawStr = `${raw > 0 ? "+" : ""}${raw.toFixed(4)}%`;
+  return `${label}: ${annualizedStr}（${rawStr}）`;
 }
 
 function formatVolume(value: number): string {
@@ -189,10 +223,12 @@ export default function ComboSearchCandlesChart({
 
     // sampleCount === 0 marks a period with no funding samples: render a null gap
     // (no fake 0% difference line) while an observed zero still renders as 0%.
-    const fundingData = hasFunding
+    const fundingData: FundingDatum[] = hasFunding
       ? fundingRates.map((f) => ({
           value: f.sampleCount === 0 ? null : f.annualizedRate * 100,
           rawRate: f.rate,
+          firstFunding: f.firstFunding ?? null,
+          secondFunding: f.secondFunding ?? null,
         }))
       : [];
 
@@ -245,9 +281,9 @@ export default function ComboSearchCandlesChart({
 
       const cd = candleItem?.data as CandleDatum | undefined;
       if (cd?.raw) {
-        lines.push(`${modeLabel}: ${formatComboPrice(cd.raw.close, mode)}`);
         lines.push(`开盘: ${formatComboPrice(cd.raw.open, mode)}`);
         lines.push(`收盘: ${formatComboPrice(cd.raw.close, mode)}`);
+        lines.push(`涨跌幅: ${formatChangePercent(cd.raw.open, cd.raw.close)}`);
       }
 
       if (volumeItem) {
@@ -262,8 +298,15 @@ export default function ComboSearchCandlesChart({
         const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
         lines.push(`年化资金费率差: ${annualizedStr}`);
         lines.push(`原始结算周期费率差: ${rawStr}`);
-      } else if (hasFunding && fundingItem) {
-        lines.push(`资金费率差: 该时段无资金结算样本（图中留空，不填充、不插值）`);
+        // Per-leg rows only when the derived difference is rendered (both
+        // actual, or a one-sided chart-only zero) — never beneath 资金费率差: 无.
+        const datum = fundingItem.data as FundingDatum | undefined;
+        lines.push(formatLegFundingRow(`${firstExchange} ${firstSymbol}`, datum?.firstFunding ?? null));
+        lines.push(formatLegFundingRow(`${secondExchange} ${secondSymbol}`, datum?.secondFunding ?? null));
+      } else if (hasFunding) {
+        // The line item may be omitted entirely from axis tooltip params when
+        // the hovered funding point is null — the funding lane still exists.
+        lines.push(`资金费率差: 无`);
       }
 
       return lines.join("<br/>");

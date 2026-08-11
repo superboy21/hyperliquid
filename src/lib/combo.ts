@@ -1,5 +1,5 @@
 import { SearchExchangeRate } from "./search";
-import { SearchCandleResult, SearchCandlePoint, FundingRatePoint } from "./search-candles";
+import { SearchCandleResult, SearchCandlePoint, FundingRatePoint, SearchChartInterval } from "./search-candles";
 
 export type ComboMode = "spread" | "ratio" | null;
 
@@ -15,6 +15,7 @@ export interface ComboCandleResult extends SearchCandleResult {
   firstExchange: string;
   secondSymbol: string;
   secondExchange: string;
+  fundingRates: ComboFundingRatePoint[];
   firstQuoteTurnover?: ComboAnalysisValuePoint[];
   secondQuoteTurnover?: ComboAnalysisValuePoint[];
   dashboardFundingRates?: FundingRatePoint[];
@@ -23,6 +24,25 @@ export interface ComboCandleResult extends SearchCandleResult {
 export interface ComboAnalysisValuePoint {
   time: number;
   value: number;
+}
+
+/** Raw funding observation for one leg of a combo pair in a bucket where that
+ * leg had an actual settlement. Null means no actual settlement in that
+ * bucket — including the explicit sampleCount 0 bucket used as a temporary
+ * chart-only zero. The temporary zero is never represented as a real leg
+ * observation. */
+export interface ComboFundingLegObservation {
+  rate: number;
+  annualizedRate: number;
+}
+
+/** Combo funding point: the derived difference plus each leg's own raw funding
+ * observation (or null when that leg had no actual settlement). The metadata
+ * fields are optional so hand-built fixtures stay structurally compatible with
+ * FundingRatePoint; alignComboData always sets them on every derived point. */
+export interface ComboFundingRatePoint extends FundingRatePoint {
+  firstFunding?: ComboFundingLegObservation | null;
+  secondFunding?: ComboFundingLegObservation | null;
 }
 
 function minimumOfficialQuoteVolume(
@@ -48,6 +68,16 @@ function hasActualFundingSample(point: FundingRatePoint): boolean {
     && Number.isFinite(point.annualizedRate)
     && (point.sampleCount === undefined || point.sampleCount > 0);
 }
+
+// Chart intervals where a missing funding bucket (explicit sampleCount 0) is
+// rendered as a chart-only zero so the derived line stays continuous. This is
+// interval-scoped chart rendering semantics only — it is NOT a fabricated
+// historical observation, and it never feeds dashboard averages (see
+// dashboardFundingRates below). The zero applies only when the opposite leg
+// carries the explicit sampleCount === 0 flag; malformed or non-finite
+// non-actual data never triggers it. All other intervals (1d, 1w, 1m, ...)
+// stay strict: a missing bucket keeps the derived point unavailable.
+const CHART_ZERO_INTERVALS: ReadonlySet<SearchChartInterval> = new Set(["4h", "1h", "5m"]);
 
 export function alignComboData(
   first: SearchCandleResult,
@@ -127,26 +157,82 @@ export function alignComboData(
     }
   }
 
-  const alignedFundingRates: FundingRatePoint[] = [];
+  const alignedFundingRates: ComboFundingRatePoint[] = [];
   const dashboardFundingRates: FundingRatePoint[] = [];
+  const chartZero = CHART_ZERO_INTERVALS.has(first.interval);
   for (const { first: firstFr, second: secondFr } of fundingMap.values()) {
     if (!secondFr) continue;
-    // A leg with sampleCount 0 is explicitly unavailable (gap), never an
-    // observed zero. The derived difference must be marked unavailable too —
-    // computing `0 - validRate` would fabricate a real-looking spread. The
-    // numeric zero + sampleCount 0 shape matches aggregateFundingRatesToCandles,
-    // so the visual lane renders these as gaps via sampleCount.
-    const unavailable = firstFr.sampleCount === 0 || secondFr.sampleCount === 0;
-    const difference: FundingRatePoint = unavailable
-      ? { time: firstFr.time, rate: 0, annualizedRate: 0, sampleCount: 0 }
-      : {
-          time: firstFr.time,
-          rate: firstFr.rate - secondFr.rate,
-          annualizedRate: firstFr.annualizedRate - secondFr.annualizedRate,
-        };
+    const firstActual = hasActualFundingSample(firstFr);
+    const secondActual = hasActualFundingSample(secondFr);
+    // Leg metadata: each leg's raw observation when it had an actual
+    // settlement, null otherwise (missing bucket, explicit sampleCount 0
+    // temporary chart-only zero, or malformed non-actual data). The temporary
+    // zero is never represented as a real leg observation.
+    const firstFunding: ComboFundingLegObservation | null = firstActual
+      ? { rate: firstFr.rate, annualizedRate: firstFr.annualizedRate }
+      : null;
+    const secondFunding: ComboFundingLegObservation | null = secondActual
+      ? { rate: secondFr.rate, annualizedRate: secondFr.annualizedRate }
+      : null;
+
+    let difference: ComboFundingRatePoint;
+    if (firstActual && secondActual) {
+      // Both legs have real samples: leg1 - leg2.
+      difference = {
+        time: firstFr.time,
+        rate: firstFr.rate - secondFr.rate,
+        annualizedRate: firstFr.annualizedRate - secondFr.annualizedRate,
+        firstFunding,
+        secondFunding,
+      };
+    } else if (chartZero && firstActual && secondFr.sampleCount === 0) {
+      // 4h/1h/5m chart-only zero: leg2 is an explicit no-settlement bucket
+      // (sampleCount === 0) and renders as 0, so the derived point is leg1 - 0.
+      // Only that explicit flag triggers the zero — malformed or non-finite
+      // non-actual opposite data stays unavailable. Renderable actual point
+      // (not sampleCount 0); it never enters dashboardFundingRates below.
+      difference = {
+        time: firstFr.time,
+        rate: firstFr.rate,
+        annualizedRate: firstFr.annualizedRate,
+        firstFunding,
+        secondFunding,
+      };
+    } else if (chartZero && firstFr.sampleCount === 0 && secondActual) {
+      // 4h/1h/5m chart-only zero: leg1 is an explicit no-settlement bucket
+      // (sampleCount === 0) and renders as 0, so the derived point is 0 - leg2.
+      difference = {
+        time: firstFr.time,
+        rate: -secondFr.rate,
+        annualizedRate: -secondFr.annualizedRate,
+        firstFunding,
+        secondFunding,
+      };
+    } else {
+      // Both legs explicitly unavailable, or a strict interval (1d/1w/1m/...):
+      // the derived difference must be marked unavailable too — computing
+      // `0 - validRate` would fabricate a real-looking spread. The numeric
+      // zero + sampleCount 0 shape matches aggregateFundingRatesToCandles, so
+      // the visual lane renders these as gaps via sampleCount.
+      difference = {
+        time: firstFr.time,
+        rate: 0,
+        annualizedRate: 0,
+        sampleCount: 0,
+        firstFunding,
+        secondFunding,
+      };
+    }
     alignedFundingRates.push(difference);
-    if (hasActualFundingSample(firstFr) && hasActualFundingSample(secondFr)) {
-      dashboardFundingRates.push(difference);
+    // Dashboard averages stay actual-both-legs-only at every interval, so the
+    // temporary chart-only zero never enters them. Dashboard points stay plain
+    // FundingRatePoint values (no leg metadata).
+    if (firstActual && secondActual) {
+      dashboardFundingRates.push({
+        time: difference.time,
+        rate: difference.rate,
+        annualizedRate: difference.annualizedRate,
+      });
     }
   }
 

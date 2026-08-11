@@ -97,6 +97,14 @@ The project now includes funding monitoring plus perpetual search and Spot+Perp 
 
 - [x] **Intraday funding settlement markers (2026-08-11)**: Single Perp, Perp/Perp, and Spot/Perp charts now show 4h/1h/5m buckets that contain actual funding samples as explicit markers when the series is genuinely sparse. `showAllSymbol: true` prevents ECharts category-label thinning from hiding isolated observations; unavailable `sampleCount: 0` buckets remain null gaps with no zero-fill or interpolation. Dense series retain the existing line-only presentation, and 1m remains intentionally hidden.
 
+- [x] **Arbitrage chart tooltip refinement (2026-08-12)**: `/spot_perp_arbitrage` source and combination candlestick tooltips now show each candle's `(close − open) / open × 100` change directly below the close. Spread/ratio tooltips no longer repeat the close as a separate `Spread`/`Ratio` row, and missing combination funding displays concise `资金费率差: 无` / `有符号年化资金费率：无` text even when ECharts omits the null series item from axis-tooltip parameters.
+
+- [x] **Local Gate route-cache recovery (2026-08-12)**: The running Next dev process temporarily returned its own HTML 404 page for existing nested Gate API routes even though source files, compiled route modules, and `.next/dev/server/app-paths-manifest.json` entries were present. Restarting the workspace dev process rebuilt the in-memory route registry; `/api/gate/futures/usdt/tickers` and `/contracts` returned 200 again, with the ticker route yielding 900 rows. No application-source route change was required.
+
+- [x] **Intraday Perp/Perp chart-only zero semantics (2026-08-12)**: For 4h/1h/5m funding-difference charts, if exactly one contract has an actual settlement sample and the other has an explicit `sampleCount === 0` bucket, the missing leg contributes a temporary zero to `leg1 − leg2`; both-missing buckets remain gaps. This zero is chart-only: `dashboardFundingRates` still requires two actual samples, 1d/1w remain strict, 1m remains strict/hidden, absent timestamps and malformed data never infer zero, and higher intervals aggregate independently from raw settlement history.
+
+- [x] **Per-leg funding detail in combo tooltip (2026-08-12)**: Valid Perp/Perp funding-difference tooltip points now preserve and display each leg's own annualized and raw settlement rate beneath the difference, formatted on one row as `annualized（raw）` with exchange/symbol labels. A leg that contributed the 4h/1h/5m chart-only temporary zero displays `无结算费率`; unavailable derived points still show only `资金费率差: 无`. Combo funding metadata records only actual observations and never promotes a temporary zero into historical or dashboard data.
+
 ## Current Structure
 
 | File/Directory | Purpose | Status |
