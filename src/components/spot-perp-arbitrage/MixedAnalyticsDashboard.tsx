@@ -11,10 +11,13 @@ import {
   type TailTrimPercent,
 } from "@/lib/spot-perp-arbitrage";
 import type { ComboCandleResult } from "@/lib/combo";
+import { formatChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 interface Props {
   result: MixedCombinationResult | SpotSpotCombinationResult | ComboCandleResult;
   range: ArbitrageChartRange;
+  initialTailTrim?: TailTrimPercent;
+  exactSelection?: ChartTimeSelection | null;
 }
 
 const TAIL_OPTIONS: TailTrimPercent[] = [0, 1, 2.5, 5, 10];
@@ -67,8 +70,8 @@ function legIdentity(result: Props["result"], leg: 1 | 2): string {
   return `${market.source.exchange} ${marketDisplaySymbol(market)}`;
 }
 
-export default function MixedAnalyticsDashboard({ result, range }: Props) {
-  const [tailTrim, setTailTrim] = useState<TailTrimPercent>(1);
+export default function MixedAnalyticsDashboard({ result, range, initialTailTrim = 1, exactSelection = null }: Props) {
+  const [tailTrim, setTailTrim] = useState<TailTrimPercent>(initialTailTrim);
   const mixedResult = isMixedResult(result) ? result : null;
   const analysis = useMemo(() => {
     if (isMixedResult(result)) {
@@ -171,8 +174,9 @@ export default function MixedAnalyticsDashboard({ result, range }: Props) {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 id="mixed-analytics-title" className="text-sm font-semibold text-white">
-            当前可见区间 · {composition === "mixed" ? "Mixed" : composition === "perp-perp" ? "Perp / Perp" : "Spot / Spot"} 统计
+            {exactSelection ? "精确区间" : "当前可见区间"} · {composition === "mixed" ? "Mixed" : composition === "perp-perp" ? "Perp / Perp" : "Spot / Spot"} 统计
           </h3>
+          {exactSelection && <p className="mt-1 font-mono text-xs text-violet-200">UTC：{formatChartTimeSelection(exactSelection)}</p>}
           <p className="mt-1 text-xs text-gray-500">
             {composition === "mixed"
               ? "资金费率不剔尾；分布统计仅对组合收盘值做对称剔尾。"
@@ -223,7 +227,7 @@ export default function MixedAnalyticsDashboard({ result, range }: Props) {
       <aside className="mt-3 rounded bg-gray-900/50 px-3 py-2.5 text-[11px] text-gray-500 sm:px-4 sm:text-xs" aria-labelledby="analytics-methodology-title">
         <h4 id="analytics-methodology-title" className="mb-1 font-medium text-gray-400">🧾 数据口径：</h4>
         <ul className="grid gap-x-5 gap-y-0.5 leading-5 md:grid-cols-2" role="list">
-          <li><span aria-hidden="true">🗓️</span> <span className="font-medium text-gray-400">可见区间：</span>只使用图表当前选择的可见区间；有限区间以数据末端为锚点，双腿只保留时间戳对齐后的共同 K 线。</li>
+          <li><span aria-hidden="true">🗓️</span> <span className="font-medium text-gray-400">{exactSelection ? "精确区间：" : "可见区间："}</span>{exactSelection ? "只使用图表精确选择的 UTC 时间桶，双腿保留对齐后的共同 K 线。" : "只使用图表当前选择的可见区间；有限区间以数据末端为锚点，双腿只保留时间戳对齐后的共同 K 线。"}</li>
           <li><span aria-hidden="true">📍</span> <span className="font-medium text-gray-400">当前值：</span>取最新一根可见共同 K 线的组合收盘值；价差＝腿1−腿2，比值＝腿1÷腿2。</li>
           <li><span aria-hidden="true">📊</span> <span className="font-medium text-gray-400">均值与 σ：</span>将可见组合收盘值排序，按“每侧剔除”比例从两端各剔除后计算算术均值和总体标准差。当前值始终取最新值，只有分布样本参与剔尾；±1σ、±2σ 均由剔尾后的均值与总体标准差得到。</li>
           <li><span aria-hidden="true">🧮</span> <span className="font-medium text-gray-400">较均值百分比：</span>（指标值 − 均值）÷ |均值| × 100%；均值为 0 或不可用时显示“--”。</li>

@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import * as echarts from "echarts";
 import type { SpotCandlePoint, SpotChartInterval } from "@/lib/spot-search-candles";
+import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 interface SpotSearchCandlesChartProps {
   exchange: string;
@@ -10,6 +11,8 @@ interface SpotSearchCandlesChartProps {
   interval: SpotChartInterval;
   candles: SpotCandlePoint[];
   showBaseVolume: boolean;
+  timeSelection?: ChartTimeSelection | null;
+  onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
 }
 
 interface CandleDatum {
@@ -84,8 +87,17 @@ export default function SpotSearchCandlesChart({
   interval,
   candles,
   showBaseVolume,
+  timeSelection = null,
+  onTimeSelectionChange,
 }: SpotSearchCandlesChartProps) {
   const chartRef = useRef<HTMLDivElement | null>(null);
+  const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
+  const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
+  const pointerRef = useRef<{ pointerId: number; clientX: number; clientY: number; dragged: boolean } | null>(null);
+  const selectionRef = useRef(timeSelection);
+  const selectionChangeRef = useRef(onTimeSelectionChange);
+  useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
+  useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -103,7 +115,11 @@ export default function SpotSearchCandlesChart({
       const open = candleNumber(candle, "open");
       const close = candleNumber(candle, "close");
       const baseVolume = candleNumber(candle, "volume", "baseVolume");
-      const quoteTurnover = candleNumber(candle, "quoteVolume", "quoteTurnover", "turnover") || baseVolume * close;
+      const record = recordOf(candle);
+      const official = ["quoteVolume", "quoteTurnover", "turnover"]
+        .map((key) => numberFrom(record[key], Number.NaN))
+        .find(Number.isFinite);
+      const quoteTurnover = official === undefined ? baseVolume * close : official;
       return {
         value: showBaseVolume ? baseVolume : quoteTurnover,
         itemStyle: { color: close >= open ? "rgba(34,197,94,.5)" : "rgba(239,68,68,.5)" },
@@ -144,9 +160,10 @@ export default function SpotSearchCandlesChart({
         },
       },
       dataZoom: [
-        { type: "inside", xAxisIndex: [0, 1] },
+        { type: "inside", xAxisIndex: [0, 1], moveOnMouseMove: false },
         { type: "slider", xAxisIndex: [0, 1], bottom: 2, height: 15, borderColor: "#374151", fillerColor: "rgba(59,130,246,.12)" },
       ],
+      ...(typeof onTimeSelectionChange === "function" ? { brush: { brushType: "lineX", brushMode: "single", removeOnClick: false, xAxisIndex: [0, 1], brushLink: "all" } } : {}),
       xAxis: [
         {
           type: "category",
@@ -186,6 +203,7 @@ export default function SpotSearchCandlesChart({
       ],
       series: [
         {
+          id: "exact-selection-candles",
           type: "candlestick",
           name: "K线",
           data: candleSeries,
@@ -194,15 +212,41 @@ export default function SpotSearchCandlesChart({
         { type: "bar", name: subpanelLabel, xAxisIndex: 1, yAxisIndex: 1, data: volumeData, barMaxWidth: 12 },
       ],
     });
+    const openTimes = candles.map(candleTime);
+    const focus = (selection: ChartTimeSelection | null, showTip = false, zoomRange = false) => {
+      if (!selection) { chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { data: [] } }] }); if (openTimes.length > 0) chart.dispatchAction({ type: "dataZoom", startValue: 0, endValue: openTimes.length - 1 }); return; }
+      const indices = chartSelectionIndices(openTimes, selection);
+      if (!indices) return;
+      if (zoomRange) chart.dispatchAction({ type: "dataZoom", startValue: indices.startIndex, endValue: indices.endIndex });
+      chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { silent: true, itemStyle: { color: "rgba(34,211,238,.09)" }, label: { show: false }, data: [[{ xAxis: indices.startIndex }, { xAxis: indices.endIndex }]] } }] });
+      chart.dispatchAction({ type: "downplay", seriesIndex: 0 }); chart.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: indices.cursorIndex });
+      if (showTip) chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: indices.cursorIndex });
+    };
+    applySelectionRef.current = focus;
+    const commit = (first: number, second: number, showTip = false, zoomRange = false) => { const next = chartTimeSelectionFromIndices(openTimes, first, second); if (next) { selectionRef.current = next; chartRef.current?.focus({ preventScroll: true }); selectionChangeRef.current?.(next); focus(next, showTip, zoomRange); } };
+    const brushEnd = (event: any) => { const range = event?.areas?.[0]?.coordRange; if (Array.isArray(range)) { commit(Math.round(range[0]), Math.round(range[1]), false, true); chart.dispatchAction({ type: "brush", areas: [] }); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); } };
+    selectAtPixelRef.current = (point) => { if (!chart.containPixel({ gridIndex: 0 }, point) || openTimes.length === 0) return; const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point); const value = Array.isArray(converted) ? converted[0] : converted; const resolved = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value)); const start = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(openTimes.length - 1, resolved)) : 0; const nearest = openTimes.reduce((best, _candle, candidate) => { const px = Number(chart.convertToPixel({ xAxisIndex: 0 }, candidate)); const bestPx = Number(chart.convertToPixel({ xAxisIndex: 0 }, best)); return Number.isFinite(px) && Math.abs(px - point[0]) < Math.abs(bestPx - point[0]) ? candidate : best; }, start); commit(nearest, nearest, true); };
+    if (typeof onTimeSelectionChange === "function") { chart.on("brushEnd", brushEnd); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); }
 
     const resizeObserver = new ResizeObserver(() => chart.resize());
     resizeObserver.observe(chartRef.current);
 
     return () => {
       resizeObserver.disconnect();
+      if (typeof onTimeSelectionChange === "function") chart.off("brushEnd", brushEnd);
+      if (applySelectionRef.current === focus) applySelectionRef.current = null;
+      selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [candles, exchange, interval, showBaseVolume, symbol]);
+  }, [candles, exchange, interval, showBaseVolume, symbol, onTimeSelectionChange]);
 
-  return <div ref={chartRef} className="h-[440px] w-full sm:h-[520px]" role="img" aria-label={`${exchange} ${symbol} 现货K线图`} />;
+  useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
+
+  return <><div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": `${exchange} ${symbol} spot candlestick chart`, "aria-describedby": "spot-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const times = candles.map(candleTime);
+    event.preventDefault();
+    const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
+    if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
+  } } : {})} className="h-[440px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 sm:h-[520px]" /><p id="spot-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>;
 }

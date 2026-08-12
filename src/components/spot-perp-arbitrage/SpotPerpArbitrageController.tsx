@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAllRates,
   fetchDetailForSymbol,
@@ -53,12 +53,14 @@ import {
   type SpotQuoteFilter,
   type MarketKindFilter,
 } from "@/lib/spot-perp-arbitrage";
+import { filterInChartTimeSelection, filterTimedInChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import SearchCandlesChart from "@/components/search/SearchCandlesChart";
 import ComboSearchCandlesChart from "@/components/search/ComboSearchCandlesChart";
 import SpotSearchCandlesChart from "@/components/spot-perp-arbitrage/SpotSearchCandlesChart";
 import ArbitrageMarketTable from "./ArbitrageMarketTable";
 import SpotContainingCombinationChart from "./SpotContainingCombinationChart";
 import MixedAnalyticsDashboard from "./MixedAnalyticsDashboard";
+import SingleMarketAnalyticsDashboard from "./SingleMarketAnalyticsDashboard";
 
 type UniverseState = "loading" | "ready" | "error";
 type SpreadMode = "top" | "impact";
@@ -218,6 +220,7 @@ export default function SpotPerpArbitrageController() {
   const [chartLoading, setChartLoading] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartRetry, setChartRetry] = useState(0);
+  const [exactTimeSelection, setExactTimeSelection] = useState<ChartTimeSelection | null>(null);
   const chartAbortRef = useRef<AbortController | null>(null);
   const chartGenerationRef = useRef(0);
 
@@ -262,6 +265,7 @@ export default function SpotPerpArbitrageController() {
     setChartLoading(false);
     setChartError(null);
     setChartRange("1y");
+    setExactTimeSelection(null);
   }, [query, spotQuote, marketFilter, excludedExchanges]);
 
   const searchResult = useMemo(
@@ -444,6 +448,7 @@ export default function SpotPerpArbitrageController() {
     setChartLoading(true);
     setChartError(null);
     setChartPayload(null);
+    setExactTimeSelection(null);
 
     void (async () => {
       try {
@@ -508,7 +513,27 @@ export default function SpotPerpArbitrageController() {
       ? ["all", "1y", "6m", "1m", "1d"]
       : ["all", "3y", "1y", "6m", "1m", "1d"];
 
+  const onExactTimeSelectionChange = useCallback((next: ChartTimeSelection | null) => {
+    setExactTimeSelection(next);
+  }, []);
+  const exactPerpCombo = useMemo(() => {
+    if (!visiblePerpCombo || !exactTimeSelection) return visiblePerpCombo;
+    return {
+      ...visiblePerpCombo,
+      candles: filterInChartTimeSelection(visiblePerpCombo.candles, exactTimeSelection),
+      fundingRates: filterTimedInChartTimeSelection(visiblePerpCombo.fundingRates, exactTimeSelection),
+      ...(visiblePerpCombo.firstQuoteTurnover ? { firstQuoteTurnover: filterTimedInChartTimeSelection(visiblePerpCombo.firstQuoteTurnover, exactTimeSelection) } : {}),
+      ...(visiblePerpCombo.secondQuoteTurnover ? { secondQuoteTurnover: filterTimedInChartTimeSelection(visiblePerpCombo.secondQuoteTurnover, exactTimeSelection) } : {}),
+      ...(visiblePerpCombo.dashboardFundingRates ? { dashboardFundingRates: filterTimedInChartTimeSelection(visiblePerpCombo.dashboardFundingRates, exactTimeSelection) } : {}),
+    };
+  }, [exactTimeSelection, visiblePerpCombo]);
+  const exactSpotCombo = useMemo(() => {
+    if (!visibleSpotCombo || !exactTimeSelection) return visibleSpotCombo;
+    return { ...visibleSpotCombo, points: filterInChartTimeSelection(visibleSpotCombo.points, exactTimeSelection), funding: filterTimedInChartTimeSelection(visibleSpotCombo.funding, exactTimeSelection) };
+  }, [exactTimeSelection, visibleSpotCombo]);
+
   const selectMarket = (market: ArbitrageMarket) => {
+    setExactTimeSelection(null);
     setChartRange((current) => normalizeChartRange(chartInterval, current, !comboMode && market.kind === "spot"));
     setSelection((current) => transitionSelection(current, { type: "click", market, combo: comboMode }));
   };
@@ -678,6 +703,7 @@ export default function SpotPerpArbitrageController() {
             <div className="min-w-0">
               <h2 id="arbitrage-chart-title" className="truncate text-sm font-semibold text-white">{selectedTitle}</h2>
               <p className="mt-1 text-xs text-gray-500">{chartPayload?.kind === "perp-combo" ? `${visiblePerpCombo?.candles.length ?? 0} 个共同时间点` : chartPayload?.kind === "spot-combo" ? `${visibleSpotCombo?.points.length ?? 0} 个共同时间点` : "单市场原始图表"}</p>
+              <p className="mt-1 text-xs text-cyan-300/80">拖动选择精确 UTC 区间；点击 K 线，方向键移动，Shift + 方向键扩展。</p>
             </div>
             <div className="flex flex-wrap items-center gap-1">
               {chartPayload?.kind !== "spot-combo" && (
@@ -688,7 +714,7 @@ export default function SpotPerpArbitrageController() {
               )}
               <div className="mr-1 flex flex-wrap gap-1">
                 {rangeOptions.map((range) => (
-                  <button key={range} type="button" aria-pressed={activeChartRange === range} onClick={() => setChartRange(range)} className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 ${activeChartRange === range ? "bg-gray-600 text-white" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>{range === "all" ? "全部" : range}</button>
+                  <button key={range} type="button" aria-pressed={activeChartRange === range} onClick={() => { setExactTimeSelection(null); setChartRange(range); }} className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 ${activeChartRange === range ? "bg-gray-600 text-white" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>{range === "all" ? "全部" : range}</button>
                 ))}
               </div>
               {(["1w", "1d", "4h", "1h", "5m", "1m"] as SearchChartInterval[]).map((interval) => (
@@ -703,6 +729,7 @@ export default function SpotPerpArbitrageController() {
                     setChartPayload(null);
                     setChartLoading(true);
                     setChartError(null);
+                    setExactTimeSelection(null);
                     setChartInterval(interval);
                     setChartRange((current) => normalizeChartRange(interval, current, singleSpotChart));
                   }}
@@ -711,22 +738,22 @@ export default function SpotPerpArbitrageController() {
                   {interval}
                 </button>
               ))}
-              <button type="button" onClick={() => setSelection(EMPTY_SELECTION)} aria-label="关闭图表" className="ml-1 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">✕</button>
+              <button type="button" onClick={() => { setExactTimeSelection(null); setSelection(EMPTY_SELECTION); }} aria-label="关闭图表" className="ml-1 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">✕</button>
             </div>
           </div>
 
           {chartLoading ? (
             <div className="flex h-[520px] items-center justify-center" role="status"><div className="text-center"><div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-2 border-gray-700 border-b-violet-400 motion-reduce:animate-none" /><p className="text-sm text-gray-400">正在加载并对齐K线…</p></div></div>
           ) : chartError ? (
-            <div className="flex h-[520px] items-center justify-center" role="alert"><div className="text-center"><p className="text-red-400">K线加载失败</p><p className="mt-1 max-w-md text-sm text-gray-500">{chartError}</p><button type="button" onClick={() => setChartRetry((current) => current + 1)} className="mt-4 rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">重试</button></div></div>
+            <div className="flex h-[520px] items-center justify-center" role="alert"><div className="text-center"><p className="text-red-400">K线加载失败</p><p className="mt-1 max-w-md text-sm text-gray-500">{chartError}</p><button type="button" onClick={() => { setExactTimeSelection(null); setChartRetry((current) => current + 1); }} className="mt-4 rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">重试</button></div></div>
           ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "perp" && visibleSinglePerp && visibleSinglePerp.candles.length > 0 ? (
-            <SearchCandlesChart symbol={visibleSinglePerp.symbol} exchange={visibleSinglePerp.exchange} exchangeColor={chartPayload.leg.market.source.exchangeColor} interval={chartInterval} candles={visibleSinglePerp.candles} fundingRates={visibleSinglePerp.fundingRates} showVolume={showBaseVolume} />
+            <><SearchCandlesChart symbol={visibleSinglePerp.symbol} exchange={visibleSinglePerp.exchange} exchangeColor={chartPayload.leg.market.source.exchangeColor} interval={chartInterval} candles={visibleSinglePerp.candles} fundingRates={visibleSinglePerp.fundingRates} showVolume={showBaseVolume} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSinglePerp.candles} funding={visibleSinglePerp.fundingRates} selection={exactTimeSelection} marketLabel={`${visibleSinglePerp.exchange} ${visibleSinglePerp.symbol} Perp`} marketKind="perp" /></>
           ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "spot" && visibleSingleSpot && visibleSingleSpot.candles.length > 0 ? (
-            <SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} />
+            <><SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSingleSpot.candles} selection={exactTimeSelection} marketLabel={`${visibleSingleSpot.exchange} ${visibleSingleSpot.symbol} Spot`} marketKind="spot" /></>
           ) : chartPayload?.kind === "perp-combo" && visiblePerpCombo && visiblePerpCombo.candles.length > 1 ? (
-            <ComboSearchCandlesChart data={visiblePerpCombo} interval={chartInterval} timeRange={activeChartRange} onTimeRangeChange={(range) => setChartRange(normalizeChartRange(chartInterval, range, singleSpotChart))} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} />
+            <ComboSearchCandlesChart data={visiblePerpCombo} interval={chartInterval} timeRange={activeChartRange} onTimeRangeChange={(range) => { setExactTimeSelection(null); setChartRange(normalizeChartRange(chartInterval, range, singleSpotChart)); }} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} />
           ) : chartPayload?.kind === "spot-combo" && visibleSpotCombo && visibleSpotCombo.points.length > 1 ? (
-            <SpotContainingCombinationChart result={visibleSpotCombo} />
+            <SpotContainingCombinationChart result={visibleSpotCombo} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} />
           ) : (
             <div className="flex h-[520px] items-center justify-center" role="status"><div className="text-center"><p className="text-gray-400">当前区间没有足够的重叠数据</p><p className="mt-1 text-sm text-gray-600">可尝试更长历史范围或其他K线周期。</p></div></div>
           )}
@@ -734,10 +761,10 @@ export default function SpotPerpArbitrageController() {
       )}
 
       {selection.leg1 && selection.leg2 && chartPayload?.kind === "spot-combo" && (
-        <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={chartPayload.result} range={activeChartRange} />
+        exactSpotCombo && <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={exactSpotCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} />
       )}
       {selection.leg1 && selection.leg2 && chartPayload?.kind === "perp-combo" && (
-        <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={chartPayload.result} range={activeChartRange} />
+        exactPerpCombo && <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={exactPerpCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} />
       )}
     </div>
   );

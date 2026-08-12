@@ -7,6 +7,7 @@ import {
   type SearchCandlePoint,
   type FundingRatePoint,
 } from "@/lib/search-candles";
+import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 // ==================== Types ====================
 
@@ -18,6 +19,8 @@ interface SearchCandlesChartProps {
   candles: SearchCandlePoint[];
   fundingRates: FundingRatePoint[];
   showVolume: boolean;
+  timeSelection?: ChartTimeSelection | null;
+  onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
 }
 
 interface CandleDatum {
@@ -158,13 +161,24 @@ export default function SearchCandlesChart({
   candles,
   fundingRates,
   showVolume,
+  timeSelection = null,
+  onTimeSelectionChange,
 }: SearchCandlesChartProps) {
   const chartRef = useRef<HTMLDivElement | null>(null);
+  const chartInstanceRef = useRef<echarts.ECharts | null>(null);
+  const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
+  const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
+  const pointerRef = useRef<{ pointerId: number; clientX: number; clientY: number; dragged: boolean } | null>(null);
+  const selectionRef = useRef(timeSelection);
+  const selectionChangeRef = useRef(onTimeSelectionChange);
+  useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
+  useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
 
   useEffect(() => {
     if (!chartRef.current) return;
 
     const chart = echarts.init(chartRef.current);
+    chartInstanceRef.current = chart;
     const themeColor = EXCHANGE_COLORS[exchange] || exchangeColor || "#3B82F6";
     const is1m = interval === "1m";
     const showAllSymbol = !is1m
@@ -411,6 +425,7 @@ export default function SearchCandlesChart({
     // Build series config
     const seriesConfig: any[] = [
       {
+        id: "exact-selection-candles",
         type: "candlestick",
         name: INTERVAL_LABELS[interval],
         data: candleSeries,
@@ -508,6 +523,7 @@ export default function SearchCandlesChart({
         {
           type: "inside",
           xAxisIndex: is1m ? [0, 1] : [0, 1, 2],
+          moveOnMouseMove: false,
         },
         {
           type: "slider",
@@ -516,10 +532,60 @@ export default function SearchCandlesChart({
           height: 16,
         },
       ],
+      ...(typeof onTimeSelectionChange === "function" ? { brush: { brushType: "lineX", brushMode: "single", removeOnClick: false, xAxisIndex: is1m ? [0, 1] : [0, 1, 2], brushLink: "all" } } : {}),
       xAxis: xAxisConfig,
       yAxis: yAxisConfig,
       series: seriesConfig,
     });
+
+    const openTimes = candles.map((candle) => candle.openTime);
+    const focus = (selection: ChartTimeSelection | null, showTip = false, zoomRange = false) => {
+      if (!selection) {
+        chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { data: [] } }] });
+        if (openTimes.length > 0) chart.dispatchAction({ type: "dataZoom", startValue: 0, endValue: openTimes.length - 1 });
+        return;
+      }
+      const indices = chartSelectionIndices(openTimes, selection);
+      if (!indices) return;
+      if (zoomRange) chart.dispatchAction({ type: "dataZoom", startValue: indices.startIndex, endValue: indices.endIndex });
+      chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { silent: true, itemStyle: { color: "rgba(34,211,238,.09)" }, label: { show: false }, data: [[{ xAxis: indices.startIndex }, { xAxis: indices.endIndex }]] } }] });
+      chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
+      chart.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: indices.cursorIndex });
+      if (showTip) chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: indices.cursorIndex });
+    };
+    applySelectionRef.current = focus;
+    const commit = (first: number, second: number, showTip = false, zoomRange = false) => {
+      const next = chartTimeSelectionFromIndices(openTimes, first, second);
+      if (!next) return;
+      selectionRef.current = next;
+      chartRef.current?.focus({ preventScroll: true });
+      selectionChangeRef.current?.(next);
+      focus(next, showTip, zoomRange);
+    };
+    const brushEnd = (event: any) => {
+      const selected = event?.areas?.[0]?.coordRange;
+      if (Array.isArray(selected)) {
+        commit(Math.round(selected[0]), Math.round(selected[1]), false, true);
+        chart.dispatchAction({ type: "brush", areas: [] });
+        chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } });
+      }
+    };
+    selectAtPixelRef.current = (point) => {
+      if (!chart.containPixel({ gridIndex: 0 }, point) || openTimes.length === 0) return;
+      const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point);
+      const value = Array.isArray(converted) ? converted[0] : converted;
+      let index = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value));
+      const nearest = openTimes.reduce((best, _candle, candidate) => {
+        const pixel = Number(chart.convertToPixel({ xAxisIndex: 0 }, candidate));
+        return Number.isFinite(pixel) && Math.abs(pixel - point[0]) < Math.abs(Number(chart.convertToPixel({ xAxisIndex: 0 }, best)) - point[0]) ? candidate : best;
+      }, Number.isFinite(index) && index >= 0 ? Math.max(0, Math.min(openTimes.length - 1, index)) : 0);
+      index = Math.max(0, Math.min(openTimes.length - 1, nearest));
+      commit(index, index, true, false);
+    };
+    if (typeof onTimeSelectionChange === "function") {
+      chart.on("brushEnd", brushEnd);
+      chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } });
+    }
 
     const resizeObserver = new ResizeObserver(() => {
       chart.resize();
@@ -528,18 +594,32 @@ export default function SearchCandlesChart({
 
     return () => {
       resizeObserver.disconnect();
+      if (typeof onTimeSelectionChange === "function") chart.off("brushEnd", brushEnd);
+      if (applySelectionRef.current === focus) applySelectionRef.current = null;
+      selectAtPixelRef.current = null;
+      if (chartInstanceRef.current === chart) chartInstanceRef.current = null;
       chart.dispose();
     };
-  }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, showVolume]);
+  }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, showVolume, onTimeSelectionChange]);
+
+  useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
   const is1m = interval === "1m";
   const isSparseFunding = !is1m
     && SETTLEMENT_POINT_INTERVALS.has(interval)
     && isGenuinelySparseFunding(fundingRates);
 
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (typeof onTimeSelectionChange !== "function") return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const selection = moveChartTimeSelection(candles.map((candle) => candle.openTime), selectionRef.current, event.key, event.shiftKey);
+    if (selection) { selectionRef.current = selection; selectionChangeRef.current?.(selection); applySelectionRef.current?.(selection, true); }
+  };
   return (
     <div className="relative">
-      <div ref={chartRef} className="h-[520px] w-full" />
+      <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": `${exchange} ${symbol} perpetual candlestick chart`, "aria-describedby": "perp-chart-instructions", onKeyDown, onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
+      {typeof onTimeSelectionChange === "function" && <><p id="perp-chart-instructions" className="sr-only">Drag across the chart to select an exact UTC range. Click a candle to select it. Use left and right arrows to move, or Shift plus arrows to extend a range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>}
       {/* 图表说明注释 */}
       <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
         <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>

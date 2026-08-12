@@ -104,6 +104,8 @@ The project now includes funding monitoring plus perpetual search and Spot+Perp 
 - [x] **Intraday Perp/Perp chart-only zero semantics (2026-08-12)**: For 4h/1h/5m funding-difference charts, if exactly one contract has an actual settlement sample and the other has an explicit `sampleCount === 0` bucket, the missing leg contributes a temporary zero to `leg1 − leg2`; both-missing buckets remain gaps. This zero is chart-only: `dashboardFundingRates` still requires two actual samples, 1d/1w remain strict, 1m remains strict/hidden, absent timestamps and malformed data never infer zero, and higher intervals aggregate independently from raw settlement history.
 
 - [x] **Per-leg funding detail in combo tooltip (2026-08-12)**: Valid Perp/Perp funding-difference tooltip points now preserve and display each leg's own annualized and raw settlement rate beneath the difference, formatted on one row as `annualized（raw）` with exchange/symbol labels. A leg that contributed the 4h/1h/5m chart-only temporary zero displays `无结算费率`; unavailable derived points still show only `资金费率差: 无`. Combo funding metadata records only actual observations and never promotes a temporary zero into historical or dashboard data.
+- [x] **Exact chart focus and single-market analytics (2026-08-13)**: All four `/spot_perp_arbitrage` chart variants support drag-to-focus, persistent UTC range labels, candle click selection, Arrow navigation, and Shift+Arrow anchored range selection. Exact selections update the corresponding statistics and reset on preset, interval, market, retry, query/filter, or close transitions; the existing slider remains available.
+- [x] **Single Spot/Perp dashboards (2026-08-13)**: Single-market charts now report latest close, average base volume and quote turnover, close-price VWAP/TWAP, annualized close-to-close volatility, optional actual-bucket annualized funding mean, and VWAP/TWAP population ±1σ/±2σ bands. Statistics default to no trimming; Spot can estimate missing quote turnover as base volume × close while Perp omits missing official turnover, and official zero is preserved.
 
 ## Current Structure
 
@@ -123,6 +125,7 @@ The project now includes funding monitoring plus perpetual search and Spot+Perp 
 | `src/components/funding/BitgetFundingMonitor.tsx` | Bitget funding monitor integration | ✅ Ready |
 | `src/components/funding/BybitFundingMonitor.tsx` | Bybit funding monitor integration | ✅ Ready |
 | `src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx` | Two-panel spot candle and turnover/volume chart (shared; moved from spotsearch) | ✅ Ready |
+| `src/components/spot-perp-arbitrage/SingleMarketAnalyticsDashboard.tsx` | Untrimmed single Spot/Perp visible/exact-range metrics and weighted sigma bands | ✅ Ready |
 | `src/components/spot-perp-arbitrage/` | Unified table/controller, spot-containing charts, and shared combination dashboard | ✅ Ready |
 | `src/lib/hyperliquid.ts` | Hyperliquid API service | ✅ Ready |
 | `src/lib/adapters/bitget.ts` | Bitget canonical adapter and shared scheduler | ✅ Ready |
@@ -133,6 +136,8 @@ The project now includes funding monitoring plus perpetual search and Spot+Perp 
 | `src/lib/spot-impact-price.ts` | Max-depth spot Impact spread requests | ✅ Ready |
 | `src/lib/spot-combo.ts` | Spot candle combination utility (not wired to any page UI) | ✅ Ready |
 | `src/lib/spot-perp-arbitrage/` | Unified market/query/selection, candle alignment, combination, and analytics domain | ✅ Ready |
+| `src/lib/spot-perp-arbitrage/chart-time-selection.ts` | Exact chart-range filtering and anchored keyboard-selection state machine | ✅ Ready |
+| `src/lib/spot-perp-arbitrage/single-market-analytics.ts` | Pure Spot/Perp VWAP, TWAP, turnover, funding, volatility, and weighted-band calculations | ✅ Ready |
 | `.kilocode/` | AI context & recipes | ✅ Ready |
 
 ## Features
@@ -150,10 +155,11 @@ The project now includes funding monitoring plus perpetual search and Spot+Perp 
 
 1. **Unified Search**: Seven-exchange Spot+Perp results; Spot defaults to USDT and supports USDC/U/USD1/USD/all
 2. **Explicit Ordered Grammar**: One `-` or `/` selects spread or ratio terms, and click order defines both legs (`BTC/USDT` is a ratio query)
-3. **Source and Combination Charts**: Source single charts plus legacy Perp/Perp and aligned Spot/Spot or mixed charts
+3. **Source and Combination Charts**: Source single charts plus legacy Perp/Perp and aligned Spot/Spot or mixed charts, all with exact drag/keyboard focus and visible UTC bounds
 4. **Shorter Exact Overlap**: Combinations intersect exact candle timestamps and use the shorter aligned history
-5. **Visible Combination Dashboard**: Mixed, Perp/Perp, and Spot/Spot data-end range statistics with per-tail trimming, population σ, sample-aware funding where applicable, and separate leg turnover means; Perp Search reuses the Perp/Perp dashboard
-6. **Analysis Only**: No automated arbitrage execution or order placement
+5. **Single-Market Dashboards**: Untrimmed current price, average volume/turnover, close VWAP/TWAP, annualized volatility/funding, and weighted ±1σ/±2σ bands for the current preset or exact range
+6. **Visible Combination Dashboard**: Mixed, Perp/Perp, and Spot/Spot data-end or exact-range statistics with configurable per-tail trimming, population σ, sample-aware funding where applicable, and separate leg turnover means; `/spot_perp_arbitrage` defaults trimming to 0% while Perp Search retains its legacy default
+7. **Analysis Only**: No automated arbitrage execution or order placement
 
 ### API Integration
 
@@ -272,3 +278,4 @@ export async function GET() {
 | 2026-08-09 | Bybit request-reduction optimization: settled funding-history windows are interval-aware (one V5 request holds up to 200 rows) and capped at a conservative 90 days, cutting the 30-day detail history from 5 to 1 requests for 4h/8h/1d funding and from 5 to 4 for 1h; module TTL caches (settled history 5m, candles 120s) with raw-symbol/interval/range containment, defensive copies, and no writes on abort/failure; current ticker vs settled history semantics stay separate. `/search` retains full price candle history while bounding only the Bybit funding overlay to the latest 90 days (missing samples render chart gaps, never fake zeros; combo/mixed charts preserve observed-zero vs missing semantics); `/api/bybit` permits up-to-90-day history windows under strict validation. Verified: live official 30d history query returns retCode 0; full suite 306 tests/1074 assertions, typecheck, and production build pass. |
 | 2026-08-09 | Removed standalone `/spotsearch` page and its page-only `SpotMarketSearch` component; `/spot_perp_arbitrage` retains spot functionality via the shared data layer (`/api/spot/[exchange]`, `src/lib/spot-*`) and the moved `src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`; obsolete `/spotsearch` nav links removed from funding/search/arbitrage pages. Product routes are now `/funding`, `/search`, `/spot_perp_arbitrage`. Verified: typecheck and production build pass. |
 | 2026-08-10 | Added Impact spread detail to `/spot_perp_arbitrage`: in Impact mode the spread cell shows, below the total impact spread, 买入冲击价差 `(冲击卖价 − BBO 中间价) / BBO 中间价 × 100` and 卖出冲击价差 `(BBO 中间价 − 冲击买价) / BBO 中间价 × 100`. Shared `computeOrderBookImpactDetail` (`src/lib/order-book-impact.ts`) now returns `{ bidPrice, askPrice, mid, bboMid, spread, buyImpactSpread, sellImpactSpread }`, delegated by `fetchImpactSpreadDetail`/`fetchSpotImpactSpreadDetail` and the Bitget/Bybit adapters; total spread keeps the impact-VWAP mid denominator while the sub-spreads use the top-of-book BBO mid. Controller stores `ImpactSpreadDetailResult`; table renders both sub-values with tooltips 买入冲击价差/卖出冲击价差. Verified: 172 tests/553 assertions, typecheck, and lint pass. |
+| 2026-08-13 | Added untrimmed single Spot/Perp analytics and exact chart-range interaction across single, spread, and ratio charts: drag focus, persistent UTC labels, candle click, Arrow movement, Shift+Arrow anchored selection, exact dashboard filtering, and reset-safe slider coexistence. Focused/relevant validation passed with 115 tests/456 assertions, typecheck, ESLint (one pre-existing CrossExchangeSearch Hook warning), and production build. |

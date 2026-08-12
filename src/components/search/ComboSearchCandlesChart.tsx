@@ -8,6 +8,7 @@ import {
   type FundingRatePoint,
 } from "@/lib/search-candles";
 import { type ComboCandleResult, type ComboFundingLegObservation } from "@/lib/combo";
+import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 // ==================== Types ====================
 
@@ -20,6 +21,8 @@ interface Props {
   onTimeRangeChange: (range: ChartRange) => void;
   showVolume: boolean;
   onToggleVolume: () => void;
+  timeSelection?: ChartTimeSelection | null;
+  onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
 }
 
 interface CandleDatum {
@@ -175,8 +178,17 @@ export default function ComboSearchCandlesChart({
   interval,
   showVolume,
   onToggleVolume,
+  timeSelection = null,
+  onTimeSelectionChange,
 }: Props) {
   const chartRef = useRef<HTMLDivElement | null>(null);
+  const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
+  const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
+  const pointerRef = useRef<{ pointerId: number; clientX: number; clientY: number; dragged: boolean } | null>(null);
+  const selectionRef = useRef(timeSelection);
+  const selectionChangeRef = useRef(onTimeSelectionChange);
+  useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
+  useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -231,6 +243,12 @@ export default function ComboSearchCandlesChart({
           secondFunding: f.secondFunding ?? null,
         }))
       : [];
+    const temporaryZeroFundingData = fundingData.map((point) => (
+      point.value !== null && ((point.firstFunding === null) !== (point.secondFunding === null))
+        ? point.value
+        : null
+    ));
+    const hasTemporaryZeroFunding = temporaryZeroFundingData.some((value) => value !== null);
 
     const axisInterval = candles.length > 200
       ? Math.floor(candles.length / 8)
@@ -244,6 +262,7 @@ export default function ComboSearchCandlesChart({
     ];
     if (hasFunding) {
       legendData.push({ name: fundingName });
+      if (hasTemporaryZeroFunding) legendData.push({ name: "含临时0的费率差" });
     }
 
     const gridConfig = hasFunding
@@ -266,7 +285,7 @@ export default function ComboSearchCandlesChart({
       const candleItem = items.find((item: any) => item.seriesType === "candlestick");
       const volumeItem = items.find((item: any) => item.seriesType === "bar" && item.seriesName === subLabel);
       const fundingItem = hasFunding
-        ? items.find((item: any) => item.seriesType === "line")
+        ? items.find((item: any) => item.seriesType === "line" && item.seriesName === fundingName)
         : null;
 
       const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -301,6 +320,7 @@ export default function ComboSearchCandlesChart({
         // Per-leg rows only when the derived difference is rendered (both
         // actual, or a one-sided chart-only zero) — never beneath 资金费率差: 无.
         const datum = fundingItem.data as FundingDatum | undefined;
+        if ((datum?.firstFunding === null) !== (datum?.secondFunding === null)) lines.push("资金费率差：含临时0，仅图表显示");
         lines.push(formatLegFundingRow(`${firstExchange} ${firstSymbol}`, datum?.firstFunding ?? null));
         lines.push(formatLegFundingRow(`${secondExchange} ${secondSymbol}`, datum?.secondFunding ?? null));
       } else if (hasFunding) {
@@ -434,6 +454,7 @@ export default function ComboSearchCandlesChart({
 
     const seriesConfig: any[] = [
       {
+        id: "exact-selection-candles",
         type: "candlestick",
         name: INTERVAL_LABELS[interval],
         data: candleSeries,
@@ -502,6 +523,20 @@ export default function ComboSearchCandlesChart({
           label: { show: false },
         },
       });
+      if (hasTemporaryZeroFunding) {
+        seriesConfig.push({
+          type: "scatter",
+          name: "含临时0的费率差",
+          xAxisIndex: 2,
+          yAxisIndex: 2,
+          data: temporaryZeroFundingData,
+          symbol: "diamond",
+          symbolSize: 9,
+          itemStyle: { color: "#fbbf24", borderColor: "#78350f", borderWidth: 1.5 },
+          tooltip: { show: false },
+          z: 5,
+        });
+      }
     }
 
     chart.setOption({
@@ -541,6 +576,7 @@ export default function ComboSearchCandlesChart({
         {
           type: "inside",
           xAxisIndex: hasFunding ? [0, 1, 2] : [0, 1],
+          moveOnMouseMove: false,
         },
         {
           type: "slider",
@@ -549,10 +585,26 @@ export default function ComboSearchCandlesChart({
           height: 16,
         },
       ],
+      ...(typeof onTimeSelectionChange === "function" ? { brush: { brushType: "lineX", brushMode: "single", removeOnClick: false, xAxisIndex: hasFunding ? [0, 1, 2] : [0, 1], brushLink: "all" } } : {}),
       xAxis: xAxisConfig,
       yAxis: yAxisConfig,
       series: seriesConfig,
     });
+    const openTimes = candles.map((candle) => candle.openTime);
+    const focus = (selection: ChartTimeSelection | null, showTip = false, zoomRange = false) => {
+      if (!selection) { chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { data: [] } }] }); if (openTimes.length > 0) chart.dispatchAction({ type: "dataZoom", startValue: 0, endValue: openTimes.length - 1 }); return; }
+      const indices = chartSelectionIndices(openTimes, selection);
+      if (!indices) return;
+      if (zoomRange) chart.dispatchAction({ type: "dataZoom", startValue: indices.startIndex, endValue: indices.endIndex });
+      chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { silent: true, itemStyle: { color: "rgba(139,92,246,.1)" }, label: { show: false }, data: [[{ xAxis: indices.startIndex }, { xAxis: indices.endIndex }]] } }] });
+      chart.dispatchAction({ type: "downplay", seriesIndex: 0 }); chart.dispatchAction({ type: "highlight", seriesIndex: 0, dataIndex: indices.cursorIndex });
+      if (showTip) chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: indices.cursorIndex });
+    };
+    applySelectionRef.current = focus;
+    const commit = (first: number, second: number, showTip = false, zoomRange = false) => { const next = chartTimeSelectionFromIndices(openTimes, first, second); if (next) { selectionRef.current = next; chartRef.current?.focus({ preventScroll: true }); selectionChangeRef.current?.(next); focus(next, showTip, zoomRange); } };
+    const brushEnd = (event: any) => { const range = event?.areas?.[0]?.coordRange; if (Array.isArray(range)) { commit(Math.round(range[0]), Math.round(range[1]), false, true); chart.dispatchAction({ type: "brush", areas: [] }); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); } };
+    selectAtPixelRef.current = (point) => { if (!chart.containPixel({ gridIndex: 0 }, point) || openTimes.length === 0) return; const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point); const value = Array.isArray(converted) ? converted[0] : converted; const resolved = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value)); const start = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(openTimes.length - 1, resolved)) : 0; const nearest = openTimes.reduce((best, _candle, candidate) => { const px = Number(chart.convertToPixel({ xAxisIndex: 0 }, candidate)); const bestPx = Number(chart.convertToPixel({ xAxisIndex: 0 }, best)); return Number.isFinite(px) && Math.abs(px - point[0]) < Math.abs(bestPx - point[0]) ? candidate : best; }, start); commit(nearest, nearest, true); };
+    if (typeof onTimeSelectionChange === "function") { chart.on("brushEnd", brushEnd); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); }
 
     const resizeObserver = new ResizeObserver(() => {
       chart.resize();
@@ -561,9 +613,14 @@ export default function ComboSearchCandlesChart({
 
     return () => {
       resizeObserver.disconnect();
+      if (typeof onTimeSelectionChange === "function") chart.off("brushEnd", brushEnd);
+      if (applySelectionRef.current === focus) applySelectionRef.current = null;
+      selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [data, interval, showVolume]);
+  }, [data, interval, showVolume, onTimeSelectionChange]);
+
+  useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
   const hasFunding = data.fundingRates.length > 0 && interval !== "1m";
   const isSparseFunding = hasFunding
@@ -573,7 +630,14 @@ export default function ComboSearchCandlesChart({
 
   return (
     <div className="relative">
-      <div ref={chartRef} className="h-[520px] w-full" />
+      <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": "Perpetual combination candlestick chart", "aria-describedby": "combo-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        const times = data.candles.map((candle) => candle.openTime);
+        event.preventDefault();
+        const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
+        if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
+      } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
+      {typeof onTimeSelectionChange === "function" && <><p id="combo-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>}
       {/* 图表说明注释 */}
       <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
         <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>
@@ -583,6 +647,7 @@ export default function ComboSearchCandlesChart({
         {hasFunding && isSparseFunding && (
           <p>• 副图2：资金费率差（结算点）＝ 第一交易对年化费率 − 第二交易对年化费率；圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），缺失时段留空</p>
         )}
+        {data.fundingRates.some((point) => point.sampleCount !== 0 && ((point.firstFunding == null) !== (point.secondFunding == null))) && <p>• 黄色菱形：一条腿的显式 sampleCount=0 按临时 0 计算的费率差，仅用于图表展示，不计入历史资金费率平均值。</p>}
         <p>• 数据对齐：仅保留两个交易对共同存在的时间戳（交集）</p>
       </div>
     </div>
