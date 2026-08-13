@@ -4,7 +4,9 @@ export type CandleSourceKind =
   | "official 1Dutc"
   | "official 1Wutc"
   | "official native interval"
-  | "official daily aggregation to UTC Monday";
+  | "official daily aggregation to UTC Monday"
+  | "aggregated from 4h (UTC day)"
+  | "aggregated from 4h (UTC week)";
 
 export type QuoteTurnoverSource = "official" | "derived" | "unavailable";
 
@@ -55,4 +57,21 @@ export function createCandleSourceProvenance(
     };
   }
   return { exchange, requestedInterval, sourceInterval, sourceKind: "official native interval", quoteTurnover };
+}
+
+/**
+ * Provenance for Bitget rToken candles, which have no official UTC day/week
+ * granularity and must be rebuilt from UTC-aligned 4h buckets.
+ */
+export function createBitgetRTokenProvenance(
+  requestedInterval: "1d" | "1w",
+  sourceInterval: "4h",
+): CandleSourceProvenance {
+  return {
+    exchange: "Bitget",
+    requestedInterval,
+    sourceInterval,
+    sourceKind: requestedInterval === "1d" ? "aggregated from 4h (UTC day)" : "aggregated from 4h (UTC week)",
+    quoteTurnover: "official",
+  };
 }
