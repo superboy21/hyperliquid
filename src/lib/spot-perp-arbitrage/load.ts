@@ -1,4 +1,4 @@
-import { fetchSearchCandles, type SearchCandleResult, type SearchChartInterval } from "../search-candles";
+import { fetchSearchCandles, type CandleFetchOptions, type SearchCandleResult, type SearchChartInterval } from "../search-candles";
 import { fetchSpotCandles, type SpotCandleResult } from "../spot-search-candles";
 import type { ArbitrageMarket, PerpMarket, SpotMarket } from "./model";
 import { normalizePerpSeries, normalizeSpotSeries, type LegSeries } from "./series";
@@ -24,11 +24,12 @@ export async function loadMarketCandles(
   market: ArbitrageMarket,
   interval: SearchChartInterval,
   signal?: AbortSignal,
+  options: CandleFetchOptions = {},
 ): Promise<LoadedLeg> {
   if (market.kind === "perp") {
-    const original = await fetchSearchCandles(market.source, interval, signal);
+    const original = await fetchSearchCandles(market.source, interval, signal, options);
     return { kind: "perp", market, original, series: normalizePerpSeries(market, original) };
   }
-  const original = await fetchSpotCandles(market.source, interval, signal);
+  const original = await fetchSpotCandles(market.source, interval, signal, options);
   return { kind: "spot", market, original, series: normalizeSpotSeries(market, original) };
 }

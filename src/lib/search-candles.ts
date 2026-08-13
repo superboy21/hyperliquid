@@ -11,10 +11,17 @@ import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget
 import { fetchBybitCandles, fetchBybitFundingHistory, resolveBybitFundingHistoryWindowMs } from "./adapters/bybit";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
 import { requireBitgetRawSymbol, requireBybitRawSymbol, type SearchExchangeRate } from "./search";
+import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
 
 // ==================== Types ====================
 
 export type SearchChartInterval = "1d" | "1w" | "4h" | "1h" | "5m" | "1m";
+export type CandlePurpose = "single" | "combo";
+export interface CandleFetchOptions {
+  purpose?: CandlePurpose;
+  /** Captured chart-generation bounds. Only Bitget consumes these currently. */
+  window?: Readonly<{ startTime?: number; endTime: number }>;
+}
 
 export interface SearchCandlePoint {
   openTime: number;
@@ -40,6 +47,7 @@ export interface SearchCandleResult {
   interval: SearchChartInterval;
   exchange: string;
   symbol: string;
+  provenance?: CandleSourceProvenance;
 }
 
 export type SearchChartRequest =
@@ -122,9 +130,9 @@ function toGateInterval(interval: SearchChartInterval): string {
   }
 }
 
-function toOkxBar(interval: SearchChartInterval): string {
+export function toOkxBar(interval: SearchChartInterval): string {
   switch (interval) {
-    case "1w": return "1W";
+    case "1w": return "1Wutc";
     case "1d": return "1Dutc";
     case "4h": return "4H";
     case "1h": return "1H";
@@ -165,6 +173,20 @@ function toHyperliquidDays(interval: SearchChartInterval): number {
   return maxDaysForInterval(interval, MAX_CANDLES.hyperliquid);
 }
 
+export function resolvePerpCandleSource(
+  exchange: "Hyperliquid" | "Lighter",
+  interval: SearchChartInterval,
+  purpose: CandlePurpose = "single",
+): { sourceInterval: SearchChartInterval; aggregateWeekly: boolean } {
+  if (interval !== "1w") return { sourceInterval: interval, aggregateWeekly: false };
+  if (exchange === "Lighter") {
+    return { sourceInterval: "1d", aggregateWeekly: true };
+  }
+  return purpose === "combo"
+    ? { sourceInterval: "1d", aggregateWeekly: true }
+    : { sourceInterval: "1w", aggregateWeekly: false };
+}
+
 // ==================== Gate.io Interval MS (not in public API) ====================
 
 function getGateIntervalMs(interval: SearchChartInterval): number {
@@ -187,7 +209,7 @@ function getUtcWeekStart(timestamp: number): number {
   return weekStart;
 }
 
-function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCandlePoint[] {
+export function aggregateDailyCandlesToWeekly(candles: SearchCandlePoint[]): SearchCandlePoint[] {
   if (candles.length === 0) return [];
 
   const sorted = [...candles].sort((a, b) => a.openTime - b.openTime);
@@ -269,12 +291,16 @@ async function fetchHyperliquidCandles(
   symbol: string,
   interval: SearchChartInterval,
   signal?: AbortSignal,
+  purpose: CandlePurpose = "single",
 ): Promise<SearchCandlePoint[]> {
   try {
-    const hlInterval = toHyperliquidInterval(interval) as "1d" | "4h" | "1h" | "5m" | "1w";
-    const days = toHyperliquidDays(interval);
+    // Hyperliquid's native week anchors on Thursday. Preserve that official
+    // source for a single chart; combinations canonically aggregate UTC days.
+    const { sourceInterval, aggregateWeekly } = resolvePerpCandleSource("Hyperliquid", interval, purpose);
+    const hlInterval = toHyperliquidInterval(sourceInterval) as "1d" | "4h" | "1h" | "5m" | "1w";
+    const days = toHyperliquidDays(sourceInterval);
     const candles = await hlGetCandleSnapshot(symbol, hlInterval as any, days, signal);
-    return candles.map((c) => ({
+    const normalized = candles.map((c) => ({
       openTime: c.openTime,
       closeTime: c.closeTime,
       open: String(c.open),
@@ -284,6 +310,7 @@ async function fetchHyperliquidCandles(
       volume: String(c.volume ?? 0),
       quoteVolume: String((Number(c.volume ?? 0)) * (Number(c.close) || 1)),
     }));
+    return aggregateWeekly ? aggregateDailyCandlesToWeekly(normalized) : normalized;
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] Hyperliquid fetch failed:", error);
@@ -462,7 +489,9 @@ async function fetchLighterCandles(
   symbol: string,
   interval: SearchChartInterval,
   signal?: AbortSignal,
+  purpose: CandlePurpose = "single",
 ): Promise<SearchCandlePoint[]> {
+  const { sourceInterval: effectiveInterval, aggregateWeekly } = resolvePerpCandleSource("Lighter", interval, purpose);
   try {
     // Resolve marketId if not available
     let resolvedMarketId = marketId ?? null;
@@ -483,7 +512,6 @@ async function fetchLighterCandles(
 
     if (resolvedMarketId === null) return [];
 
-    const effectiveInterval: SearchChartInterval = interval === "1w" ? "1d" : interval;
     const resolution = toLighterResolution(effectiveInterval);
     const limit = MAX_CANDLES.lighter;
     const now = Date.now();
@@ -556,9 +584,9 @@ async function fetchLighterCandles(
       return true;
     });
 
-    if (interval === "1w") {
-      // Lighter backend returns stale placeholder data for 1w after 2024-09-14;
-      // aggregate from 1d candles client-side instead.
+    if (aggregateWeekly) {
+      // Lighter has no official weekly candle. Combo charts use canonical UTC
+      // Monday buckets derived from its official daily source.
       return aggregateDailyCandlesToWeekly(deduped);
     }
 
@@ -575,8 +603,9 @@ export async function fetchBitgetSearchCandles(
   interval: SearchChartInterval,
   signal?: AbortSignal,
   fetchCandles: typeof fetchBitgetCandles = fetchBitgetCandles,
+  window?: CandleFetchOptions["window"],
 ): Promise<SearchCandlePoint[]> {
-  const candles = await fetchCandles(rawSymbol, interval, { signal });
+  const candles = await fetchCandles(rawSymbol, interval, { ...window, signal, priority: "interactive" });
   return candles.map((candle) => ({ ...candle }));
 }
 
@@ -730,7 +759,7 @@ export async function fetchBitgetSearchFundingHistory(
   signal?: AbortSignal,
   fetchFundingHistory: typeof fetchBitgetFundingHistory = fetchBitgetFundingHistory,
 ): Promise<{ time: number; rate: number }[]> {
-  const history = await fetchFundingHistory(rawSymbol, { cutoffTime, signal });
+  const history = await fetchFundingHistory(rawSymbol, { cutoffTime, signal, priority: "interactive" });
   return history.map((item) => ({ time: item.timestamp, rate: item.fundingRate }));
 }
 
@@ -750,12 +779,18 @@ export async function fetchBybitSearchFundingHistory(
 }
 
 export interface BitgetSearchChartDependencies {
-  fetchCandles: typeof fetchBitgetSearchCandles;
+  fetchCandles: (rawSymbol: string, interval: SearchChartInterval, signal?: AbortSignal, window?: CandleFetchOptions["window"]) => Promise<SearchCandlePoint[]>;
   fetchFundingHistory: typeof fetchBitgetSearchFundingHistory;
 }
 
 const BITGET_SEARCH_CHART_DEPENDENCIES: BitgetSearchChartDependencies = {
-  fetchCandles: fetchBitgetSearchCandles,
+  fetchCandles: (rawSymbol, interval, signal, window) => fetchBitgetSearchCandles(
+    rawSymbol,
+    interval,
+    signal,
+    fetchBitgetCandles,
+    window,
+  ),
   fetchFundingHistory: fetchBitgetSearchFundingHistory,
 };
 
@@ -765,9 +800,10 @@ export async function fetchBitgetSearchChart(
   interval: SearchChartInterval,
   signal?: AbortSignal,
   dependencies: BitgetSearchChartDependencies = BITGET_SEARCH_CHART_DEPENDENCIES,
+  window?: CandleFetchOptions["window"],
 ): Promise<Pick<SearchCandleResult, "candles" | "fundingRates">> {
   const rawSymbol = requireBitgetRawSymbol(rate);
-  const candles = await dependencies.fetchCandles(rawSymbol, interval, signal);
+  const candles = await dependencies.fetchCandles(rawSymbol, interval, signal, window);
   throwIfAborted(signal);
   if (candles.length === 0) return { candles: [], fundingRates: [] };
 
@@ -845,20 +881,26 @@ export async function fetchSearchCandles(
   rate: SearchExchangeRate,
   interval: SearchChartInterval,
   signal?: AbortSignal,
+  options: CandleFetchOptions = {},
 ): Promise<SearchCandleResult> {
+  const purpose = options.purpose ?? "single";
+  const source = rate.exchange === "Hyperliquid" || rate.exchange === "Lighter"
+    ? resolvePerpCandleSource(rate.exchange, interval, purpose)
+    : { sourceInterval: interval, aggregateWeekly: false };
   const empty: SearchCandleResult = {
     candles: [],
     fundingRates: [],
     interval,
     exchange: rate.exchange,
     symbol: rate.symbol,
+    provenance: createCandleSourceProvenance(rate.exchange, interval, source.sourceInterval, source.aggregateWeekly),
   };
 
   switch (rate.exchange) {
     case "Hyperliquid": {
       const hlSymbol = rate.rawSymbol ?? rate.symbol;
       const [candles, fundingHistory] = await Promise.all([
-        fetchHyperliquidCandles(hlSymbol, interval, signal),
+        fetchHyperliquidCandles(hlSymbol, interval, signal, purpose),
         fetchHyperliquidFundingHistory(hlSymbol, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
@@ -892,14 +934,14 @@ export async function fetchSearchCandles(
     }
     case "Lighter": {
       const [candles, fundingHistory] = await Promise.all([
-        fetchLighterCandles(rate.marketId, rate.symbol, interval, signal),
+        fetchLighterCandles(rate.marketId, rate.symbol, interval, signal, purpose),
         fetchLighterFundingHistory(rate.marketId, rate.symbol, signal),
       ]);
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
     }
     case "Bitget": {
-      const result = await fetchBitgetSearchChart(rate, interval, signal);
+      const result = await fetchBitgetSearchChart(rate, interval, signal, BITGET_SEARCH_CHART_DEPENDENCIES, options.window);
       return { ...empty, ...result };
     }
     case "Bybit": {

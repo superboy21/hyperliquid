@@ -51,3 +51,19 @@ describe("Bybit spot upstream requests", () => {
     }
   });
 });
+
+describe("UTC spot candle mappings", () => {
+  test.each([
+    ["bitget", "1d", "1Dutc"],
+    ["bitget", "1w", "1Wutc"],
+    ["okx", "1d", "1Dutc"],
+    ["okx", "1w", "1Wutc"],
+  ])("maps %s %s to official %s candles", (exchange, interval, expected) => {
+    const built = buildSpotUpstreamRequest(exchange, params(`action=candles&symbol=BTCUSDT&interval=${interval}`));
+    expect(typeof built).not.toBe("string");
+    if (typeof built !== "string") {
+      const url = new URL(built.url);
+      expect(url.searchParams.get(exchange === "bitget" ? "granularity" : "bar")).toBe(expected);
+    }
+  });
+});

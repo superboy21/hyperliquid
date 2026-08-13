@@ -7,6 +7,7 @@ import {
   type SearchCandlePoint,
   type FundingRatePoint,
 } from "@/lib/search-candles";
+import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { type ComboCandleResult, type ComboFundingLegObservation } from "@/lib/combo";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
@@ -637,6 +638,7 @@ export default function ComboSearchCandlesChart({
         const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
       } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
+      <ChartSourceCaption legProvenance={data.legProvenance} />
       {typeof onTimeSelectionChange === "function" && <><p id="combo-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>}
       {/* 图表说明注释 */}
       <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">

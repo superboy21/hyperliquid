@@ -3,6 +3,7 @@ import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
 import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
 
 export type BitgetCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
+export type BitgetRequestPriority = "interactive" | "normal" | "background";
 export type BitgetAction = "instruments" | "tickers" | "current-fund-rate" | "history-fund-rate" | "candles" | "history-candles" | "orderbook";
 
 export interface BitgetInstrument {
@@ -136,61 +137,142 @@ function retryAfterMs(response: Response, now: number): number | null {
   return Number.isFinite(parsed) ? Math.max(0, Math.min(60_000, parsed)) : null;
 }
 
-/** A FIFO, single-concurrency scheduler shared by every Bitget adapter request. */
+/** A priority FIFO, single-concurrency scheduler shared by every Bitget adapter request. */
 export function createBitgetScheduler(options: SchedulerOptions = {}) {
   const fetchImpl = options.fetch ?? fetch;
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
   const random = options.random ?? Math.random;
   const timeoutMs = options.requestTimeoutMs ?? 15_000;
-  let tail = Promise.resolve();
   let nextStart = 0;
+  let running = false;
+  let cooldownUntil = 0;
+  // Advances with scheduled waits too, keeping injected deterministic clocks valid.
+  let releasedAt = 0;
+  let wakeToken = 0;
+  type Job = {
+    url: string;
+    init: RequestInit;
+    priority: BitgetRequestPriority;
+    attempt: number;
+    readyAt: number;
+    resolve: (value: unknown) => void;
+    reject: (error: unknown) => void;
+    aborted: () => void;
+  };
+  const queues: Record<BitgetRequestPriority, Job[]> = { interactive: [], normal: [], background: [] };
+  const currentTime = () => Math.max(now(), releasedAt);
 
-  async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> {
-    let release!: () => void;
-    const ownGate = new Promise<void>((resolve) => { release = resolve; });
-    const turn = tail;
-    tail = turn.catch(() => undefined).then(() => ownGate);
+  async function executeAttempt(job: Job): Promise<unknown> {
+    throwIfAborted(job.init.signal ?? undefined);
+    nextStart = currentTime() + 250;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+    const callerSignal = job.init.signal ?? undefined;
+    const callerAbort = () => controller.abort();
+    callerSignal?.addEventListener("abort", callerAbort, { once: true });
     try {
-      await waitForTurn(turn, init.signal ?? undefined);
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        throwIfAborted(init.signal ?? undefined);
-        const scheduleDelay = Math.max(0, nextStart - now()) + Math.floor(random() * 76);
-        if (scheduleDelay > 0) await sleep(scheduleDelay, init.signal ?? undefined);
-        nextStart = now() + 250;
-
-        const controller = new AbortController();
-        let timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-        const callerSignal = init.signal ?? undefined;
-        const callerAbort = () => controller.abort();
-        callerSignal?.addEventListener("abort", callerAbort, { once: true });
-        try {
-          const response = await fetchImpl(url, { ...init, cache: "no-store", signal: controller.signal });
-          const retryAfter = response.status === 429 ? retryAfterMs(response, now()) : null;
-          const payload: unknown = await response.json().catch(() => undefined);
-          if (!response.ok) {
-            const diagnostics = bitgetEnvelopeDiagnostics(payload);
-            throw new BitgetHttpError(response.status, retryAfter, diagnostics.apiCode, diagnostics.apiMessage);
-          }
-          return unwrapBitgetEnvelope(payload, retryAfter);
-        } catch (error) {
-          if (callerSignal?.aborted) throw abortError();
-          const failure = timedOut ? new BitgetTimeoutError() : error;
-          const retryable = failure instanceof BitgetTimeoutError || (failure instanceof BitgetHttpError && failure.transient);
-          if (!retryable || attempt === 3) throw failure;
-          const exponential = Math.min(8_000, 1_000 * 2 ** (attempt - 1));
-          const honored = failure instanceof BitgetHttpError ? failure.retryAfterMs : null;
-          await sleep(Math.max(exponential, honored ?? 0) + Math.floor(random() * 251), callerSignal);
-        } finally {
-          clearTimeout(timer);
-          callerSignal?.removeEventListener("abort", callerAbort);
-        }
+      const response = await fetchImpl(job.url, { ...job.init, cache: "no-store", signal: controller.signal });
+      const retryAfter = response.status === 429 ? retryAfterMs(response, now()) : null;
+      const payload: unknown = await response.json().catch(() => undefined);
+      if (!response.ok) {
+        const diagnostics = bitgetEnvelopeDiagnostics(payload);
+        throw new BitgetHttpError(response.status, retryAfter, diagnostics.apiCode, diagnostics.apiMessage);
       }
-      throw new Error("Unreachable Bitget retry state");
+      return unwrapBitgetEnvelope(payload, retryAfter);
+    } catch (error) {
+      if (callerSignal?.aborted) throw abortError();
+      throw timedOut ? new BitgetTimeoutError() : error;
     } finally {
-      release();
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", callerAbort);
     }
+  }
+
+  function eligibleAt(job: Job): number {
+    return Math.max(job.readyAt, nextStart, cooldownUntil);
+  }
+  function dequeueReady(): Job | undefined {
+    for (const priority of ["interactive", "normal", "background"] as const) {
+      const job = queues[priority][0];
+      if (job && eligibleAt(job) <= currentTime()) return queues[priority].shift();
+    }
+    return undefined;
+  }
+  function scheduleWake() {
+    // A new queue mutation invalidates any prior wait. Sleep itself need not be
+    // abortable: its token prevents a stale completion from changing scheduler
+    // time or running drain after an earlier interactive wake superseded it.
+    const token = ++wakeToken;
+    if (running) return;
+    const heads = ([queues.interactive[0], queues.normal[0], queues.background[0]].filter(Boolean) as Job[]);
+    if (heads.length === 0) return;
+    const wakeAt = Math.min(...heads.map(eligibleAt));
+    // A ready head is started synchronously by drain; never schedule a 1ms
+    // wait merely because the scheduler is being refreshed after queue input.
+    if (wakeAt <= currentTime()) return;
+    const delay = Math.max(1, wakeAt - currentTime());
+    void sleep(delay).catch(() => undefined).finally(() => {
+      if (token !== wakeToken) return;
+      releasedAt = Math.max(releasedAt, wakeAt);
+      drain();
+    });
+  }
+  function refreshWake() {
+    scheduleWake();
+    drain();
+  }
+  function finish(job: Job) {
+    job.init.signal?.removeEventListener("abort", job.aborted);
+  }
+  function drain() {
+    if (running) return;
+    const job = dequeueReady();
+    if (!job) { scheduleWake(); return; }
+    if (job.init.signal?.aborted) { job.reject(abortError()); finish(job); drain(); return; }
+    running = true;
+    job.attempt += 1;
+    void executeAttempt(job).then(
+      (value) => { job.resolve(value); finish(job); },
+      (error) => {
+        const retryable = error instanceof BitgetTimeoutError || (error instanceof BitgetHttpError && error.transient);
+        const exponential = Math.min(8_000, 1_000 * 2 ** (job.attempt - 1));
+        const honored = error instanceof BitgetHttpError ? error.retryAfterMs : null;
+        const retryDelay = Math.max(exponential, honored ?? 0) + Math.floor(random() * 251);
+        // A 429 throttles every future attempt even when this was terminal.
+        if (error instanceof BitgetHttpError && error.status === 429) {
+          cooldownUntil = Math.max(cooldownUntil, currentTime() + retryDelay);
+        }
+        if (!job.init.signal?.aborted && retryable && job.attempt < 3) {
+          job.readyAt = currentTime() + retryDelay + Math.floor(random() * 76);
+          // Retaining the head preserves FIFO within this priority across retries.
+          queues[job.priority].unshift(job);
+        } else {
+          job.reject(job.init.signal?.aborted ? abortError() : error);
+          finish(job);
+        }
+      },
+    ).finally(() => {
+      running = false;
+      drain();
+    });
+  }
+  function fetchJson(url: string, init: RequestInit = {}, priority: BitgetRequestPriority = "normal"): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const job = { url, init, priority, attempt: 0, readyAt: currentTime() + Math.floor(random() * 76), resolve, reject, aborted: () => undefined } as Job;
+      job.aborted = () => {
+        const queue = queues[job.priority];
+        const index = queue.indexOf(job);
+        if (index !== -1) queue.splice(index, 1);
+        reject(abortError());
+        refreshWake();
+      };
+      if (init.signal?.aborted) { reject(abortError()); return; }
+      init.signal?.addEventListener("abort", job.aborted, { once: true });
+      queues[priority].push(job);
+      refreshWake();
+    });
   }
 
   return { fetchJson };
@@ -279,7 +361,7 @@ export function normalizeBitgetFundingRows(
   return result;
 }
 
-export type BitgetRequest = (action: BitgetAction, params: Record<string, string>, signal?: AbortSignal) => Promise<unknown>;
+export type BitgetRequest = (action: BitgetAction, params: Record<string, string>, signal?: AbortSignal, options?: { priority?: BitgetRequestPriority }) => Promise<unknown>;
 
 const BITGET_API_ORIGIN = "https://api.bitget.com";
 const BITGET_ACTION_PATHS: Record<BitgetAction, string> = {
@@ -305,8 +387,8 @@ export function buildBitgetUrl(action: BitgetAction, params: Record<string, stri
   return url.toString();
 }
 
-export const requestBitget: BitgetRequest = (action, params, signal) => {
-  return bitgetScheduler.fetchJson(buildBitgetUrl(action, params), { signal });
+export const requestBitget: BitgetRequest = (action, params, signal, options) => {
+  return bitgetScheduler.fetchJson(buildBitgetUrl(action, params), { signal }, options?.priority);
 };
 
 export async function fetchBitgetCanonicalRates(signal?: AbortSignal, request: BitgetRequest = requestBitget) {
@@ -336,7 +418,7 @@ export function latestBitgetFundingPoint(history: CanonicalFundingHistoryPoint[]
 
 export async function fetchBitgetFundingHistory(
   rawSymbol: string,
-  options: { cutoffTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; request?: BitgetRequest } = {},
+  options: { cutoffTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; request?: BitgetRequest; priority?: BitgetRequestPriority } = {},
 ): Promise<CanonicalFundingHistoryPoint[]> {
   const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 100));
   const maxPages = Math.max(1, Math.min(100, Math.trunc(options.maxPages ?? 100)));
@@ -345,7 +427,7 @@ export async function fetchBitgetFundingHistory(
   let previousOldest = Number.POSITIVE_INFINITY;
   for (let cursor = 1; cursor <= maxPages; cursor += 1) {
     throwIfAborted(options.signal);
-    const payload = await request("history-fund-rate", { symbol: rawSymbol, cursor: String(cursor), limit: String(pageSize) }, options.signal);
+    const payload = await request("history-fund-rate", { symbol: rawSymbol, cursor: String(cursor), limit: String(pageSize) }, options.signal, { priority: options.priority });
     const rawRows = parseBitgetList<BitgetFundingHistoryEntry>(payload);
     const rows = normalizeBitgetFundingHistory(payload);
     for (const row of rows) if (options.cutoffTime === undefined || row.timestamp >= options.cutoffTime) collected.set(row.timestamp, row.fundingRate);
@@ -376,12 +458,16 @@ const INTERVAL_CONFIG: Record<BitgetCandleInterval, { api: string; ms: number; c
   "5m": { api: "5m", ms: 300_000, cap: 9_000, pages: 90 },
   "1h": { api: "1H", ms: 3_600_000, cap: 9_000, pages: 90 },
   "4h": { api: "4H", ms: 14_400_000, cap: 6_600, pages: 66 },
-  "1d": { api: "1D", ms: 86_400_000, cap: 3_000, pages: 34 },
-  "1w": { api: "1D", ms: 86_400_000, cap: 3_000, pages: 34 },
+  // V3 exposes UTC-boundary variants. Native 1D/1W use UTC+8 and must not
+  // be substituted for chart data.
+  "1d": { api: "1Dutc", ms: 86_400_000, cap: 3_000, pages: 34 },
+  // A 90-day transport window holds twelve whole UTC weeks; the 37-request
+  // budget leaves enough room to meet the 430-candle cap.
+  "1w": { api: "1Wutc", ms: 7 * 86_400_000, cap: 430, pages: 37 },
 };
 const MAX_HISTORY_WINDOW = 90 * 86_400_000;
 
-export function normalizeBitgetCandles(payload: unknown, interval: Exclude<BitgetCandleInterval, "1w"> | "1D" = "1d"): CanonicalCandlePoint[] {
+export function normalizeBitgetCandles(payload: unknown, interval: BitgetCandleInterval | "1D" = "1d"): CanonicalCandlePoint[] {
   if (!Array.isArray(payload)) throw new TypeError("Malformed Bitget candle payload");
   const intervalKey = interval === "1D" ? "1d" : interval;
   const duration = INTERVAL_CONFIG[intervalKey].ms;
@@ -408,49 +494,30 @@ function mondayUtc(timestamp: number) {
   return dayStart - offset * 86_400_000;
 }
 
-export function aggregateBitgetWeeklyCandles(daily: CanonicalCandlePoint[]): CanonicalCandlePoint[] {
-  const groups = new Map<number, CanonicalCandlePoint[]>();
-  for (const candle of daily) {
-    const key = mondayUtc(candle.openTime);
-    const group = groups.get(key) ?? [];
-    group.push(candle);
-    groups.set(key, group);
-  }
-  return Array.from(groups.entries()).sort((a, b) => a[0] - b[0]).map(([openTime, unordered]) => {
-    const rows = unordered.sort((a, b) => a.openTime - b.openTime);
-    const quoteValues = rows.map((row) => row.quoteVolume === undefined ? null : numberOrNull(row.quoteVolume));
-    const hasCompleteOfficialTurnover = quoteValues.every((value) => value !== null && value >= 0);
-    return {
-      openTime,
-      closeTime: openTime + 7 * 86_400_000 - 1,
-      open: rows[0].open,
-      high: String(Math.max(...rows.map((row) => numberOrZero(row.high)))),
-      low: String(Math.min(...rows.map((row) => numberOrZero(row.low)))),
-      close: rows[rows.length - 1].close,
-      volume: String(rows.reduce((sum, row) => sum + numberOrZero(row.volume), 0)),
-      ...(hasCompleteOfficialTurnover
-        ? { quoteVolume: String(quoteValues.reduce<number>((sum, value) => sum + (value as number), 0)) }
-        : {}),
-    };
-  }).slice(-430);
+function alignBitgetCandleTime(timestamp: number, interval: BitgetCandleInterval, config: { ms: number }) {
+  return interval === "1w" ? mondayUtc(timestamp) : Math.floor(timestamp / config.ms) * config.ms;
 }
 
 export async function fetchBitgetCandles(
   rawSymbol: string,
   interval: BitgetCandleInterval,
-  options: { startTime?: number; endTime?: number; signal?: AbortSignal; request?: BitgetRequest } = {},
+  options: { startTime?: number; endTime?: number; signal?: AbortSignal; request?: BitgetRequest; priority?: BitgetRequestPriority } = {},
 ): Promise<CanonicalCandlePoint[]> {
   const config = INTERVAL_CONFIG[interval];
   const request = options.request ?? requestBitget;
   const collected = new Map<number, CanonicalCandlePoint>();
   const requestedStart = options.startTime;
-  const alignedRequestedStart = requestedStart === undefined ? undefined : Math.floor(requestedStart / config.ms) * config.ms;
-  const alignedEnd = Math.floor((options.endTime ?? Date.now()) / config.ms) * config.ms;
+  const alignedRequestedStart = requestedStart === undefined ? undefined : alignBitgetCandleTime(requestedStart, interval, config);
+  const alignedEnd = alignBitgetCandleTime(options.endTime ?? Date.now(), interval, config);
+  // Recent candles are (startTime, endTime]; history candles are
+  // [startTime, endTime). Keep their shared seam at the recent oldest candle
+  // so history supplies the immediately preceding timestamp.
+  const rowsPerRequest = Math.min(100, Math.floor(MAX_HISTORY_WINDOW / config.ms));
   let previousOldest = Number.POSITIVE_INFINITY;
 
   const normalizePayload = (payload: unknown) => {
     if (!Array.isArray(payload)) throw new TypeError("Malformed Bitget candle payload");
-    return normalizeBitgetCandles(payload, interval === "1w" ? "1D" : interval);
+    return normalizeBitgetCandles(payload, interval);
   };
   const addRows = (rows: CanonicalCandlePoint[]) => {
     for (const row of rows) {
@@ -463,55 +530,46 @@ export async function fetchBitgetCandles(
   // V3's recent endpoint is always the first and exactly one request. Its
   // explicit aligned window also makes a supplied historical end deterministic.
   throwIfAborted(options.signal);
-  const alignedRecentStart = Math.floor(Math.min(alignedEnd, Math.max(
-    1,
-    alignedRequestedStart ?? alignedEnd - 99 * config.ms,
-    alignedEnd - MAX_HISTORY_WINDOW + config.ms,
-  )) / config.ms) * config.ms;
-  const recentStart = alignedRecentStart === alignedEnd
-    ? Math.max(0, alignedEnd - config.ms)
-    : alignedRecentStart;
+  const oldestRecent = Math.max(
+    alignedRequestedStart ?? 1,
+    alignedEnd - (rowsPerRequest - 1) * config.ms,
+  );
+  const recentStart = oldestRecent - config.ms;
   if (recentStart >= alignedEnd) return [];
   const recentPayload = await request("candles", {
     symbol: rawSymbol, interval: config.api, type: "market", limit: "100",
     startTime: String(recentStart), endTime: String(alignedEnd),
-  }, options.signal);
+  }, options.signal, { priority: options.priority });
   const recentRows = normalizePayload(recentPayload);
   addRows(recentRows);
   let oldest = recentRows.length ? recentRows[0].openTime : Number.POSITIVE_INFINITY;
 
   const cutoffMet = requestedStart !== undefined && oldest <= requestedStart;
   previousOldest = oldest;
-  let end = Number.isFinite(oldest)
-    ? Math.floor((oldest - config.ms) / config.ms) * config.ms
-    : alignedEnd - config.ms;
+  let end = Number.isFinite(oldest) ? oldest : alignedEnd;
 
   // The recent request consumes one request from the interval's page budget.
   for (let page = 1; page < config.pages && collected.size < config.cap && !cutoffMet; page += 1) {
     throwIfAborted(options.signal);
     if (end <= 0) break;
-    const start = Math.max(1, alignedRequestedStart ?? 1, end - MAX_HISTORY_WINDOW + config.ms);
-    const alignedStart = Math.floor(start / config.ms) * config.ms;
-    if (alignedStart > end || (alignedStart === end && requestedStart !== undefined && end < requestedStart)) break;
-    const transportStart = alignedStart === end ? Math.max(0, end - config.ms) : alignedStart;
-    if (transportStart >= end) break;
-    const maximumRowsForWindow = Math.min(100, Math.max(0, Math.floor((end - alignedStart) / config.ms) + 1));
+    const start = Math.max(alignedRequestedStart ?? 1, end - rowsPerRequest * config.ms);
+    if (start >= end) break;
+    const maximumRowsForWindow = Math.floor((end - start) / config.ms);
     const payload = await request("history-candles", {
       symbol: rawSymbol, interval: config.api, type: "market", limit: "100",
-      startTime: String(transportStart), endTime: String(end),
-    }, options.signal);
+      startTime: String(start), endTime: String(end),
+    }, options.signal, { priority: options.priority });
     const rows = normalizePayload(payload);
-    addRows(rows.filter((row) => row.openTime >= alignedStart));
+    addRows(rows);
     oldest = rows.length ? rows[0].openTime : Number.POSITIVE_INFINITY;
     const rawRowCount = (payload as unknown[]).length;
     if (rawRowCount === 0 || rawRowCount < maximumRowsForWindow || oldest >= previousOldest || (requestedStart !== undefined && oldest <= requestedStart)) break;
     previousOldest = oldest;
-    end = Math.floor((oldest - config.ms) / config.ms) * config.ms;
+    end = oldest;
     if (end <= 0) break;
   }
 
-  const dailyOrNative = Array.from(collected.values()).sort((a, b) => a.openTime - b.openTime).slice(-config.cap);
-  return interval === "1w" ? aggregateBitgetWeeklyCandles(dailyOrNative) : dailyOrNative;
+  return Array.from(collected.values()).sort((a, b) => a.openTime - b.openTime).slice(-config.cap);
 }
 
 export function normalizeBitgetOrderBook(payload: unknown): NormalizedBitgetOrderBook {
@@ -576,7 +634,7 @@ export function selectBitgetDetailCandles(
 export async function fetchBitgetCanonicalDetail(
   row: Pick<CanonicalFundingRateRow, "symbol" | "rawSymbol" | "marketKey" | "fundingIntervalSeconds" | "bestBid" | "bestAsk">,
   interval: "1d" | "4h" | "1h",
-  options: { now?: number; signal?: AbortSignal; request?: BitgetRequest } = {},
+  options: { now?: number; signal?: AbortSignal; request?: BitgetRequest; priority?: BitgetRequestPriority } = {},
 ): Promise<CanonicalFundingDetail> {
   const now = options.now ?? Date.now();
   const cutoffTime = now - 30 * 86_400_000;
@@ -588,12 +646,14 @@ export async function fetchBitgetCanonicalDetail(
       maxPages: maxHistoryPages,
       signal: options.signal,
       request: options.request,
+      priority: options.priority,
     }),
     fetchBitgetCandles(row.rawSymbol, interval, {
       startTime: cutoffTime,
       endTime: now,
       signal: options.signal,
       request: options.request,
+      priority: options.priority,
     }).catch((error): CanonicalCandlePoint[] => {
       if (options.signal?.aborted) throw getAbortReason(options.signal);
       if (isAbortLikeError(error)) throw error;

@@ -3,6 +3,8 @@
 import { useEffect, useRef } from "react";
 import * as echarts from "echarts";
 import type { SpotCandlePoint, SpotChartInterval } from "@/lib/spot-search-candles";
+import type { CandleSourceProvenance } from "@/lib/candle-provenance";
+import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 interface SpotSearchCandlesChartProps {
@@ -11,6 +13,7 @@ interface SpotSearchCandlesChartProps {
   interval: SpotChartInterval;
   candles: SpotCandlePoint[];
   showBaseVolume: boolean;
+  provenance?: CandleSourceProvenance;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
 }
@@ -87,6 +90,7 @@ export default function SpotSearchCandlesChart({
   interval,
   candles,
   showBaseVolume,
+  provenance,
   timeSelection = null,
   onTimeSelectionChange,
 }: SpotSearchCandlesChartProps) {
@@ -248,5 +252,5 @@ export default function SpotSearchCandlesChart({
     event.preventDefault();
     const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
     if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
-  } } : {})} className="h-[440px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 sm:h-[520px]" /><p id="spot-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>;
+  } } : {})} className="h-[440px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 sm:h-[520px]" /><ChartSourceCaption provenance={provenance} /><p id="spot-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>;
 }

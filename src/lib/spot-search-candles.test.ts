@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeSpotCandles } from "./spot-search-candles";
+import { aggregateSpotDailyToWeekly, normalizeSpotCandles, resolveSpotCandleSource } from "./spot-search-candles";
 
 describe("spot candle normalizers", () => {
   test("maps Gate's nonstandard array order and sorts/deduplicates timestamps", () => {
@@ -44,5 +44,22 @@ describe("spot candle normalizers", () => {
     expect(candles).toHaveLength(1);
     expect(candles[0]).toMatchObject({ openTime: 1000000000000, volume: "10" });
     expect(candles[0].quoteVolume).toBe("0");
+  });
+});
+
+describe("spot weekly candle source policy", () => {
+  test("uses Hyperliquid native weeks for singles and UTC daily aggregation for combos", () => {
+    expect(resolveSpotCandleSource("Hyperliquid", "1w")).toEqual({ sourceInterval: "1w", aggregateWeekly: false });
+    expect(resolveSpotCandleSource("Hyperliquid", "1w", "combo")).toEqual({ sourceInterval: "1d", aggregateWeekly: true });
+  });
+
+  test("aggregates Lighter single and combo weeks from official UTC days", () => {
+    expect(resolveSpotCandleSource("Lighter", "1w")).toEqual({ sourceInterval: "1d", aggregateWeekly: true });
+    expect(resolveSpotCandleSource("Lighter", "1w", "combo")).toEqual({ sourceInterval: "1d", aggregateWeekly: true });
+    const monday = Date.UTC(2026, 6, 13);
+    expect(aggregateSpotDailyToWeekly([
+      { openTime: monday, closeTime: monday + 86_400_000, open: "1", high: "2", low: "1", close: "2", volume: "3" },
+      { openTime: monday + 86_400_000, closeTime: monday + 2 * 86_400_000, open: "2", high: "4", low: "1.5", close: "3", volume: "5" },
+    ])[0]).toMatchObject({ openTime: monday, open: "1", high: "4", low: "1", close: "3", volume: "8" });
   });
 });

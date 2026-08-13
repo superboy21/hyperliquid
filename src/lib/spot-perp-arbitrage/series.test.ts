@@ -5,6 +5,7 @@ import type { SpotMarketRow } from "../spot-search";
 import type { SpotCandleResult } from "../spot-search-candles";
 import { asPerpMarket, asSpotMarket } from "./model";
 import { normalizePerpSeries, normalizeSpotSeries } from "./series";
+import { createCandleSourceProvenance } from "../candle-provenance";
 
 const perpSource = {
   exchange: "Binance", exchangeColor: "yellow", symbol: "BTC", fundingRate: 0, markPrice: 1,
@@ -52,6 +53,28 @@ describe("numeric series boundary", () => {
       interval: "1h", exchange: "Binance", symbol: "BTC", fundingRates: [], candles: [candle(10, "5")],
     };
     expect(normalizePerpSeries(asPerpMarket(perpSource), perpRaw).points[0].turnover).toBeNull();
+  });
+
+  test("derived quote turnover remains estimated instead of being represented as official", () => {
+    const raw: SearchCandleResult = {
+      interval: "1d", exchange: "Hyperliquid", symbol: "BTC", fundingRates: [],
+      candles: [candle(10, "5", "10")],
+      provenance: createCandleSourceProvenance("Hyperliquid", "1d", "1d", false),
+    };
+    expect(normalizePerpSeries(asPerpMarket(perpSource), raw).points[0].turnover).toEqual({
+      value: 10,
+      provenance: "estimated-base-close",
+    });
+
+    const official: SearchCandleResult = {
+      ...raw,
+      exchange: "Binance",
+      provenance: createCandleSourceProvenance("Binance", "1d", "1d", false),
+    };
+    expect(normalizePerpSeries(asPerpMarket(perpSource), official).points[0].turnover).toEqual({
+      value: 10,
+      provenance: "official-quote",
+    });
   });
 
   test("funding keeps observed zero but removes explicit zero-count/malformed samples", () => {

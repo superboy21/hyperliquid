@@ -1,5 +1,6 @@
 import type { FundingRatePoint, SearchCandleResult, SearchChartInterval } from "../search-candles";
 import type { SpotCandleResult } from "../spot-search-candles";
+import type { QuoteTurnoverSource } from "../candle-provenance";
 import type { PerpMarket, SpotMarket } from "./model";
 
 export type TurnoverProvenance = "official-quote" | "estimated-base-close";
@@ -45,6 +46,7 @@ function numeric(value: unknown): number | null {
 function normalizePoints(
   candles: SearchCandleResult["candles"] | SpotCandleResult["candles"],
   kind: "perp" | "spot",
+  quoteTurnover: QuoteTurnoverSource = "official",
 ): LegCandlePoint[] {
   const points = new Map<number, LegCandlePoint>();
   for (const candle of candles) {
@@ -61,9 +63,12 @@ function normalizePoints(
     ) continue;
 
     const official = numeric(candle.quoteVolume);
-    let turnover: LegTurnover | null = official !== null && official >= 0
+    let turnover: LegTurnover | null = quoteTurnover === "official" && official !== null && official >= 0
       ? { value: official, provenance: "official-quote" }
       : null;
+    if (quoteTurnover === "derived" && official !== null && official >= 0) {
+      turnover = { value: official, provenance: "estimated-base-close" };
+    }
     if (kind === "spot" && turnover === null) {
       const estimated = baseVolume * close;
       if (Number.isFinite(estimated) && estimated >= 0) {
@@ -102,7 +107,7 @@ export function normalizePerpSeries(market: PerpMarket, result: SearchCandleResu
     interval: result.interval,
     exchange: result.exchange,
     symbol: result.symbol,
-    points: normalizePoints(result.candles, "perp"),
+    points: normalizePoints(result.candles, "perp", result.provenance?.quoteTurnover),
     funding: normalizeFunding(result.fundingRates),
   };
 }
@@ -113,7 +118,7 @@ export function normalizeSpotSeries(market: SpotMarket, result: SpotCandleResult
     interval: result.interval,
     exchange: result.exchange,
     symbol: result.symbol,
-    points: normalizePoints(result.candles, "spot"),
+    points: normalizePoints(result.candles, "spot", result.provenance?.quoteTurnover),
     funding: [],
   };
 }

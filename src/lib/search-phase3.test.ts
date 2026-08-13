@@ -19,6 +19,7 @@ import {
   type SearchCandlePoint,
 } from "./search-candles";
 import { fetchSearchImpactSpread } from "./impact-price";
+import { createChartRequestWindow } from "./chart-request-window";
 
 const RAW = "XBTMYSTERY7";
 
@@ -75,10 +76,14 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
 
   test("detail dispatch passes exact rawSymbol and rejects a missing one before I/O", async () => {
     const seen: string[] = [];
+    let detailOptions: { priority?: string } | undefined;
     const fetchBitgetCanonicalDetail = async (
       row: Parameters<SearchDetailDependencies["fetchBitgetCanonicalDetail"]>[0],
+      _interval: "1d" | "4h" | "1h",
+      options?: { priority?: string },
     ) => {
       seen.push(row.rawSymbol);
+      detailOptions = options;
       return {
         exchange: "bitget" as const,
         transportMode: "native" as const,
@@ -95,8 +100,11 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
     await fetchDetailForSymbol(rate(), undefined, { fetchBitgetCanonicalDetail });
     expect(seen).toEqual([RAW]);
 
+    await fetchDetailForSymbol(rate(), undefined, { fetchBitgetCanonicalDetail }, { priority: "background" });
+    expect(detailOptions?.priority).toBe("background");
+
     await expect(fetchDetailForSymbol(rate({ rawSymbol: undefined }), undefined, { fetchBitgetCanonicalDetail })).rejects.toThrow("rawSymbol");
-    expect(seen).toEqual([RAW]);
+    expect(seen).toEqual([RAW, RAW]);
     expect(() => requireBitgetRawSymbol(rate({ rawSymbol: undefined }))).toThrow("rawSymbol");
   });
 
@@ -208,6 +216,64 @@ describe("Phase 3 Bitget chart flow", () => {
     expect(result.candles[0].quoteVolume).toBe("17");
     expect(result.candles[1].quoteVolume).toBeUndefined();
     expect(result.fundingRates.find((point) => point.time === 100)?.annualizedRate).toBeCloseTo(0.001 * 12 * 365);
+  });
+
+  test("forwards one bounded window to candles while funding uses the earliest returned candle", async () => {
+    const window = { startTime: 200, endTime: 500 } as const;
+    let receivedWindow: unknown;
+    const actions: string[] = [];
+    await fetchBitgetSearchChart(rate(), "1h", undefined, {
+      fetchCandles: async (_raw, _interval, _signal, actualWindow) => {
+        receivedWindow = actualWindow;
+        return candles;
+      },
+      fetchFundingHistory: async (_raw, cutoff) => {
+        actions.push(`funding:${cutoff}`);
+        return [];
+      },
+    }, window);
+    expect(receivedWindow).toBe(window);
+    expect(actions).toEqual(["funding:100"]);
+  });
+
+  test("reuses the exact same window object for Bitget combo legs", async () => {
+    const window = { endTime: 500 } as const;
+    const seen: unknown[] = [];
+    const dependencies = {
+      fetchCandles: async (_raw: string, _interval: string, _signal?: AbortSignal, actualWindow?: unknown) => { seen.push(actualWindow); return []; },
+      fetchFundingHistory: async () => [],
+    };
+    await Promise.all([
+      fetchBitgetSearchChart(rate(), "1h", undefined, dependencies, window),
+      fetchBitgetSearchChart(rate({ symbol: "ETH", rawSymbol: "ETHODD42" }), "1h", undefined, dependencies, window),
+    ]);
+    expect(seen).toEqual([window, window]);
+  });
+
+  test("marks Bitget funding history as interactive too", async () => {
+    let options: unknown;
+    await fetchBitgetSearchFundingHistory(RAW, 100, undefined, async (_raw, received) => {
+      options = received;
+      return [];
+    });
+    expect(options).toMatchObject({ cutoffTime: 100, priority: "interactive" });
+  });
+
+  test("builds finite and all chart transport windows", () => {
+    const durations = { all: null, "1d": 86_400_000 } as const;
+    const finite = createChartRequestWindow("1d", durations, 100_000_000);
+    expect(finite).toEqual({ startTime: 13_600_000, endTime: 100_000_000 });
+    expect(Object.isFrozen(finite)).toBe(true);
+    expect(createChartRequestWindow("all", durations, 100_000_000)).toEqual({ endTime: 100_000_000 });
+  });
+
+  test("passes finite bounds and interactive priority to the Bitget candle adapter", async () => {
+    let options: unknown;
+    await fetchBitgetSearchCandles(RAW, "1h", undefined, async (_raw, _interval, received) => {
+      options = received;
+      return [];
+    }, { startTime: 100, endTime: 200 });
+    expect(options).toMatchObject({ startTime: 100, endTime: 200, priority: "interactive" });
   });
 
   test("skips funding entirely for a legitimate empty candle response", async () => {

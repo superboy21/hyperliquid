@@ -35,8 +35,8 @@ function integer(value: string | null): number | null {
 }
 function mapInterval(exchange: ExchangeSlug, interval: string): string {
   if (exchange === "gateio") return interval === "1w" ? "7d" : interval;
-  if (exchange === "okx") return interval === "1w" ? "1W" : interval === "1d" ? "1Dutc" : interval.endsWith("h") ? interval.replace("h", "H") : interval;
-  if (exchange === "bitget") return ({ "1w": "1week", "1d": "1day", "4h": "4h", "1h": "1h", "5m": "5min", "1m": "1min" } as Record<string, string>)[interval];
+  if (exchange === "okx") return interval === "1w" ? "1Wutc" : interval === "1d" ? "1Dutc" : interval.endsWith("h") ? interval.replace("h", "H") : interval;
+  if (exchange === "bitget") return ({ "1w": "1Wutc", "1d": "1Dutc", "4h": "4h", "1h": "1h", "5m": "5min", "1m": "1min" } as Record<string, string>)[interval];
   // V5 kline interval values: 1|3|5|15|30|60|120|240|360|720|D|W|M
   if (exchange === "bybit") return ({ "1w": "W", "1d": "D", "4h": "240", "1h": "60", "5m": "5", "1m": "1" } as Record<string, string>)[interval];
   return interval;

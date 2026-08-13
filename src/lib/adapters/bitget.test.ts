@@ -1,6 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
-  aggregateBitgetWeeklyCandles,
   buildBitgetUrl,
   computeBitgetBboSpread,
   computeBitgetImpactSpread,
@@ -123,208 +122,81 @@ describe("Bitget candles and books", () => {
     expect(rows[0]).toMatchObject({ openTime: 1_000_000, closeTime: 4_599_999, volume: "7", quoteVolume: "14" });
   });
 
-  test("aggregates UTC Monday weeks and both volume units", () => {
+  test("routes daily and weekly candles to official UTC intervals without 4H transport", async () => {
     const monday = Date.UTC(2026, 6, 13);
-    const weekly = aggregateBitgetWeeklyCandles([
-      { openTime: monday + 86_400_000, closeTime: 0, open: "2", high: "5", low: "1", close: "4", volume: "3", quoteVolume: "12" },
-      { openTime: monday, closeTime: 0, open: "1", high: "3", low: "0.5", close: "2", volume: "2", quoteVolume: "4" },
-      { openTime: monday + 7 * 86_400_000, closeTime: 0, open: "4", high: "4", low: "4", close: "4", volume: "1", quoteVolume: "4" },
-    ]);
-    expect(weekly).toHaveLength(2);
-    expect(weekly[0]).toMatchObject({ openTime: monday, open: "1", high: "5", low: "0.5", close: "4", volume: "5", quoteVolume: "16" });
-  });
-
-  test("keeps weekly official turnover missing unless every daily candle has a valid value", () => {
-    const monday = Date.UTC(2026, 6, 13);
-    const base = { closeTime: 0, open: "1", high: "2", low: "1", close: "2", volume: "3" };
-    const weekly = aggregateBitgetWeeklyCandles([
-      { ...base, openTime: monday, quoteVolume: "6" },
-      { ...base, openTime: monday + 86_400_000 },
-    ]);
-    const invalid = aggregateBitgetWeeklyCandles([
-      { ...base, openTime: monday, quoteVolume: "6" },
-      { ...base, openTime: monday + 86_400_000, quoteVolume: "not-official" },
-    ]);
-
-    expect(weekly[0].volume).toBe("6");
-    expect(weekly[0].quoteVolume).toBeUndefined();
-    expect(invalid[0].quoteVolume).toBeUndefined();
-  });
-
-  test("enforces the 1m 1500-point/15-page cap and aligned 90-day windows", async () => {
-    let calls = 0;
-    const actions: string[] = [];
-    const request: BitgetRequest = async (action, params) => {
-      calls += 1;
-      actions.push(action);
-      const start = Number(params.startTime);
-      const end = Number(params.endTime);
-      expect(start).toBeLessThan(end);
-      expect(end % 60_000).toBe(0);
-      expect(end - start).toBeLessThanOrEqual(90 * 86_400_000);
-      return Array.from({ length: 100 }, (_, index) => [end - index * 60_000, "1", "1", "1", "1", "1", "1"]);
-    };
-    const rows = await fetchBitgetCandles("BTCUSDT", "1m", { endTime: 2_000_000_000_000, request });
-    expect(calls).toBe(15);
-    expect(rows).toHaveLength(1500);
-    expect(actions).toEqual(["candles", ...Array.from({ length: 14 }, () => "history-candles")]);
-  });
-
-  test("keeps the first 1d candles request within the 90-day-safe window", async () => {
-    const day = 86_400_000;
-    const endTime = Date.UTC(2026, 6, 15);
-    let firstCall: { action: string; params: Record<string, string> } | undefined;
-    const request: BitgetRequest = async (action, params) => {
-      firstCall ??= { action, params };
-      if (action === "history-candles") return [];
-      const start = Number(params.startTime);
-      const end = Number(params.endTime);
-      return Array.from({ length: Math.floor((end - start) / day) + 1 }, (_, index) => [end - index * day, "1", "1", "1", "1", "1"]);
-    };
-
-    await fetchBitgetCandles("BTCUSDT", "1d", { endTime, request });
-
-    expect(firstCall?.action).toBe("candles");
-    const firstSpan = Number(firstCall?.params.endTime) - Number(firstCall?.params.startTime);
-    expect(firstSpan).toBe(89 * day);
-    expect(firstSpan).toBeLessThanOrEqual(90 * day);
-    expect(firstSpan).not.toBe(99 * day);
-  });
-
-  test("stops before an ineligible zero-width history boundary for an unaligned cutoff", async () => {
-    const hour = 3_600_000;
-    const boundary = Date.UTC(2026, 6, 1);
     const calls: Array<{ action: string; params: Record<string, string> }> = [];
     const request: BitgetRequest = async (action, params) => {
       calls.push({ action, params });
-      return [[boundary + hour, "1", "1", "1", "1", "1"]];
+      return [[monday, "1", "3", "0.5", "2", "7", "14"]];
     };
-
-    const rows = await fetchBitgetCandles("BTCUSDT", "1h", {
-      startTime: boundary + 1,
-      endTime: boundary + hour,
+    await fetchBitgetCandles("BTCUSDT", "1d", { startTime: monday, endTime: monday + 86_400_000, request });
+    const weekly = await fetchBitgetCandles("BTCUSDT", "1w", {
+      startTime: monday,
+      endTime: monday + 2 * 86_400_000,
       request,
     });
-
-    expect(rows.map((row) => row.openTime)).toEqual([boundary + hour]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].action).toBe("candles");
-    expect(Number(calls[0].params.startTime)).toBeLessThan(Number(calls[0].params.endTime));
+    expect(calls.map(({ params }) => params.interval)).toEqual(["1Dutc", "1Wutc"]);
+    expect(calls.every(({ params }) => params.interval !== "4H")).toBe(true);
+    expect(weekly).toHaveLength(1);
+    expect(weekly[0]).toMatchObject({ openTime: monday, closeTime: monday + 7 * 86_400_000 - 1, volume: "7", quoteVolume: "14" });
   });
 
-  test("widens an eligible aligned history boundary and recovers its candle", async () => {
-    const hour = 3_600_000;
-    const boundary = Date.UTC(2026, 6, 1);
+  test("uses endpoint-specific bounds without missing a seam candle", async () => {
+    const minute = 60_000;
+    const endTime = Math.floor(2_000_000_000_000 / minute) * minute;
+    const startTime = endTime - 250 * minute;
     const calls: Array<{ action: string; params: Record<string, string> }> = [];
     const request: BitgetRequest = async (action, params) => {
       calls.push({ action, params });
-      return action === "candles"
-        ? [[boundary + hour, "2", "2", "2", "2", "2"]]
-        : [[boundary, "1", "1", "1", "1", "1"], [boundary - hour, "0", "0", "0", "0", "0"]];
-    };
-
-    const rows = await fetchBitgetCandles("BTCUSDT", "1h", {
-      startTime: boundary,
-      endTime: boundary + hour,
-      request,
-    });
-
-    expect(rows.map((row) => row.openTime)).toEqual([boundary, boundary + hour]);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]).toEqual({
-      action: "history-candles",
-      params: expect.objectContaining({ startTime: String(boundary - hour), endTime: String(boundary) }),
-    });
-  });
-
-  test("widens a same-bucket initial range backward and filters the transport-only row", async () => {
-    const hour = 3_600_000;
-    const boundary = Date.UTC(2026, 6, 1);
-    const calls: Array<{ action: string; params: Record<string, string> }> = [];
-    const request: BitgetRequest = async (action, params) => {
-      calls.push({ action, params });
-      return [[boundary, "1", "1", "1", "1", "1"], [boundary - hour, "0", "0", "0", "0", "0"]];
-    };
-
-    const rows = await fetchBitgetCandles("BTCUSDT", "1h", {
-      startTime: boundary,
-      endTime: boundary + hour / 2,
-      request,
-    });
-
-    expect(calls).toEqual([{
-      action: "candles",
-      params: expect.objectContaining({ startTime: String(boundary - hour), endTime: String(boundary) }),
-    }]);
-    expect(Number(calls[0].params.startTime)).toBeLessThan(Number(calls[0].params.endTime));
-    expect(rows.map((row) => row.openTime)).toEqual([boundary]);
-  });
-
-  test("continues after a complete 90-row 1d window and stops on a genuinely short page", async () => {
-    const day = 86_400_000;
-    const endTime = Date.UTC(2026, 6, 15);
-    const actions: string[] = [];
-    let historyCalls = 0;
-    const request: BitgetRequest = async (action, params) => {
-      actions.push(action);
       const start = Number(params.startTime);
       const end = Number(params.endTime);
-      const rows = Array.from({ length: Math.floor((end - start) / day) + 1 }, (_, index) => [end - index * day, "1", "1", "1", "1", "1"]);
-      if (action !== "history-candles") return rows;
-      historyCalls += 1;
-      return historyCalls === 1 ? rows : rows.slice(0, 12);
+      const first = action === "candles" ? end : end - minute;
+      const last = action === "candles" ? start + minute : start;
+      return Array.from({ length: Math.floor((first - last) / minute) + 1 }, (_, index) => [first - index * minute, "1", "1", "1", "1", "1"]);
     };
+    const rows = await fetchBitgetCandles("BTCUSDT", "1m", { startTime, endTime, request });
+    expect(rows.map((row) => row.openTime)).toEqual(Array.from({ length: 251 }, (_, index) => startTime + index * minute));
+    expect(calls[1]).toMatchObject({ action: "history-candles", params: { endTime: String(endTime - 99 * minute) } });
+  });
 
-    const rows = await fetchBitgetCandles("BTCUSDT", "1d", { endTime, request });
-
-    expect(actions).toEqual(["candles", "history-candles", "history-candles"]);
-    expect(rows).toHaveLength(192);
+  test.each([
+    ["1d", 86_400_000, "1Dutc", 250],
+    ["1w", 7 * 86_400_000, "1Wutc", 200],
+  ] as const)("reaches the requested %s UTC cutoff with realistic recent/history windows", async (interval, ms, api, count) => {
+    const endTime = interval === "1w" ? Date.UTC(2026, 6, 13) : Date.UTC(2026, 6, 15);
+    const startTime = endTime - (count - 1) * ms;
+    const request: BitgetRequest = async (action, params) => {
+      expect(params.interval).toBe(api);
+      const start = Number(params.startTime);
+      const end = Number(params.endTime);
+      const first = action === "candles" ? end : end - ms;
+      const last = action === "candles" ? start + ms : start;
+      return Array.from({ length: Math.floor((first - last) / ms) + 1 }, (_, index) => [first - index * ms, "1", "1", "1", "1", "1"]);
+    };
+    const rows = await fetchBitgetCandles("BTCUSDT", interval, { startTime, endTime, request });
+    expect(rows).toHaveLength(count);
+    expect(rows[0].openTime).toBe(startTime);
     expect(rows.at(-1)?.openTime).toBe(endTime);
   });
 
-  test("requests multiple daily history windows for 1w and aggregates beyond 27 weeks", async () => {
-    const day = 86_400_000;
-    const endTime = Date.UTC(2026, 6, 15);
-    const startTime = endTime - 300 * day;
-    const actions: string[] = [];
+  test.each([
+    ["1d", "1Dutc", 3_000],
+    ["1w", "1Wutc", 430],
+  ] as const)("reaches the configured %s history cap without a seam short-page", async (interval, api, cap) => {
+    const ms = interval === "1d" ? 86_400_000 : 7 * 86_400_000;
+    const endTime = interval === "1d" ? Date.UTC(2026, 6, 15) : Date.UTC(2026, 6, 13);
     const request: BitgetRequest = async (action, params) => {
-      actions.push(action);
+      expect(params.interval).toBe(api);
       const start = Number(params.startTime);
       const end = Number(params.endTime);
-      const rows = Array.from({ length: Math.floor((end - start) / day) + 1 }, (_, index) => [end - index * day, "1", "1", "1", "1", "1"]);
-      return action === "candles" ? rows.slice(0, 100) : rows;
+      const first = action === "candles" ? end : end - ms;
+      const last = action === "candles" ? start + ms : start;
+      return Array.from({ length: Math.floor((first - last) / ms) + 1 }, (_, index) => [first - index * ms, "1", "1", "1", "1", "1"]);
     };
-
-    const rows = await fetchBitgetCandles("BTCUSDT", "1w", { startTime, endTime, request });
-
-    expect(actions).toEqual(["candles", "history-candles", "history-candles", "history-candles"]);
-    expect(rows.length).toBeGreaterThan(27);
-    expect(rows.at(-1)?.openTime).toBe(Date.UTC(2026, 6, 13));
-  });
-
-  test("uses only the one recent request when it reaches the requested cutoff", async () => {
-    const endTime = Math.floor(2_000_000_000_000 / 60_000) * 60_000;
-    const startTime = endTime - 2 * 60_000;
-    const calls: Array<{ action: string; params: Record<string, string> }> = [];
-    const request: BitgetRequest = async (action, params) => {
-      calls.push({ action, params });
-      return Array.from({ length: 3 }, (_, index) => [endTime - index * 60_000, "1", "1", "1", "1", "1", "1"]);
-    };
-    const rows = await fetchBitgetCandles("BTCUSDT", "1m", { startTime, endTime, request });
-    expect(rows).toHaveLength(3);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].action).toBe("candles");
-    expect(Number(calls[0].params.startTime) % 60_000).toBe(0);
-    expect(Number(calls[0].params.endTime) % 60_000).toBe(0);
-  });
-
-  test("dedupes the recent/history seam", async () => {
-    const endTime = Math.floor(2_000_000_000_000 / 60_000) * 60_000;
-    const request: BitgetRequest = async (action) => action === "candles"
-      ? [[endTime, "2", "2", "2", "2", "2"], [endTime - 60_000, "1", "1", "1", "1", "1"]]
-      : [[endTime - 60_000, "9", "9", "9", "9", "9"]];
-    const rows = await fetchBitgetCandles("BTCUSDT", "1m", { endTime, request });
-    expect(rows.map((row) => row.openTime)).toEqual([endTime - 60_000, endTime]);
+    const rows = await fetchBitgetCandles("BTCUSDT", interval, { endTime, request });
+    expect(rows).toHaveLength(cap);
+    expect(rows.every((row, index) => index === 0 || row.openTime - rows[index - 1].openTime === ms)).toBe(true);
+    expect(rows.at(-1)?.openTime).toBe(endTime);
   });
 
   test("normalizes book quantities as base quantities without a multiplier", () => {
@@ -599,6 +471,113 @@ describe("Bitget scheduler", () => {
     await first;
     expect(calls).toBe(1);
   });
+
+  test("runs queued interactive work before background work without preempting the in-flight request", async () => {
+    let releaseFirst!: () => void;
+    const started: string[] = [];
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        started.push(String(url));
+        if (url === "/current") await new Promise<void>((resolve) => { releaseFirst = resolve; });
+        return Response.json({ code: "00000", data: [] });
+      }) as typeof fetch,
+    });
+    const current = scheduler.fetchJson("/current", {}, "background");
+    await Promise.resolve();
+    const background = scheduler.fetchJson("/background", {}, "background");
+    const interactive = scheduler.fetchJson("/interactive", {}, "interactive");
+    releaseFirst();
+    await Promise.all([current, background, interactive]);
+    expect(started).toEqual(["/current", "/interactive", "/background"]);
+  });
+
+  test("keeps FIFO order inside each priority", async () => {
+    const started: string[] = [];
+    const scheduler = createBitgetScheduler({ random: () => 0, sleep: async () => undefined, fetch: (async (url) => {
+      started.push(String(url));
+      return Response.json({ code: "00000", data: [] });
+    }) as typeof fetch });
+    await Promise.all([
+      scheduler.fetchJson("/one", {}, "interactive"),
+      scheduler.fetchJson("/two", {}, "interactive"),
+      scheduler.fetchJson("/three", {}, "interactive"),
+    ]);
+    expect(started).toEqual(["/one", "/two", "/three"]);
+  });
+
+  test("lets interactive work overtake a background retry backoff", async () => {
+    let clock = 0;
+    let calls = 0;
+    const starts: string[] = [];
+    const scheduler = createBitgetScheduler({
+      now: () => clock,
+      random: () => 0,
+      sleep: async (ms) => { clock += ms; },
+      fetch: (async (url) => {
+        starts.push(String(url));
+        calls += 1;
+        return calls === 1
+          ? new Response("{}", { status: 500 })
+          : Response.json({ code: "00000", data: [] });
+      }) as typeof fetch,
+    });
+    const background = scheduler.fetchJson("/background", {}, "background");
+    await Promise.resolve();
+    const interactive = scheduler.fetchJson("/interactive", {}, "interactive");
+    await Promise.all([background, interactive]);
+    expect(starts).toEqual(["/background", "/interactive", "/background"]);
+  });
+
+  test("applies a 429 retry cooldown to queued interactive work", async () => {
+    let clock = 0;
+    let calls = 0;
+    const starts: Array<[string, number]> = [];
+    const scheduler = createBitgetScheduler({
+      now: () => clock,
+      random: () => 0,
+      sleep: async (ms) => { clock += ms; },
+      fetch: (async (url) => {
+        starts.push([String(url), clock]);
+        calls += 1;
+        return calls === 1
+          ? new Response("{}", { status: 429, headers: { "Retry-After": "2" } })
+          : Response.json({ code: "00000", data: [] });
+      }) as typeof fetch,
+    });
+    const background = scheduler.fetchJson("/background", {}, "background");
+    await Promise.resolve();
+    const interactive = scheduler.fetchJson("/interactive", {}, "interactive");
+    await Promise.all([background, interactive]);
+    expect(starts[1]).toEqual(["/interactive", 2000]);
+  });
+
+  test("terminal 429 still cools down a later interactive request", async () => {
+    let clock = 0;
+    let backgroundAttempts = 0;
+    const starts: Array<[string, number]> = [];
+    const scheduler = createBitgetScheduler({
+      now: () => clock,
+      random: () => 0,
+      sleep: async (ms) => { clock += ms; },
+      fetch: (async (url) => {
+        starts.push([String(url), clock]);
+        if (url === "/background") {
+          backgroundAttempts += 1;
+          return backgroundAttempts === 3
+            ? new Response("{}", { status: 429, headers: { "Retry-After": "2" } })
+            : new Response("{}", { status: 500 });
+        }
+        return Response.json({ code: "00000", data: [] });
+      }) as typeof fetch,
+    });
+    await expect(scheduler.fetchJson("/background", {}, "background")).rejects.toMatchObject({ status: 429 });
+    await scheduler.fetchJson("/interactive", {}, "interactive");
+    expect(starts.at(-1)).toEqual(["/interactive", 7000]);
+  });
+
+
 
   test("aborts during retry backoff without another attempt", async () => {
     const controller = new AbortController();

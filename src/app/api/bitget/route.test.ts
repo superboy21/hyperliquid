@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { bitgetActionPath, GET, mappedBitgetStatus } from "./route";
 
@@ -42,5 +42,16 @@ describe("Bitget proxy contract", () => {
     expect(mappedBitgetStatus(200, "25000")).toBe(503);
     expect(mappedBitgetStatus(200, "40017")).toBe(400);
     expect(mappedBitgetStatus(418, "unknown")).toBe(502);
+  });
+
+  test.each(["1Dutc", "1Wutc"])("allows official UTC candle interval %s", async (interval) => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ code: "00000", msg: "success", data: [] }));
+    try {
+      const response = await GET(request(`action=candles&symbol=BTCUSDT&interval=${interval}`));
+      expect(response.status).toBe(200);
+      expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("interval")).toBe(interval);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

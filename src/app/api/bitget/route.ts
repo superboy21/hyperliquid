@@ -5,7 +5,7 @@ const API_BASE = "https://api.bitget.com";
 const TIMEOUT_MS = 10_000;
 const MAX_HISTORY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 const SYMBOL_RE = /^[A-Z0-9]{1,40}$/;
-const INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1H", "4H", "6H", "12H", "1D"]);
+const INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1H", "4H", "6H", "12H", "1D", "1Dutc", "1Wutc"]);
 const CANDLE_TYPES = new Set(["market", "mark", "index", "premium"]);
 
 type ActionSpec = { path: string; allowed: readonly string[]; required: readonly string[] };

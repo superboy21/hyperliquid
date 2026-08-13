@@ -632,6 +632,8 @@ export interface SearchDetailDependencies {
   fetchBybitCanonicalDetail: typeof fetchBybitCanonicalDetail;
 }
 
+export interface SearchDetailOptions { priority?: "interactive" | "normal" | "background" }
+
 const SEARCH_DETAIL_DEPENDENCIES: SearchDetailDependencies = {
   fetchBitgetCanonicalDetail,
   fetchBybitCanonicalDetail,
@@ -641,6 +643,7 @@ export async function fetchDetailForSymbol(
   rate: SearchExchangeRate,
   signal?: AbortSignal,
   dependencies: SearchDetailDependencies = SEARCH_DETAIL_DEPENDENCIES,
+  options: SearchDetailOptions = {},
 ): Promise<DetailResult> {
   switch (rate.exchange) {
     case "Hyperliquid":
@@ -652,7 +655,7 @@ export async function fetchDetailForSymbol(
     case "OKX":
       return fetchOkxDetail(rate.rawSymbol ?? `${rate.symbol}-USDT-SWAP`, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Bitget":
-      return fetchBitgetDetail(rate, signal, dependencies.fetchBitgetCanonicalDetail);
+      return fetchBitgetDetail(rate, signal, dependencies.fetchBitgetCanonicalDetail, options.priority);
     case "Bybit":
       return fetchBybitDetail(rate, signal, dependencies.fetchBybitCanonicalDetail);
     case "Lighter":
@@ -689,6 +692,7 @@ async function fetchBitgetDetail(
   rate: SearchExchangeRate,
   signal?: AbortSignal,
   fetchCanonicalDetail: typeof fetchBitgetCanonicalDetail = fetchBitgetCanonicalDetail,
+  priority: SearchDetailOptions["priority"] = "normal",
 ): Promise<DetailResult> {
   const rawSymbol = requireBitgetRawSymbol(rate);
   const detail = await fetchCanonicalDetail({
@@ -698,7 +702,7 @@ async function fetchBitgetDetail(
     fundingIntervalSeconds: rate.fundingInterval,
     bestBid: rate.bestBid,
     bestAsk: rate.bestAsk,
-  }, "1d", { signal });
+  }, "1d", { signal, priority });
   const fundingHistory = detail.fundingHistory.map((item) => ({
     time: item.timestamp,
     fundingRate: String(item.fundingRate),

@@ -1,5 +1,6 @@
 import { SearchExchangeRate } from "./search";
 import { SearchCandleResult, SearchCandlePoint, FundingRatePoint, SearchChartInterval } from "./search-candles";
+import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
 
 export type ComboMode = "spread" | "ratio" | null;
 
@@ -19,6 +20,7 @@ export interface ComboCandleResult extends SearchCandleResult {
   firstQuoteTurnover?: ComboAnalysisValuePoint[];
   secondQuoteTurnover?: ComboAnalysisValuePoint[];
   dashboardFundingRates?: FundingRatePoint[];
+  legProvenance: [CandleSourceProvenance, CandleSourceProvenance];
 }
 
 export interface ComboAnalysisValuePoint {
@@ -84,6 +86,8 @@ export function alignComboData(
   second: SearchCandleResult,
   mode: "spread" | "ratio",
 ): ComboCandleResult {
+  const sourceProvenance = (result: SearchCandleResult): CandleSourceProvenance => result.provenance
+    ?? createCandleSourceProvenance(result.exchange, result.interval, result.interval, false);
   // 1. Timestamp intersection for candles
   const candleMap = new Map<number, { first: SearchCandlePoint; second: SearchCandlePoint }>();
 
@@ -253,6 +257,8 @@ export function alignComboData(
     firstQuoteTurnover,
     secondQuoteTurnover,
     dashboardFundingRates,
+    provenance: first.provenance,
+    legProvenance: [sourceProvenance(first), sourceProvenance(second)],
   };
 }
 

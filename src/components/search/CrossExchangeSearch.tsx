@@ -7,6 +7,7 @@ import {
   batchFetchDetails,
   partitionProgressiveDetailRates,
   fetchLighterIndexPrices,
+  fetchDetailForSymbol,
   hydrateSearchBinanceOpenInterest,
   type SearchExchangeRate,
   type DetailResult,
@@ -20,6 +21,8 @@ import {
   type SearchCandlePoint,
   type FundingRatePoint,
 } from "@/lib/search-candles";
+import type { CandleSourceProvenance } from "@/lib/candle-provenance";
+import { createChartRequestWindow } from "@/lib/chart-request-window";
 import {
   formatPrice,
   formatVolume,
@@ -271,8 +274,11 @@ export default function CrossExchangeSearch() {
   const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
   const [chartCandles, setChartCandles] = useState<SearchCandlePoint[]>([]);
   const [chartFundingRates, setChartFundingRates] = useState<FundingRatePoint[]>([]);
+  // Retained beside the single-chart payload for a provenance-aware renderer.
+  const [chartProvenance, setChartProvenance] = useState<CandleSourceProvenance | undefined>();
   const [comboChartData, setComboChartData] = useState<ComboCandleResult | null>(null);
   const [comboError, setComboError] = useState<string | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
   const [chartRange, setChartRange] = useState<ChartRange>("1y");
   const [chartLoading, setChartLoading] = useState(false);
   const [showVolume, setShowVolume] = useState(false);
@@ -283,6 +289,13 @@ export default function CrossExchangeSearch() {
     comboSelection.mode !== null && comboSelection.first !== null && comboSelection.second !== null,
     [comboSelection]
   );
+  // `/search` only selects perpetual rows; this gate keeps range re-fetches Bitget-only.
+  const selectedChartIncludesBitget = isComboMode
+    ? comboSelection.first?.exchange === "Bitget" || comboSelection.second?.exchange === "Bitget"
+    : selectedRate?.exchange === "Bitget";
+  // Only Bitget consumes chart windows, so only its active range changes reload.
+  const bitgetChartRange = selectedChartIncludesBitget ? chartRange : null;
+  const chartTransportRange: ChartRange = bitgetChartRange ?? "all";
 
 
 
@@ -443,7 +456,14 @@ export default function CrossExchangeSearch() {
         void batchFetchDetails(lanes.lighter, onUpdate, signal, LIGHTER_DETAIL_CONCURRENCY, LIGHTER_DETAIL_DELAY_MS);
       }
       if (lanes.bitget.length > 0) {
-        void batchFetchDetails(lanes.bitget, onUpdate, signal, BITGET_DETAIL_CONCURRENCY, 0);
+        void batchFetchDetails(
+          lanes.bitget,
+          onUpdate,
+          signal,
+          BITGET_DETAIL_CONCURRENCY,
+          0,
+          (rate, detailSignal) => fetchDetailForSymbol(rate, detailSignal, undefined, { priority: "background" }),
+        );
       }
       if (lanes.bybit.length > 0) {
         void batchFetchDetails(lanes.bybit, onUpdate, signal, BYBIT_DETAIL_CONCURRENCY, 0);
@@ -452,7 +472,15 @@ export default function CrossExchangeSearch() {
         void batchFetchDetails(lanes.okx, onUpdate, signal, OKX_DETAIL_CONCURRENCY, OKX_DETAIL_DELAY_MS);
       }
     },
-    [],
+    [
+      BITGET_DETAIL_CONCURRENCY,
+      BYBIT_DETAIL_CONCURRENCY,
+      DEFAULT_DETAIL_CONCURRENCY,
+      LIGHTER_DETAIL_CONCURRENCY,
+      LIGHTER_DETAIL_DELAY_MS,
+      OKX_DETAIL_CONCURRENCY,
+      OKX_DETAIL_DELAY_MS,
+    ],
   );
 
   // Trigger detail fetching when debounced search term produces results
@@ -704,6 +732,8 @@ export default function CrossExchangeSearch() {
   // Chart: handle row click to show candlestick chart
   const handleRowClick = useCallback(
     (rate: SearchExchangeRate) => {
+      setChartError(null);
+
       // Combo mode: multi-select logic
       if (isComboSearch(searchTerm)) {
         const isFirst = isSameRate(comboSelection.first, rate);
@@ -748,12 +778,14 @@ export default function CrossExchangeSearch() {
         setSelectedRate(null);
         setChartCandles([]);
         setChartFundingRates([]);
+        setChartProvenance(undefined);
         return;
       }
 
       setSelectedRate(rate);
       setChartCandles([]);
       setChartFundingRates([]);
+      setChartProvenance(undefined);
     },
     [selectedRate, searchTerm, comboSelection],
   );
@@ -763,13 +795,14 @@ export default function CrossExchangeSearch() {
     second: SearchExchangeRate,
     interval: SearchChartInterval,
     mode: "spread" | "ratio",
-    signal: AbortSignal
+    signal: AbortSignal,
+    window: Readonly<{ startTime?: number; endTime: number }>,
   ) => {
     setChartLoading(true);
     try {
       const [firstResult, secondResult] = await Promise.all([
-        fetchSearchCandles(first, interval, signal),
-        fetchSearchCandles(second, interval, signal),
+        fetchSearchCandles(first, interval, signal, { purpose: "combo", window }),
+        fetchSearchCandles(second, interval, signal, { purpose: "combo", window }),
       ]);
 
       if (signal.aborted) return;
@@ -796,29 +829,37 @@ export default function CrossExchangeSearch() {
       comboSelection.second,
       comboSelection.mode,
     );
-    if (!request) return;
+    if (!request) {
+      setChartError(null);
+      return;
+    }
 
     chartAbortRef.current?.abort();
     const controller = new AbortController();
     chartAbortRef.current = controller;
     const signal = controller.signal;
     const generation = ++chartRequestGenerationRef.current;
+    const chartWindow = createChartRequestWindow(chartTransportRange, RANGE_MS, Date.now());
 
     setChartCandles([]);
     setChartFundingRates([]);
+    setChartProvenance(undefined);
+    setChartError(null);
     setChartLoading(true);
 
     if (request.kind === "combo") {
       setComboChartData(null);
-      void fetchComboCandles(request.first, request.second, chartInterval, request.mode, signal);
+      void fetchComboCandles(request.first, request.second, chartInterval, request.mode, signal, chartWindow);
       return () => controllerCleanup();
     }
 
-    fetchSearchCandles(request.rate, chartInterval, signal)
+    fetchSearchCandles(request.rate, chartInterval, signal, { window: chartWindow })
       .then((result) => {
         if (!signal.aborted && generation === chartRequestGenerationRef.current) {
           setChartCandles(result.candles);
           setChartFundingRates(result.fundingRates);
+          setChartProvenance(result.provenance);
+          setChartError(null);
           setChartLoading(false);
         }
       })
@@ -827,6 +868,14 @@ export default function CrossExchangeSearch() {
           console.error("[SearchChart] Interval change fetch failed:", error);
           setChartCandles([]);
           setChartFundingRates([]);
+          setChartProvenance(undefined);
+          setChartError(
+            error instanceof Error
+              ? error.message
+              : typeof error === "string"
+                ? error
+                : "K线数据加载失败，请稍后重试",
+          );
           setChartLoading(false);
         }
       });
@@ -836,7 +885,7 @@ export default function CrossExchangeSearch() {
     function controllerCleanup() {
       controller.abort();
     }
-  }, [selectedRate, chartInterval, comboSelection.first, comboSelection.second, comboSelection.mode, fetchComboCandles]);
+  }, [selectedRate, chartInterval, chartTransportRange, comboSelection.first, comboSelection.second, comboSelection.mode, fetchComboCandles]);
 
   // Clear combo chart data when second selection is removed
   useEffect(() => {
@@ -852,6 +901,8 @@ export default function CrossExchangeSearch() {
     setSelectedRate(null);
     setChartCandles([]);
     setChartFundingRates([]);
+    setChartProvenance(undefined);
+    setChartError(null);
     if (chartAbortRef.current) {
       chartAbortRef.current.abort();
       chartAbortRef.current = null;
@@ -1535,6 +1586,7 @@ export default function CrossExchangeSearch() {
                   key={iv}
                   onClick={() => {
                     if (iv === chartInterval) return;
+                    setChartError(null);
                     if (isComboMode && iv === "1m") {
                       setComboSelection({ first: null, second: null, mode: null });
                       setComboChartData(null);
@@ -1564,6 +1616,8 @@ export default function CrossExchangeSearch() {
                   setSelectedRate(null);
                   setChartCandles([]);
                   setChartFundingRates([]);
+                  setChartProvenance(undefined);
+                  setChartError(null);
                   setComboSelection({ first: null, second: null, mode: null });
                   setComboChartData(null);
                   if (chartAbortRef.current) chartAbortRef.current.abort();
@@ -1604,6 +1658,10 @@ export default function CrossExchangeSearch() {
                 onToggleVolume={() => setShowVolume((v) => !v)}
               />
             )
+          ) : chartError ? (
+            <div className="flex h-[520px] items-center justify-center">
+              <p className="text-red-400">{chartError}</p>
+            </div>
           ) : selectedRate && chartCandles.length > 0 ? (
             <SearchCandlesChart
               symbol={selectedRate.symbol}
@@ -1613,6 +1671,7 @@ export default function CrossExchangeSearch() {
               candles={filteredChartData.candles}
               fundingRates={filteredChartData.fundingRates}
               showVolume={showVolume}
+              provenance={chartProvenance}
             />
           ) : (
             <div className="flex h-[520px] items-center justify-center">

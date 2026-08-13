@@ -8,6 +8,7 @@ import { combineLoadedLegs, type SpotContainingCombinationResult } from "./combi
 import type { LoadedLeg, LoadedPerpLeg, LoadedSpotLeg } from "./load";
 import { asPerpMarket, asSpotMarket } from "./model";
 import { normalizePerpSeries, normalizeSpotSeries } from "./series";
+import { createCandleSourceProvenance } from "../candle-provenance";
 
 const perpSource = {
   exchange: "Binance", exchangeColor: "yellow", symbol: "BTC", fundingRate: 0, markPrice: 1,
@@ -35,7 +36,7 @@ function perpLeg(
   source: SearchExchangeRate = perpSource,
 ): LoadedPerpLeg {
   const market = asPerpMarket(source);
-  const original: SearchCandleResult = { candles, fundingRates, interval, exchange: source.exchange, symbol: source.symbol };
+  const original: SearchCandleResult = { candles, fundingRates, interval, exchange: source.exchange, symbol: source.symbol, provenance: createCandleSourceProvenance(source.exchange, interval, interval, false) };
   return { kind: "perp", market, original, series: normalizePerpSeries(market, original) };
 }
 
@@ -45,7 +46,7 @@ function spotLeg(
   source: SpotMarketRow = spotSource,
 ): LoadedSpotLeg {
   const market = asSpotMarket(source);
-  const original: SpotCandleResult = { candles, interval, exchange: source.exchange, symbol: source.pair };
+  const original: SpotCandleResult = { candles, interval, exchange: source.exchange, symbol: source.pair, provenance: createCandleSourceProvenance(source.exchange, interval, interval, false) };
   return { kind: "spot", market, original, series: normalizeSpotSeries(market, original) };
 }
 
@@ -62,6 +63,7 @@ describe("spot-containing combination", () => {
     expect(combined.composition).toBe("spot-spot");
     expect(combined.points).toHaveLength(1);
     expect(combined.points[0]).toMatchObject({ openTime: 10, closeTime: 20, open: 6, close: 7 });
+    expect(combined.legProvenance).toHaveLength(2);
     expect(spotResult(combineLoadedLegs(spotLeg([rawCandle(1, 1, 1)]), spotLeg([rawCandle(2, 1, 1)]), "spread")).points).toEqual([]);
   });
 

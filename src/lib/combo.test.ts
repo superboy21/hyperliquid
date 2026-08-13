@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { alignComboData } from "./combo";
 import type { SearchCandleResult } from "./search-candles";
+import { createCandleSourceProvenance } from "./candle-provenance";
 
 function makeCandleResult(overrides: Partial<SearchCandleResult> = {}): SearchCandleResult {
   return {
@@ -9,6 +10,7 @@ function makeCandleResult(overrides: Partial<SearchCandleResult> = {}): SearchCa
     interval: "1h",
     exchange: "Binance",
     symbol: "BTC",
+    provenance: createCandleSourceProvenance("Binance", "1h", "1h", false),
     ...overrides,
   };
 }
@@ -36,6 +38,8 @@ describe("alignComboData", () => {
     expect(result.candles[0].high).toBe("");
     expect(result.candles[0].low).toBe("");
     expect(result.candles[0].volume).toBe("10");
+    expect(result.legProvenance).toHaveLength(2);
+    expect(result.legProvenance[0].sourceKind).toBe("official native interval");
   });
 
   test("ratio calculation correctness", () => {
@@ -215,6 +219,18 @@ describe("alignComboData", () => {
     expect(result.fundingRates).toHaveLength(1);
     expect(result.fundingRates[0].time).toBe(1000);
     expect(result.fundingRates[0].rate).toBe(0.005);
+  });
+
+  test("UTC-Monday weekly candles overlap exactly across canonical series", () => {
+    const monday = Date.UTC(2026, 6, 13);
+    const week = 7 * 86_400_000;
+    const result = alignComboData(
+      makeCandleResult({ interval: "1w", candles: [{ openTime: monday, closeTime: monday + week - 1, open: "10", high: "12", low: "9", close: "11", volume: "1", quoteVolume: "10" }] }),
+      makeCandleResult({ interval: "1w", exchange: "Hyperliquid", candles: [{ openTime: monday, closeTime: monday + week - 1, open: "5", high: "6", low: "4", close: "5.5", volume: "2", quoteVolume: "11" }] }),
+      "spread",
+    );
+    expect(result.candles).toHaveLength(1);
+    expect(result.candles[0].openTime).toBe(monday);
   });
 
   test("dashboard funding uses leg1 minus leg2 only when both buckets are actual", () => {

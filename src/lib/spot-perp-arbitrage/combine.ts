@@ -3,6 +3,7 @@ import type { FundingRatePoint, SearchCandlePoint, SearchCandleResult, SearchCha
 import type { LoadedLeg, LoadedPerpLeg } from "./load";
 import type { PerpMarket, SpotMarket } from "./model";
 import type { ActualFundingObservation, LegCandlePoint, LegTurnover } from "./series";
+import { createCandleSourceProvenance, type CandleSourceProvenance } from "../candle-provenance";
 
 export type CombinationMode = "spread" | "ratio";
 
@@ -26,6 +27,7 @@ interface SpotContainingCombinationBase {
   interval: SearchChartInterval;
   points: CombinedPoint[];
   funding: SignedFundingObservation[];
+  legProvenance: [CandleSourceProvenance, CandleSourceProvenance];
 }
 
 export interface SpotSpotCombinationResult extends SpotContainingCombinationBase {
@@ -142,7 +144,16 @@ function combineSpotContaining(
       .map((point) => ({ ...point, rate: point.rate * sign, annualizedRate: point.annualizedRate * sign, perpLeg }))
     : [];
 
-  const base = { kind: "spot-containing" as const, mode, interval: first.series.interval, points, funding };
+  const sourceProvenance = (leg: LoadedLeg): CandleSourceProvenance => leg.original.provenance
+    ?? createCandleSourceProvenance(leg.original.exchange, leg.original.interval, leg.original.interval, false);
+  const base = {
+    kind: "spot-containing" as const,
+    mode,
+    interval: first.series.interval,
+    points,
+    funding,
+    legProvenance: [sourceProvenance(first), sourceProvenance(second)] as [CandleSourceProvenance, CandleSourceProvenance],
+  };
   if (first.kind === "spot" && second.kind === "spot") {
     return { ...base, composition: "spot-spot", leg1: first.market, leg2: second.market };
   }

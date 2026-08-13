@@ -1,7 +1,10 @@
 import type { SpotExchangeName, SpotMarketRow } from "./spot-search";
 import { spotFetch } from "./spot-fetch";
+import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
 
 export type SpotChartInterval = "1w" | "1d" | "4h" | "1h" | "5m" | "1m";
+export type SpotCandlePurpose = "single" | "combo";
+export interface SpotCandleFetchOptions { purpose?: SpotCandlePurpose }
 
 export interface SpotCandlePoint {
   openTime: number;
@@ -19,6 +22,7 @@ export interface SpotCandleResult {
   interval: SpotChartInterval;
   exchange: SpotExchangeName;
   symbol: string;
+  provenance?: CandleSourceProvenance;
 }
 
 const INTERVAL_MS: Record<SpotChartInterval, number> = {
@@ -120,13 +124,28 @@ export function aggregateSpotDailyToWeekly(points: readonly SpotCandlePoint[]): 
   });
 }
 
+export function resolveSpotCandleSource(
+  exchange: SpotExchangeName,
+  interval: SpotChartInterval,
+  purpose: SpotCandlePurpose = "single",
+): { sourceInterval: SpotChartInterval; aggregateWeekly: boolean } {
+  if (interval === "1w" && exchange === "Lighter") {
+    return { sourceInterval: "1d", aggregateWeekly: true };
+  }
+  if (interval === "1w" && exchange === "Hyperliquid" && purpose === "combo") {
+    return { sourceInterval: "1d", aggregateWeekly: true };
+  }
+  return { sourceInterval: interval, aggregateWeekly: false };
+}
+
 export async function fetchSpotCandlesWithLimit(
   row: SpotMarketRow,
   interval: SpotChartInterval,
   requestedLimit: number,
   signal?: AbortSignal,
+  options: SpotCandleFetchOptions = {},
 ): Promise<SpotCandleResult> {
-  const effectiveInterval = row.exchange === "Lighter" && interval === "1w" ? "1d" : interval;
+  const { sourceInterval: effectiveInterval, aggregateWeekly } = resolveSpotCandleSource(row.exchange, interval, options.purpose ?? "single");
   const limit = Math.max(1, Math.min(Math.trunc(requestedLimit), MAX_CANDLES[row.exchange]));
   const params = new URLSearchParams({ action: "candles", interval: effectiveInterval, limit: String(limit) });
   if (row.exchange === "Lighter" && row.marketId !== undefined) params.set("marketId", String(row.marketId));
@@ -134,14 +153,18 @@ export async function fetchSpotCandlesWithLimit(
   const response = await spotFetch(row.exchange, params, { signal });
   if (!response.ok) throw new Error(`${row.exchange} spot candles failed (${response.status})`);
   let candles = normalizeSpotCandles(row.exchange, await response.json(), effectiveInterval);
-  if (row.exchange === "Lighter" && interval === "1w") candles = aggregateSpotDailyToWeekly(candles);
-  return { candles, interval, exchange: row.exchange, symbol: row.pair };
+  if (aggregateWeekly) candles = aggregateSpotDailyToWeekly(candles);
+  return {
+    candles, interval, exchange: row.exchange, symbol: row.pair,
+    provenance: createCandleSourceProvenance(row.exchange, interval, effectiveInterval, aggregateWeekly),
+  };
 }
 
 export function fetchSpotCandles(
   row: SpotMarketRow,
   interval: SpotChartInterval,
   signal?: AbortSignal,
+  options: SpotCandleFetchOptions = {},
 ): Promise<SpotCandleResult> {
-  return fetchSpotCandlesWithLimit(row, interval, MAX_CANDLES[row.exchange], signal);
+  return fetchSpotCandlesWithLimit(row, interval, MAX_CANDLES[row.exchange], signal, options);
 }

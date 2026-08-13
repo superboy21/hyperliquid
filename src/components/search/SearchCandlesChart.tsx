@@ -7,6 +7,8 @@ import {
   type SearchCandlePoint,
   type FundingRatePoint,
 } from "@/lib/search-candles";
+import type { CandleSourceProvenance } from "@/lib/candle-provenance";
+import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 // ==================== Types ====================
@@ -19,6 +21,7 @@ interface SearchCandlesChartProps {
   candles: SearchCandlePoint[];
   fundingRates: FundingRatePoint[];
   showVolume: boolean;
+  provenance?: CandleSourceProvenance;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
 }
@@ -161,6 +164,7 @@ export default function SearchCandlesChart({
   candles,
   fundingRates,
   showVolume,
+  provenance,
   timeSelection = null,
   onTimeSelectionChange,
 }: SearchCandlesChartProps) {
@@ -619,6 +623,7 @@ export default function SearchCandlesChart({
   return (
     <div className="relative">
       <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": `${exchange} ${symbol} perpetual candlestick chart`, "aria-describedby": "perp-chart-instructions", onKeyDown, onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
+      <ChartSourceCaption provenance={provenance} />
       {typeof onTimeSelectionChange === "function" && <><p id="perp-chart-instructions" className="sr-only">Drag across the chart to select an exact UTC range. Click a candle to select it. Use left and right arrows to move, or Shift plus arrows to extend a range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>}
       {/* 图表说明注释 */}
       <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">

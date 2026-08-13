@@ -54,6 +54,7 @@ import {
   type MarketKindFilter,
 } from "@/lib/spot-perp-arbitrage";
 import { filterInChartTimeSelection, filterTimedInChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
+import { createChartRequestWindow } from "@/lib/chart-request-window";
 import SearchCandlesChart from "@/components/search/SearchCandlesChart";
 import ComboSearchCandlesChart from "@/components/search/ComboSearchCandlesChart";
 import SpotSearchCandlesChart from "@/components/spot-perp-arbitrage/SpotSearchCandlesChart";
@@ -99,6 +100,11 @@ export function normalizeChartRange(
   if (range === "4h") return "1d";
   if (singleSpot && range === "3y") return "1y";
   return range;
+}
+
+/** Only Bitget perp transport consumes the bounded chart request window. */
+export function hasSelectedBitgetPerp(...markets: Array<ArbitrageMarket | null | undefined>): boolean {
+  return markets.some((market) => market?.kind === "perp" && market.source.exchange === "Bitget");
 }
 
 function isAbortError(error: unknown): boolean {
@@ -348,7 +354,7 @@ export default function SpotPerpArbitrageController() {
       const market = asPerpMarket(rate);
       const id = String(marketId(market));
       try {
-        const result = await fetchDetailForSymbol(rate, controller.signal);
+        const result = await fetchDetailForSymbol(rate, controller.signal, undefined, { priority: "background" });
         if (active()) setDetails((current) => new Map(current).set(id, perpDetail(result)));
       } catch (error) {
         fail(id, error);
@@ -428,6 +434,11 @@ export default function SpotPerpArbitrageController() {
   }), [details, impactResults, searchResult.markets]);
 
   const comboMode = searchResult.query.kind === "combo";
+  const selectedChartIncludesBitget = hasSelectedBitgetPerp(selection.leg1, selection.leg2);
+  const bitgetChartRange = selectedChartIncludesBitget ? chartRange : null;
+  const chartTransportRange = selectedChartIncludesBitget
+    ? normalizeChartRange(chartInterval, bitgetChartRange!, !comboMode && selection.leg1?.kind === "spot")
+    : "all" as const;
 
   useEffect(() => {
     chartAbortRef.current?.abort();
@@ -444,6 +455,7 @@ export default function SpotPerpArbitrageController() {
     chartAbortRef.current = controller;
     const leg1 = selection.leg1;
     const leg2 = selection.leg2;
+    const window = createChartRequestWindow(chartTransportRange, SINGLE_RANGE_MS, Date.now());
     const isCurrent = () => !controller.signal.aborted && generation === chartGenerationRef.current;
     setChartLoading(true);
     setChartError(null);
@@ -454,8 +466,8 @@ export default function SpotPerpArbitrageController() {
       try {
         if (needsSecondLeg && leg2 && searchResult.query.kind === "combo") {
           const [first, second] = await Promise.all([
-            loadMarketCandles(leg1, chartInterval, controller.signal),
-            loadMarketCandles(leg2, chartInterval, controller.signal),
+            loadMarketCandles(leg1, chartInterval, controller.signal, { purpose: "combo", window }),
+            loadMarketCandles(leg2, chartInterval, controller.signal, { purpose: "combo", window }),
           ]);
           if (!isCurrent()) return;
           const combined = combineLoadedLegs(first, second, searchResult.query.mode);
@@ -464,7 +476,7 @@ export default function SpotPerpArbitrageController() {
             : { kind: "perp-combo", result: combined });
           return;
         }
-        const leg = await loadMarketCandles(leg1, chartInterval, controller.signal);
+        const leg = await loadMarketCandles(leg1, chartInterval, controller.signal, { window });
         if (isCurrent()) setChartPayload({ kind: "single", leg });
       } catch (error) {
         if (isCurrent() && !isAbortError(error)) {
@@ -475,7 +487,7 @@ export default function SpotPerpArbitrageController() {
       }
     })();
     return () => controller.abort();
-  }, [chartInterval, chartRetry, searchResult.query, selection.leg1, selection.leg2]);
+  }, [chartInterval, chartTransportRange, chartRetry, searchResult.query, selection.leg1, selection.leg2]);
 
   useEffect(() => () => {
     oiAbortRef.current?.abort();
@@ -747,9 +759,9 @@ export default function SpotPerpArbitrageController() {
           ) : chartError ? (
             <div className="flex h-[520px] items-center justify-center" role="alert"><div className="text-center"><p className="text-red-400">K线加载失败</p><p className="mt-1 max-w-md text-sm text-gray-500">{chartError}</p><button type="button" onClick={() => { setExactTimeSelection(null); setChartRetry((current) => current + 1); }} className="mt-4 rounded border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">重试</button></div></div>
           ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "perp" && visibleSinglePerp && visibleSinglePerp.candles.length > 0 ? (
-            <><SearchCandlesChart symbol={visibleSinglePerp.symbol} exchange={visibleSinglePerp.exchange} exchangeColor={chartPayload.leg.market.source.exchangeColor} interval={chartInterval} candles={visibleSinglePerp.candles} fundingRates={visibleSinglePerp.fundingRates} showVolume={showBaseVolume} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSinglePerp.candles} funding={visibleSinglePerp.fundingRates} selection={exactTimeSelection} marketLabel={`${visibleSinglePerp.exchange} ${visibleSinglePerp.symbol} Perp`} marketKind="perp" /></>
+            <><SearchCandlesChart symbol={visibleSinglePerp.symbol} exchange={visibleSinglePerp.exchange} exchangeColor={chartPayload.leg.market.source.exchangeColor} interval={chartInterval} candles={visibleSinglePerp.candles} fundingRates={visibleSinglePerp.fundingRates} showVolume={showBaseVolume} provenance={chartPayload.leg.original.provenance} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSinglePerp.candles} funding={visibleSinglePerp.fundingRates} selection={exactTimeSelection} marketLabel={`${visibleSinglePerp.exchange} ${visibleSinglePerp.symbol} Perp`} marketKind="perp" /></>
           ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "spot" && visibleSingleSpot && visibleSingleSpot.candles.length > 0 ? (
-            <><SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSingleSpot.candles} selection={exactTimeSelection} marketLabel={`${visibleSingleSpot.exchange} ${visibleSingleSpot.symbol} Spot`} marketKind="spot" /></>
+            <><SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} provenance={chartPayload.leg.original.provenance} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSingleSpot.candles} selection={exactTimeSelection} marketLabel={`${visibleSingleSpot.exchange} ${visibleSingleSpot.symbol} Spot`} marketKind="spot" /></>
           ) : chartPayload?.kind === "perp-combo" && visiblePerpCombo && visiblePerpCombo.candles.length > 1 ? (
             <ComboSearchCandlesChart data={visiblePerpCombo} interval={chartInterval} timeRange={activeChartRange} onTimeRangeChange={(range) => { setExactTimeSelection(null); setChartRange(normalizeChartRange(chartInterval, range, singleSpotChart)); }} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} />
           ) : chartPayload?.kind === "spot-combo" && visibleSpotCombo && visibleSpotCombo.points.length > 1 ? (
