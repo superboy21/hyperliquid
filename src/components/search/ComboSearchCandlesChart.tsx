@@ -315,9 +315,10 @@ export default function ComboSearchCandlesChart({
         const annualized = fundingItem.value as number;
         const rawRate = fundingItem.data?.rawRate as number | undefined;
         const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
-        const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
-        lines.push(`年化资金费率差: ${annualizedStr}`);
-        lines.push(`原始结算周期费率差: ${rawStr}`);
+        const rawStr = rawRate !== undefined && Number.isFinite(rawRate)
+          ? `${rawRate > 0 ? "+" : ""}${(rawRate * 100).toFixed(4)}%`
+          : null;
+        lines.push(`年化资金费率差: ${rawStr === null ? annualizedStr : `${annualizedStr}（${rawStr}）`}`);
         // Per-leg rows only when the derived difference is rendered (both
         // actual, or a one-sided chart-only zero) — never beneath 资金费率差: 无.
         const datum = fundingItem.data as FundingDatum | undefined;

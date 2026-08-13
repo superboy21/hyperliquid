@@ -68,22 +68,48 @@ function rateSignClass(value: number): string {
   return value > 0 ? "text-green-400" : value < 0 ? "text-red-400" : "text-gray-400";
 }
 
-function annualizedLabel(row: ArbitrageTableRow, value: number, average = false): string {
+function fundingIntervalLabel(row: ArbitrageTableRow): string {
   if (row.market.kind === "spot") return "--";
+
+  const seconds = row.market.kind === "perp" ? row.market.source.fundingInterval : Number.NaN;
+  if (!Number.isFinite(seconds) || seconds <= 0) return "--";
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+export function annualizedFundingValue(row: ArbitrageTableRow, value: number, average = false): number | null {
+  if (row.market.kind === "spot" || !Number.isFinite(value)) return null;
   if (row.exchange === "Lighter") {
-    const annualized = average
+    return average
       ? value * 24 * 365
       : (value / 8) * 24 * 365 * 100;
+  }
+  const seconds = row.market.source.fundingInterval;
+  return Number.isFinite(seconds) && seconds > 0
+    ? value * ((24 * 3600) / seconds) * 365 * 100
+    : null;
+}
+
+function annualizedLabel(row: ArbitrageTableRow, value: number, average = false): string {
+  const annualized = annualizedFundingValue(row, value, average);
+  if (annualized === null) return "--";
+  if (row.exchange === "Lighter") {
     const digits = Math.abs(annualized) >= 100 ? 1 : Math.abs(annualized) >= 10 ? 2 : 3;
     return formatSignedPercent(annualized, digits);
   }
-  return formatAnnualizedRate(value, row.market.source.fundingInterval);
+  return formatAnnualizedRate(value, row.market.kind === "perp" ? row.market.source.fundingInterval : 28800);
 }
 
 function valueForSort(row: ArbitrageTableRow, field: SortField, spreadMode: SpreadMode): number | string | null {
   if (field === "exchange") return row.exchange;
   if (field === "pair") return row.pair;
   if (field === "spread") return spreadMode === "top" ? row.topSpread : row.impactSpread;
+  if (field === "predictedFundingRate") return annualizedFundingValue(row, row.predictedFundingRate ?? Number.NaN);
+  if (field === "latestSettlementRate") return annualizedFundingValue(row, row.latestSettlementRate ?? Number.NaN);
+  if (field === "averageFundingRate2d") return annualizedFundingValue(row, row.averageFundingRate2d ?? Number.NaN, true);
+  if (field === "averageFundingRate7d") return annualizedFundingValue(row, row.averageFundingRate7d ?? Number.NaN, true);
+  if (field === "averageFundingRate30d") return annualizedFundingValue(row, row.averageFundingRate30d ?? Number.NaN, true);
   return row[field];
 }
 
@@ -183,7 +209,8 @@ export default function ArbitrageMarketTable({
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="openInterestNotional" sort={sort} onSort={toggleSort}>持仓价值</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="historicalVolatility" sort={sort} onSort={toggleSort}>历史波动率</SortHeaderButton></th>
             <th className="w-[190px] px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">
-              <div className="flex items-center justify-end gap-1.5">
+              <div className="flex flex-col items-end gap-1.5">
+                <SortHeaderButton field="spread" sort={sort} onSort={toggleSort}>买卖价差</SortHeaderButton>
                 <div className="inline-flex rounded border border-gray-600 bg-gray-900/70 p-0.5" aria-label="价差类型">
                   {(["top", "impact"] as SpreadMode[]).map((mode) => (
                     <button
@@ -201,7 +228,6 @@ export default function ArbitrageMarketTable({
                     </button>
                   ))}
                 </div>
-                <SortHeaderButton field="spread" sort={sort} onSort={toggleSort}>买卖价差</SortHeaderButton>
               </div>
               {spreadMode === "impact" && (
                 <div className="mt-1.5 flex flex-wrap items-center justify-end gap-1">
@@ -247,6 +273,7 @@ export default function ArbitrageMarketTable({
                 </button>
               )}
             </th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">当前结算周期</th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="latestSettlementRate" sort={sort} onSort={toggleSort}>最新结算费率</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate2d" sort={sort} onSort={toggleSort}>平均费率（2天）</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate7d" sort={sort} onSort={toggleSort}>平均费率（7天）</SortHeaderButton></th>
@@ -316,6 +343,7 @@ export default function ArbitrageMarketTable({
                     </div>
                   )}
                 </td>
+                <td className="px-2.5 py-2 text-right"><span className="whitespace-nowrap font-mono text-xs text-gray-300">{fundingIntervalLabel(row)}</span></td>
                 <td className="px-2.5 py-2 text-right">{row.latestSettlementRate === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.latestSettlementRate)}`}>{annualizedLabel(row, row.latestSettlementRate)}</span>}</td>
                 <td className="px-2.5 py-2 text-right">{row.averageFundingRate2d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate2d)}`}>{annualizedLabel(row, row.averageFundingRate2d, true)}</span>}</td>
                 <td className="px-2.5 py-2 text-right">{row.averageFundingRate7d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate7d)}`}>{annualizedLabel(row, row.averageFundingRate7d, true)}</span>}</td>

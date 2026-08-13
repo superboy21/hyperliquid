@@ -366,33 +366,6 @@ export async function fetchImpactSpreadDetail(
   return computeOrderBookImpactDetail(book, notionalUsd);
 }
 
-/** Search dispatch that prevents display-symbol fallback for Bitget. */
-export function fetchSearchImpactSpread(
-  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
-  signal?: AbortSignal,
-  notionalUsd?: number,
-  depthMode?: ImpactDepthMode,
-): Promise<ImpactSpreadResult>;
-export function fetchSearchImpactSpread(
-  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
-  signal?: AbortSignal,
-  notionalUsd?: number,
-  fetcher?: typeof fetchImpactSpread,
-  depthMode?: ImpactDepthMode,
-): Promise<ImpactSpreadResult>;
-export async function fetchSearchImpactSpread(
-  rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
-  signal?: AbortSignal,
-  notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
-  depthModeOrFetcher: ImpactDepthMode | typeof fetchImpactSpread = "standard",
-  depthModeAfterFetcher: ImpactDepthMode = "standard",
-): Promise<ImpactSpreadResult> {
-  const rawSymbol = requireBitgetRawSymbol(rate);
-  const fetcher = typeof depthModeOrFetcher === "function" ? depthModeOrFetcher : fetchImpactSpread;
-  const depthMode = typeof depthModeOrFetcher === "function" ? depthModeAfterFetcher : depthModeOrFetcher;
-  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd, depthMode);
-}
-
 /** Search dispatch for the impact detail fetcher that prevents display-symbol fallback for Bitget. */
 export function fetchSearchImpactSpreadDetail(
   rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,

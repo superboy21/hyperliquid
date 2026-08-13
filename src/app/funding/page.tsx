@@ -96,12 +96,12 @@ export default function FundingPage() {
               </div>
               <h1 className="text-3xl font-bold text-white">交易所资金费率监控</h1>
             </div>
-            <nav className="flex flex-wrap items-center gap-2" aria-label="市场搜索导航">
+            <nav className="flex flex-wrap items-center gap-2" aria-label="工具导航">
               <Link
                 href="/search"
                 className="inline-flex items-center gap-2 rounded-lg border border-indigo-600 bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:border-indigo-500 hover:bg-indigo-500"
               >
-                永续合约搜索
+                现货 / 永续组合
               </Link>
             </nav>
           </div>

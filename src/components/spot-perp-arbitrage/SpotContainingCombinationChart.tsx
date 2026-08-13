@@ -24,6 +24,11 @@ interface TooltipItem {
   data?: unknown;
 }
 
+interface FundingDatum {
+  value: number | null;
+  rawRate?: number;
+}
+
 interface CandleDatum {
   value: [number, number, number, number];
   raw: { open: number; close: number };
@@ -149,6 +154,11 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
       : showAllSymbol
         ? "有符号年化资金费率(结算点)"
         : "有符号年化资金费率";
+    const secondTooltipLabel = result.composition === "spot-spot"
+      ? secondSubLabel
+      : showAllSymbol
+        ? "年化资金费率(结算点)"
+        : "年化资金费率";
     const firstSubData = result.points.map((point, index) => ({
       value: result.composition === "spot-spot" ? point.leg1Turnover?.value ?? null : point.minimumTurnover,
       itemStyle: { color: risingColors[index] },
@@ -158,11 +168,16 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
     const fundingByTime = new Map(
       result.funding
         .filter((point) => point.sampleCount !== 0)
-        .map((point) => [point.time, point.annualizedRate * 100]),
+        .map((point) => [point.time, point]),
     );
     const secondSubData = result.composition === "spot-spot"
       ? result.points.map((point, index) => ({ value: point.leg2Turnover?.value ?? null, itemStyle: { color: risingColors[index] } }))
-      : result.points.map((point) => fundingByTime.get(point.openTime) ?? null);
+      : result.points.map((point) => {
+          const funding = fundingByTime.get(point.openTime);
+          return funding
+            ? { value: funding.annualizedRate * 100, rawRate: funding.rate }
+            : null;
+        });
 
     const title = `${leg1Label} ${result.mode === "spread" ? "−" : "÷"} ${leg2Label}`;
     const tooltipFormatter = (parameters: unknown) => {
@@ -187,11 +202,19 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
       if (secondValue !== null) {
         lines.push(result.composition === "spot-spot"
           ? `${secondSubLabel}：${compact(secondValue)}`
-          : `${secondSubLabel}：${secondValue >= 0 ? "+" : ""}${secondValue.toFixed(2)}%`);
+          : (() => {
+              const funding = secondSub?.data as FundingDatum | undefined;
+              const annualized = `${secondValue >= 0 ? "+" : ""}${secondValue.toFixed(2)}%`;
+              const rawRate = funding?.rawRate;
+              const raw = rawRate !== undefined && Number.isFinite(rawRate)
+                ? `${rawRate >= 0 ? "+" : ""}${(rawRate * 100).toFixed(4)}%`
+                : null;
+              return `${secondTooltipLabel}：${raw === null ? annualized : `${annualized}（${raw}）`}`;
+            })());
       } else if (result.composition !== "spot-spot") {
         // The funding line item may be omitted entirely from axis tooltip
         // params when its value is null — the funding lane still exists.
-        lines.push(`${secondSubLabel}：无`);
+        lines.push(`${secondTooltipLabel}：无`);
       }
       if (result.composition === "spot-spot" && point) {
         if (point.leg1Turnover?.provenance === "estimated-base-close") lines.push("腿1成交额：估算");

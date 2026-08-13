@@ -1,6 +1,6 @@
 /**
  * Progressive detail-fetch lane profile shared by every consumer of
- * partitionProgressiveDetailRates (/search and /spot_perp_arbitrage). One
+ * partitionProgressiveDetailRates (the /search Spot/Perp analysis route). One
  * tested source of truth for how many independent detail rows may fetch in
  * parallel per exchange and how long each lane waits between rows.
  *

@@ -120,23 +120,6 @@ interface LighterOrderBookDetail {
   index_price?: number | string;
 }
 
-export interface LighterIndexPrice {
-  marketId: number | null;
-  symbol: string | null;
-  price: number;
-}
-
-export interface LighterIndexPriceSnapshot {
-  prices: LighterIndexPrice[];
-  complete: boolean;
-  received: number;
-  expected: number | null;
-  missingMarketIds: number[];
-  fetchedAt: string;
-  source: string;
-  stale?: boolean;
-}
-
 interface LighterCandle {
   t?: number;
   timestamp?: number;
@@ -549,69 +532,6 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       assetCategory: getLighterAssetCategory(entry.symbol || ""),
     };
   });
-}
-
-/**
- * Fetch Lighter index prices from the serverless WebSocket snapshot endpoint.
- * Preserves market IDs and snapshot completeness so callers can safely merge partial data.
- * Legacy symbol-price responses are accepted during rolling deployments.
- */
-export async function fetchLighterIndexPrices(
-  marketIds: readonly number[] = [],
-  signal?: AbortSignal,
-): Promise<LighterIndexPriceSnapshot> {
-  const emptySnapshot = (): LighterIndexPriceSnapshot => ({
-    prices: [],
-    complete: false,
-    received: 0,
-    expected: null,
-    missingMarketIds: [],
-    fetchedAt: new Date().toISOString(),
-    source: "unavailable",
-  });
-
-  try {
-    const params = new URLSearchParams();
-    const uniqueMarketIds = [...new Set(marketIds)];
-    if (uniqueMarketIds.length > 0) params.set("marketIds", uniqueMarketIds.join(","));
-    const query = params.toString();
-    const res = await fetch(`/api/lighter/index-prices${query ? `?${query}` : ""}`, { signal });
-    if (!res.ok) return emptySnapshot();
-    const payload: unknown = await res.json();
-
-    if (payload && typeof payload === "object" && Array.isArray((payload as LighterIndexPriceSnapshot).prices)) {
-      const snapshot = payload as LighterIndexPriceSnapshot;
-      return {
-        ...snapshot,
-        prices: snapshot.prices.filter((item) =>
-          item != null && Number.isFinite(item.price) && item.price > 0,
-        ),
-      };
-    }
-
-    const prices: LighterIndexPrice[] = [];
-    if (payload && typeof payload === "object") {
-      for (const [symbol, value] of Object.entries(payload as Record<string, unknown>)) {
-        const price = Number(value);
-        if (Number.isFinite(price) && price > 0) {
-          prices.push({ marketId: null, symbol, price });
-        }
-      }
-    }
-    return {
-      prices,
-      complete: false,
-      received: prices.length,
-      expected: null,
-      missingMarketIds: [],
-      fetchedAt: new Date().toISOString(),
-      source: "legacy",
-    };
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[Search] Lighter index prices fetch failed:", error);
-    return emptySnapshot();
-  }
 }
 
 // ==================== Filter by Keyword ====================

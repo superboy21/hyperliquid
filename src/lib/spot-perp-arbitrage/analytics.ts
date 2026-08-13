@@ -1,4 +1,4 @@
-import type { ComboCandleResult } from "../combo";
+import type { ComboFundingLegObservation, ComboFundingRatePoint, ComboCandleResult } from "../combo";
 import type { MixedCombinationResult, SpotContainingCombinationResult, SpotSpotCombinationResult } from "./combine";
 
 export type ArbitrageChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
@@ -55,9 +55,14 @@ export interface PairDashboardAnalytics {
   derivedClose: DistributionAnalytics;
   currentDerivedClose: ValueWithRelativeGap;
   fundingAnnualized: AverageAnalytics | null;
+  fundingLeg1: AverageAnalytics | null;
+  fundingLeg2: AverageAnalytics | null;
+  fundingAlignedCount: number | null;
   leg1Turnover: AverageAnalytics;
   leg2Turnover: AverageAnalytics;
 }
+
+const INTRADAY_PERP_PAIR_INTERVALS = new Set(["4h", "1h", "5m"]);
 
 export type PairDashboardResult = ComboCandleResult | SpotSpotCombinationResult;
 
@@ -108,6 +113,74 @@ function average(values: readonly number[]): AverageAnalytics {
   return {
     mean: finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null,
     count: finite.length,
+  };
+}
+
+function actualLegFunding(
+  point: ComboFundingRatePoint,
+  observation: ComboFundingLegObservation | null | undefined,
+): ComboFundingLegObservation | null {
+  if (
+    point.sampleCount !== undefined
+    && (!Number.isFinite(point.sampleCount) || point.sampleCount <= 0)
+  ) return null;
+  if (
+    observation == null
+    || !Number.isFinite(observation.rate)
+    || !Number.isFinite(observation.annualizedRate)
+  ) return null;
+  return observation;
+}
+
+function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
+  PairDashboardAnalytics,
+  "fundingAnnualized" | "fundingLeg1" | "fundingLeg2" | "fundingAlignedCount"
+> {
+  if (!INTRADAY_PERP_PAIR_INTERVALS.has(visible.interval)) {
+    const funding = average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate));
+    return { fundingAnnualized: funding, fundingLeg1: null, fundingLeg2: null, fundingAlignedCount: funding.count };
+  }
+
+  const points = [...visible.fundingRates].sort((a, b) => a.time - b.time);
+  // Legacy hand-built results may not carry per-leg metadata. Preserve their
+  // established aligned dashboard metric; production combo results always do.
+  if (points.length === 0 || points.every((point) => point.firstFunding === undefined && point.secondFunding === undefined)) {
+    const funding = average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate));
+    return { fundingAnnualized: funding, fundingLeg1: null, fundingLeg2: null, fundingAlignedCount: funding.count };
+  }
+  const startIndex = points.findIndex((point) => (
+    actualLegFunding(point, point.firstFunding)
+    && actualLegFunding(point, point.secondFunding)
+  ));
+  if (startIndex === -1) {
+    return {
+      fundingAnnualized: { mean: null, count: 0 },
+      fundingLeg1: { mean: null, count: 0 },
+      fundingLeg2: { mean: null, count: 0 },
+      fundingAlignedCount: 0,
+    };
+  }
+
+  const leg1Values: number[] = [];
+  const leg2Values: number[] = [];
+  let alignedCount = 0;
+  for (const point of points.slice(startIndex)) {
+    const leg1 = actualLegFunding(point, point.firstFunding);
+    const leg2 = actualLegFunding(point, point.secondFunding);
+    if (leg1) leg1Values.push(leg1.annualizedRate);
+    if (leg2) leg2Values.push(leg2.annualizedRate);
+    if (leg1 && leg2) alignedCount += 1;
+  }
+  const fundingLeg1 = average(leg1Values);
+  const fundingLeg2 = average(leg2Values);
+  return {
+    fundingAnnualized: {
+      mean: fundingLeg1.mean === null || fundingLeg2.mean === null ? null : fundingLeg1.mean - fundingLeg2.mean,
+      count: alignedCount,
+    },
+    fundingLeg1,
+    fundingLeg2,
+    fundingAlignedCount: alignedCount,
   };
 }
 
@@ -264,7 +337,7 @@ export function pairDashboardAnalytics(
     return {
       derivedClose,
       currentDerivedClose: valueWithRelativeGap(latestClose, derivedClose.mean),
-      fundingAnnualized: average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate)),
+      ...perpPairFundingAnalytics(visible),
       leg1Turnover: average((visible.firstQuoteTurnover ?? []).map((point) => point.value)),
       leg2Turnover: average((visible.secondQuoteTurnover ?? []).map((point) => point.value)),
     };
@@ -275,6 +348,9 @@ export function pairDashboardAnalytics(
     derivedClose,
     currentDerivedClose: valueWithRelativeGap(latestVisibleClose(visible), derivedClose.mean),
     fundingAnnualized: null,
+    fundingLeg1: null,
+    fundingLeg2: null,
+    fundingAlignedCount: null,
     leg1Turnover: average(visible.points.flatMap((point) => point.leg1Turnover ? [point.leg1Turnover.value] : [])),
     leg2Turnover: average(visible.points.flatMap((point) => point.leg2Turnover ? [point.leg2Turnover.value] : [])),
   };

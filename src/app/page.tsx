@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-type ToolAccent = "blue" | "indigo" | "violet";
+type ToolAccent = "blue" | "violet";
 
 interface ToolEntry {
   href: string;
@@ -28,13 +28,6 @@ const ACCENT_CLASSES: Record<
     actionColor: "text-blue-400 group-hover:text-blue-300",
     focusRing: "focus-visible:ring-blue-300",
   },
-  indigo: {
-    tile: "from-indigo-500 to-indigo-600 shadow-lg shadow-indigo-500/25",
-    glow: "from-indigo-500/5 to-sky-500/5",
-    cardHover: "hover:border-indigo-500/50 hover:shadow-indigo-500/10",
-    actionColor: "text-indigo-400 group-hover:text-indigo-300",
-    focusRing: "focus-visible:ring-indigo-300",
-  },
   violet: {
     tile: "from-violet-500 to-indigo-600 shadow-lg shadow-violet-500/25",
     glow: "from-violet-500/5 to-indigo-500/5",
@@ -55,14 +48,6 @@ const TOOLS: ToolEntry[] = [
   },
   {
     href: "/search",
-    name: "跨交易所搜索",
-    description: "跨交易所搜索永续交易对，对比盘口中间价、历史波动率与买卖价差等核心指标。",
-    actionLabel: "搜索市场",
-    accent: "indigo",
-    iconPath: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
-  },
-  {
-    href: "/spot_perp_arbitrage",
     name: "现货 / 永续组合分析",
     description: "统一搜索现货与永续市场，按点击顺序构建价差或比值组合，查看重叠历史、成交额与资金费率。",
     actionLabel: "打开组合工具",
@@ -108,13 +93,13 @@ export default function Home() {
             <span className="bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent"> 数据分析工具</span>
           </h1>
           <p className="mx-auto max-w-2xl text-xl text-gray-400">
-            聚合七家交易所资金费率，提供跨交易所搜索与现货 / 永续组合分析，帮助你更快发现市场机会。
+            聚合七家交易所资金费率，提供资金费率监控与现货 / 永续组合分析，帮助你更快发现市场机会。
           </p>
         </div>
 
         {/* 工具入口 */}
         <h2 className="sr-only">工具入口</h2>
-        <div className="mx-auto grid max-w-5xl grid-cols-1 gap-6 md:grid-cols-3">
+        <div className="mx-auto grid max-w-4xl grid-cols-1 gap-6 md:grid-cols-2">
           {TOOLS.map((tool) => {
             const accent = ACCENT_CLASSES[tool.accent];
             return (

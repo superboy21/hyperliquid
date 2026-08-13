@@ -5,7 +5,6 @@ import {
   fetchDetailForSymbol,
   mapBitgetSearchRate,
   partitionProgressiveDetailRates,
-  requireBitgetRawSymbol,
   type DetailResult,
   type SearchDetailDependencies,
   type SearchExchangeRate,
@@ -14,11 +13,9 @@ import {
   fetchBitgetSearchCandles,
   fetchBitgetSearchChart,
   fetchBitgetSearchFundingHistory,
-  selectSearchChartRequest,
   toAnnualizedRate,
   type SearchCandlePoint,
 } from "./search-candles";
-import { fetchSearchImpactSpread } from "./impact-price";
 import { createChartRequestWindow } from "./chart-request-window";
 
 const RAW = "XBTMYSTERY7";
@@ -105,7 +102,6 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
 
     await expect(fetchDetailForSymbol(rate({ rawSymbol: undefined }), undefined, { fetchBitgetCanonicalDetail })).rejects.toThrow("rawSymbol");
     expect(seen).toEqual([RAW, RAW]);
-    expect(() => requireBitgetRawSymbol(rate({ rawSymbol: undefined }))).toThrow("rawSymbol");
   });
 
   test("maps funding-only canonical detail without losing settlement or BBO metrics", async () => {
@@ -134,16 +130,6 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
     });
   });
 
-  test("impact dispatch uses exact rawSymbol and fails before its fetcher", async () => {
-    const calls: string[] = [];
-    const fetcher = async (_exchange: string, rawSymbol: string) => {
-      calls.push(rawSymbol);
-      return 1;
-    };
-    await expect(fetchSearchImpactSpread(rate(), undefined, 1000, fetcher)).resolves.toBe(1);
-    await expect(fetchSearchImpactSpread(rate({ rawSymbol: undefined }), undefined, 1000, fetcher)).rejects.toThrow("rawSymbol");
-    expect(calls).toEqual([RAW]);
-  });
 });
 
 describe("Phase 3 progressive detail lanes", () => {
@@ -290,25 +276,6 @@ describe("Phase 3 Bitget chart flow", () => {
     expect(toAnnualizedRate(0.001, hours * 3600)).toBeCloseTo(0.001 * (24 / hours) * 365);
   });
 
-  test("single request selector emits one combo generation and dispatches both exact rows", async () => {
-    const first = rate();
-    const second = rate({ symbol: "ETH", rawSymbol: "ETHODD42" });
-    const request = selectSearchChartRequest(null, first, second, "spread");
-    expect(request).toEqual({ kind: "combo", first, second, mode: "spread" });
-    expect(selectSearchChartRequest(null, first, null, "spread")).toBeNull();
-    if (!request || request.kind !== "combo") throw new Error("Expected combo request");
-
-    const symbols: string[] = [];
-    const dependencies = {
-      fetchCandles: async (rawSymbol: string) => { symbols.push(rawSymbol); return []; },
-      fetchFundingHistory: async () => [],
-    };
-    await Promise.all([
-      fetchBitgetSearchChart(request.first, "1h", undefined, dependencies),
-      fetchBitgetSearchChart(request.second, "1h", undefined, dependencies),
-    ]);
-    expect(symbols).toEqual([RAW, "ETHODD42"]);
-  });
 
   test("candle and funding helpers rethrow abort and non-abort failures", async () => {
     const failure = new Error("candle failed");

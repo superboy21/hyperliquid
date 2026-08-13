@@ -229,6 +229,44 @@ describe("two-leg dashboard analytics", () => {
     expect(dashboard.leg2Turnover).toEqual({ mean: 20, count: 1 });
   });
 
+  test("intraday perp pairs start at the first both-actual bucket, then average each leg independently", () => {
+    const combo: ComboCandleResult = {
+      candles: [],
+      fundingRates: [
+        { time: 10, rate: 0.01, annualizedRate: 1, firstFunding: { rate: 0.01, annualizedRate: 1 }, secondFunding: null },
+        { time: 20, rate: -0.02, annualizedRate: -2, firstFunding: null, secondFunding: { rate: 0.02, annualizedRate: 2 } },
+        { time: 30, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 0 }, secondFunding: { rate: 0, annualizedRate: 0 } },
+        { time: 40, rate: 0.05, annualizedRate: 5, firstFunding: { rate: 0.05, annualizedRate: 5 }, secondFunding: null },
+        { time: 50, rate: -0.06, annualizedRate: -6, firstFunding: null, secondFunding: { rate: 0.06, annualizedRate: 6 } },
+        { time: 60, rate: 0, annualizedRate: 0, sampleCount: 0, firstFunding: null, secondFunding: null },
+      ],
+      dashboardFundingRates: [], firstQuoteTurnover: [], secondQuoteTurnover: [],
+      interval: "4h", exchange: "Binance", symbol: "BTC-ETH", mode: "spread",
+      firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+      legProvenance: [] as never,
+    };
+
+    const dashboard = pairDashboardAnalytics(combo, 0);
+    expect(dashboard.fundingLeg1).toEqual({ mean: 2.5, count: 2 });
+    expect(dashboard.fundingLeg2).toEqual({ mean: 3, count: 2 });
+    expect(dashboard.fundingAnnualized).toEqual({ mean: -0.5, count: 1 });
+    expect(dashboard.fundingAlignedCount).toBe(1);
+  });
+
+  test.each(["1d", "1w", "1m"] as const)("%s perp pairs retain strict aligned funding behavior", (interval) => {
+    const combo: ComboCandleResult = {
+      candles: [], fundingRates: [],
+      dashboardFundingRates: [
+        { time: 10, rate: 0.01, annualizedRate: 1 },
+        { time: 20, rate: 0.02, annualizedRate: 3 },
+      ],
+      interval, exchange: "Binance", symbol: "BTC-ETH", mode: "spread",
+      firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+      legProvenance: [] as never,
+    };
+    expect(pairDashboardAnalytics(combo, 0).fundingAnnualized).toEqual({ mean: 2, count: 2 });
+  });
+
   test("spot pair has no funding metric and keeps true-zero turnover without filling missing values", () => {
     const spotPair: SpotSpotCombinationResult = {
       kind: "spot-containing",

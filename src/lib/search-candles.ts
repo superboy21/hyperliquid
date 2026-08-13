@@ -50,23 +50,6 @@ export interface SearchCandleResult {
   provenance?: CandleSourceProvenance;
 }
 
-export type SearchChartRequest =
-  | { kind: "single"; rate: SearchExchangeRate }
-  | { kind: "combo"; first: SearchExchangeRate; second: SearchExchangeRate; mode: "spread" | "ratio" };
-
-/** Selects at most one request generation for the current chart state. */
-export function selectSearchChartRequest(
-  selectedRate: SearchExchangeRate | null,
-  first: SearchExchangeRate | null,
-  second: SearchExchangeRate | null,
-  mode: "spread" | "ratio" | null,
-): SearchChartRequest | null {
-  if (first || second || mode) {
-    return first && second && mode ? { kind: "combo", first, second, mode } : null;
-  }
-  return selectedRate ? { kind: "single", rate: selectedRate } : null;
-}
-
 // ==================== Interval Utilities ====================
 
 const SEARCH_INTERVAL_MS: Record<SearchChartInterval, number> = {

@@ -136,7 +136,7 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
       cards.push({
         label: "年化资金费率差均值",
         value: funding.mean === null ? "--" : `${funding.mean >= 0 ? "+" : ""}${(funding.mean * 100).toFixed(2)}%`,
-        note: `腿1 ${leg1} − 腿2 ${leg2} · ${funding.count} 个双腿真实样本`,
+        note: `腿1 ${leg1}（${analysis.dashboard.fundingLeg1?.count ?? 0}个）− 腿2 ${leg2}（${analysis.dashboard.fundingLeg2?.count ?? 0}个）`,
         tone: funding.mean === null ? "text-gray-500" : funding.mean >= 0 ? "text-emerald-300" : "text-red-300",
       });
     }
@@ -181,7 +181,7 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
             {composition === "mixed"
               ? "资金费率不剔尾；分布统计仅对组合收盘值做对称剔尾。"
               : composition === "perp-perp"
-                ? "资金费率差按腿1减腿2且不剔尾；分布统计仅对组合收盘值做对称剔尾。"
+                ? "4h/1h/5m 从首个双腿真实结算桶开始，分别平均两腿实际结算；1d/1w/1m 保持双腿对齐口径，不剔尾；分布统计仅对组合收盘值做对称剔尾。"
                 : "分布统计仅对组合收盘值做对称剔尾；现货组合不含资金费率。"}
           </p>
         </div>
@@ -235,7 +235,7 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
             <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>只统计真实观测样本；Perp 在腿1时保持正号，在腿2时取负号，再对年化值做算术平均，不参与剔尾。</li>
           )}
           {composition === "perp-perp" && (
-            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>仅在两腿同一时间桶都有真实样本时，计算“腿1年化资金费率 − 腿2年化资金费率”，再做算术平均且不剔尾；方向与价差或比值操作符无关。</li>
+            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>{result.interval === "4h" || result.interval === "1h" || result.interval === "5m" ? "从首个双腿真实结算桶起，腿1与腿2分别纳入之后各自真实结算桶，年化均值为腿1均值 − 腿2均值；卡片显示各腿样本数与双腿起始后对齐样本数。" : "仅在两腿同一时间桶都有真实样本时，计算“腿1年化资金费率 − 腿2年化资金费率”，再做算术平均；方向与价差或比值操作符无关。"}</li>
           )}
           <li className="md:col-span-2"><span aria-hidden="true">💹</span> <span className="font-medium text-gray-400">平均成交额：</span>每条腿分别对可见、对齐 K 线中的 quote turnover 做算术平均；缺失值不按 0，真实 0 参与。这是当前 K 线周期下平均每根 K 线成交额，不是统一折算的日均成交额。{turnoverSourceNote}</li>
           <li><span aria-hidden="true">🔢</span> <span className="font-medium text-gray-400">样本数：</span>卡片显示该指标实际参与计算的有效样本数；不同指标因缺失值或真实样本条件不同，样本数可能不一致。</li>
