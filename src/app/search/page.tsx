@@ -22,7 +22,7 @@ export default function SearchPage() {
               <Link href="/funding" className="rounded-lg border border-blue-600/70 bg-blue-600/15 px-3 py-2 text-sm font-medium text-blue-200 transition-colors hover:bg-blue-600/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">资金费率监控</Link>
             </nav>
           </div>
-          <p className="max-w-4xl text-sm text-gray-400">在六家交易所中搜索现货与永续市场，按顺序组合两条腿，对齐可用历史并查看价差、比值、成交额与资金费率。</p>
+          <p className="max-w-4xl text-sm text-gray-400">在七家交易所中搜索现货与永续市场，按顺序组合两条腿，对齐可用历史并查看价差、比值、成交额与资金费率。</p>
         </header>
         <SpotPerpArbitrageController />
       </div>

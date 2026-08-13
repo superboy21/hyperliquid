@@ -1,11 +1,11 @@
 # HyperTools - 跨交易所市场工具包
 
-一个面向加密市场交易者的跨交易所工具包，提供 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 六家交易所的永续合约资金费率监控、永续搜索与 Spot/Perp 组合分析。
+一个面向加密市场交易者的跨交易所工具包，提供 Hyperliquid、Gate.io、Binance、OKX、Lighter、Bitget 和 Bybit 七家交易所的永续合约资金费率监控、永续搜索与 Spot/Perp 组合分析。
 
 ## 功能特性
 
-- **六交易所资金费率监控**：追踪 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 的永续合约资金费率
-- **Spot/Perp 组合分析**：统一搜索六家交易所的现货与永续市场，按选择顺序分析 Perp/Perp、Spot/Spot 或混合价差与比率；现货侧涵盖价格、成交额、波动率与盘口价差
+- **七交易所资金费率监控**：追踪 Hyperliquid、Gate.io、Binance、OKX、Lighter、Bitget 和 Bybit 的永续合约资金费率
+- **Spot/Perp 组合分析**：统一搜索七家交易所的现货与永续市场，按选择顺序分析 Perp/Perp、Spot/Spot 或混合价差与比率；现货侧涵盖价格、成交额、波动率与盘口价差
 - **历史数据分析**：查看 30 天资金费率历史及统计指标
 - **智能排序与筛选**：按费率、价格、成交量、持仓量、24h 涨跌幅排序
 - **资产类型筛选**：按标准资产、XYZ-Hip3、Vntl-Hip3、Para-Hip3、Km-Hip3 分类查看
@@ -29,7 +29,7 @@ src/
 │   ├── funding/            # 资金费率监控页面
 │   ├── search/             # 跨交易所搜索页面
 │   ├── spot_perp_arbitrage/ # Spot/Perp 组合分析页面
-│   ├── api/spot/[exchange] # 六交易所现货公开市场严格代理
+│   ├── api/spot/[exchange] # 七交易所现货公开市场严格代理
 │   ├── api/bitget/         # Bitget V3 UTA 公开市场 API 服务端代理
 │   ├── layout.tsx          # 根布局
 │   └── page.tsx            # 首页
@@ -74,7 +74,7 @@ Hyperliquid 资金费率监控主组件，包含：
 - 资金费率说明区域
 
 ### ExchangeFundingMonitor.tsx
-通用交易所资金费率监控组件供六家交易所页面复用；资金费率页可在 Hyperliquid、Gate.io、Binance、OKX、Lighter 和 Bitget 之间切换。
+通用交易所资金费率监控组件供七家交易所页面复用；资金费率页可在 Hyperliquid、Gate.io、Binance、OKX、Lighter、Bitget 和 Bybit 之间切换。
 
 ### CrossExchangeSearch.tsx
 跨交易所搜索与对比工具，支持：
@@ -87,7 +87,7 @@ Hyperliquid 资金费率监控主组件，包含：
 现货双面板图表（共享组件，位于 `src/components/spot-perp-arbitrage/`）：上方为 K 线，下方可切换报价币成交额或基础币成交量；现货图表不包含资金费率。该组件由 `/spot_perp_arbitrage` 的选中现货市场来源图表复用。独立的 `/spotsearch` 页面及其 `SpotMarketSearch` 控制器已移除；现货列表、K 线、订单簿与 Impact 计算继续由共享数据层（`/api/spot/[exchange]`、`src/lib/spot-*`）提供。
 
 ### SpotPerpArbitrageController.tsx
-`/spot_perp_arbitrage` 是仅用于市场分析的六交易所 Spot+Perp 统一搜索页。现货默认筛选 `USDT`，可切换 `USDC`、`U`、`USD1`、`USD` 或全部；普通查询可选择单市场并复用来源图表。紧凑语法 `A-B`/`A/B` 分别生成价差/比率，点击顺序确定第一、第二腿；其中 `BTC/USDT` 明确按 BTC 与 USDT 两项的比率查询解析，而不是精确现货交易对查询。
+`/spot_perp_arbitrage` 是仅用于市场分析的七交易所 Spot+Perp 统一搜索页。现货默认筛选 `USDT`，可切换 `USDC`、`U`、`USD1`、`USD` 或全部；普通查询可选择单市场并复用来源图表。紧凑语法 `A-B`/`A/B` 分别生成价差/比率，点击顺序确定第一、第二腿；其中 `BTC/USDT` 明确按 BTC 与 USDT 两项的比率查询解析，而不是精确现货交易对查询。
 
 双腿分析按精确时间戳交集和较短可用历史对齐：Perp/Perp 保留原搜索组合图行为，Spot/Spot 与混合组合展示各腿成交额来源，混合组合还展示有观测值的带符号资金费率。混合分析面板始终消费当前可见时间范围，可按每侧 `0%`、`1%`、`2.5%`、`5%` 或 `10%` 对派生收盘值去尾，并显示均值、总体标准差区间、保留/移除数量及 Spot/Perp 成交额均值；页面不执行自动交易或套利下单。
 
@@ -163,7 +163,7 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 - Lighter
 - Bitget
 
-搜索首次加载六家交易所的基础市场列表；只有在输入搜索条件并产生结果后才渐进获取详情字段，K 线、历史资金费率及组合图表则在点击结果后按需加载。
+搜索首次加载七家交易所的基础市场列表；只有在输入搜索条件并产生结果后才渐进获取详情字段，K 线、历史资金费率及组合图表则在点击结果后按需加载。
 
 支持组合图表语法：
 - `ETH-BTC`：价差图（Spread）
@@ -171,7 +171,7 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 
 ### Spot/Perp 组合分析
 
-`/spot_perp_arbitrage` 将六家交易所的 Spot 与 Perp 市场合并到同一查询和结果表中。页面支持来源单市场图表，以及按选择顺序生成的 Perp/Perp、Spot/Spot 和混合组合图；组合窗口以精确对齐后的较短历史为准，混合统计与图表共享同一可见范围。现货列表、K 线、订单簿与 Impact 深度继续由共享数据层提供（`/api/spot/[exchange]`、`src/lib/spot-*`、`src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`）。本功能用于观察与统计，不包含自动套利执行。
+`/spot_perp_arbitrage` 将七家交易所的 Spot 与 Perp 市场合并到同一查询和结果表中。页面支持来源单市场图表，以及按选择顺序生成的 Perp/Perp、Spot/Spot 和混合组合图；组合窗口以精确对齐后的较短历史为准，混合统计与图表共享同一可见范围。现货列表、K 线、订单簿与 Impact 深度继续由共享数据层提供（`/api/spot/[exchange]`、`src/lib/spot-*`、`src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`）。本功能用于观察与统计，不包含自动套利执行。
 
 ### 数据更新频率
 
@@ -205,7 +205,7 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 
 ### 现货严格代理
 
-`/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX 和 Bitget 六家交易所的严格现货门面，只允许 `list`、`candles`、`book` 三类操作，并校验交易所、参数白名单、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
+`/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX、Bitget 和 Bybit 七家交易所的严格现货门面，只允许 `list`、`candles`、`book` 三类操作，并校验交易所、参数白名单、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
 
 ### Bitget V3 UTA
 

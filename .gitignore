@@ -44,3 +44,7 @@ next-env.d.ts
 
 # Local deepwork session state
 .slim/deepwork/
+
+# Local assistant/tooling state (not project source)
+.omo/
+.workbuddy/

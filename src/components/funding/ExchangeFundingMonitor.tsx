@@ -146,6 +146,18 @@ const intervalLabels: Record<ChartInterval, string> = {
 
 // ==================== Utility Functions ====================
 
+/**
+ * 根据年化百分比返回资金费率热力背景色。
+ * 极端费率（年化 ≥100% 或 ≤-100%）用淡绿/淡红背景做热力图高亮，
+ * 让资金费率扫描时一眼锁定异常资产。
+ */
+function fundingHeatBackground(annualizedPct: number): string {
+  if (Math.abs(annualizedPct) >= 100) {
+    return annualizedPct > 0 ? "bg-green-500/10" : "bg-red-500/10";
+  }
+  return "";
+}
+
 export function getFundingStats(items: IntervalFundingRateItem[]): FundingStats | null {
   if (items.length === 0) return null;
   const rates = items.map((item) => item.averageFundingRate);
@@ -175,9 +187,9 @@ export function FundingStatCard({
 }) {
   if (rate === null) {
     return (
-      <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-        <p className="text-xs text-gray-400">{title}</p>
-        <p className="mt-2 text-sm text-gray-500">暂无数据</p>
+      <div className="rounded-lg border border-border bg-surface-muted/60 p-3">
+        <p className="text-xs text-muted">{title}</p>
+        <p className="mt-2 text-sm text-subtle">暂无数据</p>
       </div>
     );
   }
@@ -196,12 +208,12 @@ export function FundingStatCard({
   const perPeriodStr = `${perPeriodRate >= 0 ? "+" : ""}${perPeriodRate.toFixed(4)}%`;
 
   return (
-    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-      <p className="text-xs text-gray-400">{title}</p>
+    <div className="rounded-lg border border-border bg-surface-muted/60 p-3">
+      <p className="text-xs text-muted">{title}</p>
       <p className={`mt-2 font-mono text-lg font-bold ${isPositive ? "text-green-400" : "text-red-400"}`}>
         {annualizedStr}
       </p>
-      <p className="mt-1 text-xs text-gray-500">周期：{perPeriodStr}</p>
+      <p className="mt-1 text-xs text-subtle">周期：{perPeriodStr}</p>
     </div>
   );
 }
@@ -772,7 +784,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       <div className="flex min-h-[420px] items-center justify-center">
         <div className="text-center">
           <div className={`mx-auto h-12 w-12 animate-spin rounded-full border-b-2 ${themeClasses.spinner}`} />
-          <p className="mt-4 text-gray-400">正在加载 {exchangeName} 资金费率数据...</p>
+          <p className="mt-4 text-muted">正在加载 {exchangeName} 资金费率数据...</p>
         </div>
       </div>
     );
@@ -810,21 +822,21 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
     <div className="space-y-6">
       {/* Stats cards */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">交易对数量</p>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-sm text-muted">交易对数量</p>
           <p className="text-2xl font-bold text-white">{fundingRates.length}</p>
         </div>
         {renderExtraStatsCard && renderExtraStatsCard(fundingRates)}
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">正资金费率</p>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-sm text-muted">正资金费率</p>
           <p className="text-2xl font-bold text-green-400">{positiveRates}</p>
         </div>
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">负资金费率</p>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-sm text-muted">负资金费率</p>
           <p className="text-2xl font-bold text-red-400">{negativeRates}</p>
         </div>
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-          <p className="text-sm text-gray-400">当前平均年化（OI 加权）</p>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-sm text-muted">当前平均年化（OI 加权）</p>
           <p
             className={`text-lg font-bold ${
               averageAnnualizedRate < 0 ? "text-red-400" : "text-green-400"
@@ -844,7 +856,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
             className={`rounded-lg border px-4 py-2 font-medium transition-colors ${
               filterType === key
                 ? `${catConfig.borderColor} ${catConfig.bgColor} text-white`
-                : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                : "border-border bg-surface text-body hover:bg-surface-raised"
             }`}
           >
             <span className="flex items-center gap-2">
@@ -868,7 +880,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
             placeholder={searchPlaceholder}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full rounded-lg border border-border bg-surface px-4 py-2 text-white placeholder-subtle focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -879,7 +891,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
                 sortBy === field
                   ? themeClasses.activeControl
-                  : "border-gray-700 bg-gray-800 text-gray-300 hover:bg-gray-700"
+                  : "border-border bg-surface text-body hover:bg-surface-raised"
               }`}
             >
               {field === "rate" && "预测费率"}
@@ -896,7 +908,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
       {/* Last update */}
       {lastUpdate && (
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-subtle">
           最后更新：{lastUpdate.toLocaleTimeString("zh-CN")}（每 300 秒自动刷新）
         </div>
       )}
@@ -904,14 +916,14 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
       {/* Table and chart */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[3fr_2fr] lg:items-stretch">
         {/* Table */}
-        <div className="min-h-0 overflow-hidden rounded-lg border border-gray-700 bg-gray-800 lg:flex lg:h-full lg:flex-col">
-          <div className="border-b border-gray-700 p-4">
+        <div className="min-h-0 overflow-hidden rounded-lg border border-border bg-surface lg:flex lg:h-full lg:flex-col">
+          <div className="border-b border-border p-4">
             <h2 className="text-sm font-semibold text-white">
               {filterType === "all"
                 ? `${exchangeName} 资金费率总览`
                 : `${categoryConfig[filterType]?.label ?? filterType} 资金费率`}
             </h2>
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-muted">
               共 {filteredAndSortedRates.length} 个交易对
               {searchTerm && `（从 ${fundingRates.length} 个中筛选）`}
             </p>
@@ -942,18 +954,18 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
             } : undefined}
           >
             <table className="w-full">
-              <thead className="sticky top-0 bg-gray-900">
+              <thead className="sticky top-0 bg-surface-muted">
                 <tr>
-                  <th className="px-3 py-2 text-left text-sm font-medium text-gray-400">交易对</th>
-                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">价格</th>
-                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">24h 涨跌</th>
-                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">预测费率</th>
-                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">最新结算费率</th>
-                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">24h 成交额</th>
-                  <th className="px-3 py-2 text-right text-sm font-medium text-gray-400">持仓价值</th>
+                  <th className="px-3 py-2 text-left text-sm font-medium text-muted">交易对</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-muted">价格</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-muted">24h 涨跌</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-muted">预测费率</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-muted">最新结算费率</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-muted">24h 成交额</th>
+                  <th className="px-3 py-2 text-right text-sm font-medium text-muted">持仓价值</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-700">
+              <tbody className="divide-y divide-border">
                 {filteredAndSortedRates.map((rate) => (
                   <tr
                     key={rate.symbol}
@@ -982,57 +994,59 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                         setHydrationKey((k) => k + 1);
                       }
                     }}
-                    className={`cursor-pointer transition-colors hover:bg-gray-700 ${
-                      selectedCoin === rate.symbol ? "bg-gray-700/90" : ""
+                    className={`cursor-pointer border-l-2 transition-colors hover:bg-surface-raised ${
+                      selectedCoin === rate.symbol
+                        ? `${themeClasses.selectedRowBorder} bg-surface-raised/90`
+                        : "border-l-transparent"
                     }`}
                   >
                     <td className="px-3 py-2">
                       <span className="text-xs font-medium text-white">{rate.symbol}</span>
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <span className="font-mono text-sm text-gray-300">{formatPrice(rate.lastPrice)}</span>
+                      <span className="font-mono text-sm text-body">{formatPrice(rate.lastPrice)}</span>
                     </td>
                     <td className="px-3 py-2 text-right">
                       <span
                         className={`font-mono text-sm ${
-                          rate.change24h > 0 ? "text-green-400" : rate.change24h < 0 ? "text-red-400" : "text-gray-400"
+                          rate.change24h > 0 ? "text-green-400" : rate.change24h < 0 ? "text-red-400" : "text-muted"
                         }`}
                       >
                         {rate.change24h >= 0 ? "+" : ""}
                         {rate.change24h.toFixed(2)}%
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className={`px-3 py-2 text-right ${fundingHeatBackground(annualizeRate(rate.fundingRate, rate.fundingInterval))}`}>
                       <div className="text-right">
                         <div
                           className={`font-mono font-medium ${
-                            rate.fundingRate > 0 ? "text-green-400" : rate.fundingRate < 0 ? "text-red-400" : "text-gray-400"
+                            rate.fundingRate > 0 ? "text-green-400" : rate.fundingRate < 0 ? "text-red-400" : "text-muted"
                           }`}
                         >
                           {formatAnnualizedRate(rate.fundingRate, rate.fundingInterval)}
                         </div>
-                        <div className="text-xs text-gray-500">({formatFundingRate(rate.fundingRate)})</div>
+                        <div className="text-xs text-subtle">({formatFundingRate(rate.fundingRate)})</div>
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className={`px-3 py-2 text-right ${fundingHeatBackground(annualizeRate(rate.lastSettlementRate, rate.fundingInterval))}`}>
                       {Number.isFinite(rate.lastSettlementRate) ? (
                         <div className="text-right">
                           <div
                             className={`font-mono font-medium ${
-                              rate.lastSettlementRate > 0 ? "text-green-400" : rate.lastSettlementRate < 0 ? "text-red-400" : "text-gray-400"
+                              rate.lastSettlementRate > 0 ? "text-green-400" : rate.lastSettlementRate < 0 ? "text-red-400" : "text-muted"
                             }`}
                           >
                             {formatAnnualizedRate(rate.lastSettlementRate, rate.fundingInterval)}
                           </div>
-                          <div className="text-xs text-gray-500">({formatFundingRate(rate.lastSettlementRate)})</div>
+                          <div className="text-xs text-subtle">({formatFundingRate(rate.lastSettlementRate)})</div>
                         </div>
                       ) : null}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <span className="font-mono text-sm text-gray-400">{formatVolume(rate.quoteVolume)}</span>
+                      <span className="font-mono text-sm text-muted">{formatVolume(rate.quoteVolume)}</span>
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <span className={`font-mono text-sm ${exchangeName === "Binance" && !rate.oiLoaded ? "text-gray-600" : "text-gray-400"}`}>
+                      <span className={`font-mono text-sm ${exchangeName === "Binance" && !rate.oiLoaded ? "text-faint" : "text-muted"}`}>
                         {formatVolume(rate.notionalValue)}
                       </span>
                     </td>
@@ -1041,14 +1055,14 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               </tbody>
             </table>
             {filteredAndSortedRates.length === 0 && (
-              <div className="p-8 text-center text-gray-500">没有找到匹配的交易对。</div>
+              <div className="p-8 text-center text-subtle">没有找到匹配的交易对。</div>
             )}
           </div>
         </div>
 
         {/* Chart */}
-        <div className="overflow-hidden rounded-lg border border-gray-700 bg-gray-800">
-          <div className="border-b border-gray-700 p-4">
+        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <div className="border-b border-border p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-white">
@@ -1065,7 +1079,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                       className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                         selectedInterval === interval
                           ? themeClasses.activeControl
-                          : "border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-700"
+                          : "border-border bg-surface-muted text-body hover:bg-surface-raised"
                       }`}
                     >
                       {intervalLabels[interval]}
@@ -1077,10 +1091,10 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
           </div>
           <div className="p-4">
             {!selectedCoin ? (
-              <div className="flex h-[560px] items-center justify-center text-gray-400">
+              <div className="flex h-[560px] items-center justify-center text-muted">
                 <div className="text-center">
                   <svg
-                    className="mx-auto mb-4 h-16 w-16 text-gray-600"
+                    className="mx-auto mb-4 h-16 w-16 text-faint"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -1099,13 +1113,13 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               <div className="flex h-[560px] items-center justify-center">
                 <div className="text-center">
                   <div className={`mx-auto h-10 w-10 animate-spin rounded-full border-b-2 ${themeClasses.spinner}`} />
-                  <p className="mt-4 text-sm text-gray-400">
+                  <p className="mt-4 text-sm text-muted">
                     正在加载 {selectedCoin} 的 {intervalLabels[selectedInterval]} 数据...
                   </p>
                 </div>
               </div>
             ) : detailError ? (
-              <div className="flex h-[560px] items-center justify-center text-gray-400">
+              <div className="flex h-[560px] items-center justify-center text-muted">
                 <div className="text-center">
                   <p className="text-red-400">{detailError}</p>
                   <button
@@ -1118,7 +1132,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
               </div>
             ) : candles.length > 0 ? (
               <div className="space-y-4">
-                <div className="rounded-xl border border-gray-700 bg-gray-900/60 p-2">
+                <div className="rounded-xl border border-border bg-surface-muted/60 p-2">
                   <ChartComponent
                     selectedCoin={selectedCoin}
                     interval={selectedInterval}
@@ -1130,23 +1144,23 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
 
                 {selectedSummary && (
                   <div className="grid grid-cols-3 gap-3">
-                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-                      <p className="text-xs text-gray-400">结算周期</p>
+                    <div className="rounded-lg border border-border bg-surface-muted/60 p-3">
+                      <p className="text-xs text-muted">结算周期</p>
                       <p className={`mt-2 font-mono text-lg font-bold ${themeClasses.accentText}`}>
                         {selectedFundingInterval / 3600} 小时
                       </p>
-                      <p className="mt-1 text-xs text-gray-500">{exchangeName} 合约</p>
+                      <p className="mt-1 text-xs text-subtle">{exchangeName} 合约</p>
                     </div>
-                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
-                      <p className="text-xs text-gray-400">历史波动率(30周期)</p>
+                    <div className="rounded-lg border border-border bg-surface-muted/60 p-3">
+                      <p className="text-xs text-muted">历史波动率(30周期)</p>
                       <p className="mt-2 font-mono text-lg font-bold text-purple-400">
                         {selectedSummary.historicalVolatility.toFixed(2)}%
                       </p>
-                      <p className="mt-1 text-xs text-gray-500">年化</p>
+                      <p className="mt-1 text-xs text-subtle">年化</p>
                     </div>
-                    <div className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
+                    <div className="rounded-lg border border-border bg-surface-muted/60 p-3">
                        <div className="flex items-center justify-between">
-                         <p className="text-xs text-gray-400">当前买卖价差</p>
+                         <p className="text-xs text-muted">当前买卖价差</p>
                          {fetchImpactSpread && (
                            <button
                              type="button"
@@ -1174,7 +1188,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                                  setImpactNotional(Number(v) || 1000);
                                }
                              }}
-                             className="rounded border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+                             className="rounded border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-body"
                            >
                              {[200, 1000, 5000, 10000].map((n) => (
                                <option key={n} value={String(n)}>${n}</option>
@@ -1191,7 +1205,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                                  const v = parseInt(e.target.value, 10);
                                  if (v > 0) setImpactNotional(v);
                                }}
-                               className="w-20 rounded border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+                               className="w-20 rounded border border-border-strong bg-surface px-1.5 py-0.5 text-[10px] text-body"
                                placeholder="USD"
                              />
                            )}
@@ -1205,7 +1219,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                             className={`mt-1.5 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-all active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/80 ${
                               impactDepthMode === "max"
                                 ? "border-amber-500/60 bg-amber-500/20 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.12)] hover:bg-amber-500/30"
-                                : "border-gray-600 bg-gray-800 text-gray-400 hover:border-gray-500 hover:bg-gray-700 hover:text-gray-200"
+                                : "border-border-strong bg-surface text-muted hover:border-border-bright hover:bg-surface-raised hover:text-bright"
                             }`}
                           >
                             {impactDepthMode === "max" ? "最大 REST 深度" : "标准深度 20/100"}
@@ -1226,7 +1240,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                            "--"
                          )}
                        </p>
-                      <p className="mt-1 text-xs text-gray-500">(Ask-Bid)/Mid</p>
+                      <p className="mt-1 text-xs text-subtle">(Ask-Bid)/Mid</p>
                     </div>
                   </div>
                 )}
@@ -1289,7 +1303,7 @@ export default function ExchangeFundingMonitor({ config }: { config: ExchangeFun
                 </div>
               </div>
             ) : (
-              <div className="flex h-[560px] items-center justify-center text-gray-400">
+              <div className="flex h-[560px] items-center justify-center text-muted">
                 <div className="text-center">
                   <p>暂无可展示的图表数据。</p>
                 </div>

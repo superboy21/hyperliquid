@@ -6,6 +6,8 @@ export interface FundingThemeClasses {
   activeControl: string;
   accentText: string;
   activeExchangeTab: string;
+  /** 表格选中行的左侧主题色竖线（border-l-2 + 主题色） */
+  selectedRowBorder: string;
 }
 
 /** Literal class bundles keep every Tailwind utility statically discoverable. */
@@ -16,6 +18,7 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-blue-600 bg-blue-600 text-white",
     accentText: "text-blue-400",
     activeExchangeTab: "border-blue-600 bg-blue-600 text-white shadow-lg shadow-blue-600/25",
+    selectedRowBorder: "border-l-blue-500",
   },
   cyan: {
     spinner: "border-cyan-500",
@@ -23,6 +26,7 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-cyan-600 bg-cyan-600 text-white",
     accentText: "text-cyan-400",
     activeExchangeTab: "border-cyan-600 bg-cyan-600 text-white shadow-lg shadow-cyan-600/25",
+    selectedRowBorder: "border-l-cyan-500",
   },
   yellow: {
     spinner: "border-yellow-500",
@@ -30,6 +34,7 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-yellow-600 bg-yellow-600 text-white",
     accentText: "text-yellow-400",
     activeExchangeTab: "border-yellow-600 bg-yellow-600 text-white shadow-lg shadow-yellow-600/25",
+    selectedRowBorder: "border-l-yellow-500",
   },
   purple: {
     spinner: "border-purple-500",
@@ -37,6 +42,7 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-purple-600 bg-purple-600 text-white",
     accentText: "text-purple-400",
     activeExchangeTab: "border-purple-600 bg-purple-600 text-white shadow-lg shadow-purple-600/25",
+    selectedRowBorder: "border-l-purple-500",
   },
   emerald: {
     spinner: "border-emerald-500",
@@ -44,6 +50,7 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-emerald-600 bg-emerald-600 text-white",
     accentText: "text-emerald-400",
     activeExchangeTab: "border-emerald-600 bg-emerald-600 text-white shadow-lg shadow-emerald-600/25",
+    selectedRowBorder: "border-l-emerald-500",
   },
   teal: {
     spinner: "border-teal-500",
@@ -51,6 +58,7 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-teal-600 bg-teal-600 text-white",
     accentText: "text-teal-400",
     activeExchangeTab: "border-teal-600 bg-teal-600 text-white shadow-lg shadow-teal-600/25",
+    selectedRowBorder: "border-l-teal-500",
   },
   orange: {
     spinner: "border-orange-500",
@@ -58,5 +66,6 @@ export const FUNDING_THEME_CLASSES: Record<FundingThemeKey, FundingThemeClasses>
     activeControl: "border-orange-600 bg-orange-600 text-white",
     accentText: "text-orange-400",
     activeExchangeTab: "border-orange-600 bg-orange-600 text-white shadow-lg shadow-orange-600/25",
+    selectedRowBorder: "border-l-orange-500",
   },
 };
