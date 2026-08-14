@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { ImpactSpreadDetailResult } from "@/lib/impact-price";
-import type { ImpactDepthMode } from "@/lib/order-book-impact";
 import type { ArbitrageTableRow } from "@/lib/spot-perp-arbitrage";
 import { formatAnnualizedRate, formatPrice, formatVolume } from "@/lib/types";
 
@@ -15,6 +14,7 @@ type SortField =
   | "indexPrice"
   | "change24h"
   | "premium"
+  | "premiumIndex"
   | "predictedFundingRate"
   | "quoteTurnover24h"
   | "openInterestNotional"
@@ -44,8 +44,15 @@ interface Props {
   onPresetChange: (value: string) => void;
   onCustomNotionalChange: (value: string) => void;
   onApplyCustomNotional: () => void;
-  impactDepthMode: ImpactDepthMode;
-  onToggleImpactDepth: () => void;
+  premiumIndexNotional: number;
+  premiumIndexNotionalPresets: readonly number[];
+  premiumIndexCustomNotional: string;
+  editingPremiumIndexCustom: boolean;
+  onPremiumIndexPresetChange: (value: string) => void;
+  onPremiumIndexCustomNotionalChange: (value: string) => void;
+  onApplyPremiumIndexCustomNotional: () => void;
+  premiumIndexLoading: ReadonlySet<string>;
+  premiumIndexErrors: ReadonlySet<string>;
   onSelect: (row: ArbitrageTableRow) => void;
 }
 
@@ -99,6 +106,19 @@ function annualizedLabel(row: ArbitrageTableRow, value: number, average = false)
     return formatSignedPercent(annualized, digits);
   }
   return formatAnnualizedRate(value, row.market.kind === "perp" ? row.market.source.fundingInterval : 28800);
+}
+
+/** Raw (non-annualized) per-interval funding rate as a signed percentage. */
+function rawFundingRatePercent(row: ArbitrageTableRow, value: number): number | null {
+  if (row.market.kind === "spot" || !Number.isFinite(value)) return null;
+  // Lighter reports an 8h-equivalent feed; its funding interval is 1h, so the
+  // raw hourly rate is value / 8 (mirrors annualizedFundingValue above).
+  return row.exchange === "Lighter" ? (value / 8) * 100 : value * 100;
+}
+
+function rawFundingLabel(row: ArbitrageTableRow, value: number): string {
+  const percent = rawFundingRatePercent(row, value);
+  return percent === null ? "--" : formatSignedPercent(percent, 4);
 }
 
 function valueForSort(row: ArbitrageTableRow, field: SortField, spreadMode: SpreadMode): number | string | null {
@@ -163,8 +183,15 @@ export default function ArbitrageMarketTable({
   onPresetChange,
   onCustomNotionalChange,
   onApplyCustomNotional,
-  impactDepthMode,
-  onToggleImpactDepth,
+  premiumIndexNotional,
+  premiumIndexNotionalPresets,
+  premiumIndexCustomNotional,
+  editingPremiumIndexCustom,
+  onPremiumIndexPresetChange,
+  onPremiumIndexCustomNotionalChange,
+  onApplyPremiumIndexCustomNotional,
+  premiumIndexLoading,
+  premiumIndexErrors,
   onSelect,
 }: Props) {
   const [sort, setSort] = useState<{ field: SortField; descending: boolean }>({
@@ -203,7 +230,39 @@ export default function ArbitrageMarketTable({
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="midpoint" sort={sort} onSort={toggleSort}>中间价</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="indexPrice" sort={sort} onSort={toggleSort}>指数价格</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="change24h" sort={sort} onSort={toggleSort}>24h涨跌</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="premium" sort={sort} onSort={toggleSort}>折溢价</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="premium" sort={sort} onSort={toggleSort}>中间价折溢价</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">
+              <div className="flex flex-col items-end gap-1.5">
+                <SortHeaderButton field="premiumIndex" sort={sort} onSort={toggleSort}>溢价指数</SortHeaderButton>
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  <select
+                    aria-label="溢价指数 Impact 名义金额"
+                    value={editingPremiumIndexCustom ? "custom" : String(premiumIndexNotional)}
+                    onChange={(event) => onPremiumIndexPresetChange(event.target.value)}
+                    className="rounded border border-gray-600 bg-gray-900 px-1 py-0.5 text-[9px] text-gray-300 outline-none focus:border-indigo-400"
+                  >
+                    {premiumIndexNotionalPresets.map((value) => <option key={value} value={value}>${value}</option>)}
+                    {!editingPremiumIndexCustom && !premiumIndexNotionalPresets.includes(premiumIndexNotional) && <option value={premiumIndexNotional}>${premiumIndexNotional}</option>}
+                    <option value="custom">自定义</option>
+                  </select>
+                  {editingPremiumIndexCustom && (
+                    <>
+                      <input
+                        type="number"
+                        min="1"
+                        step="any"
+                        value={premiumIndexCustomNotional}
+                        onChange={(event) => onPremiumIndexCustomNotionalChange(event.target.value)}
+                        onKeyDown={(event) => { if (event.key === "Enter") onApplyPremiumIndexCustomNotional(); }}
+                        aria-label="自定义溢价指数 Impact 名义金额"
+                        className="w-16 rounded border border-gray-600 bg-gray-900 px-1 py-0.5 text-[9px] text-gray-200 outline-none focus:border-indigo-400"
+                      />
+                      <button type="button" onClick={onApplyPremiumIndexCustomNotional} className="rounded text-emerald-400 hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-300">✓</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="predictedFundingRate" sort={sort} onSort={toggleSort}>预测费率</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="quoteTurnover24h" sort={sort} onSort={toggleSort}>24h成交额</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="openInterestNotional" sort={sort} onSort={toggleSort}>持仓价值</SortHeaderButton></th>
@@ -258,20 +317,6 @@ export default function ArbitrageMarketTable({
                   )}
                 </div>
               )}
-              {spreadMode === "impact" && (
-                <button
-                  type="button"
-                  aria-pressed={impactDepthMode === "max"}
-                  onClick={onToggleImpactDepth}
-                  className={`mt-1 rounded border px-1.5 py-0.5 text-[9px] font-medium transition-all active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/80 ${
-                    impactDepthMode === "max"
-                      ? "border-amber-500/60 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
-                      : "border-gray-600 bg-gray-900/70 text-gray-400 hover:border-gray-500 hover:text-gray-200"
-                  }`}
-                >
-                  {impactDepthMode === "max" ? "最大 REST 深度" : "标准深度 20/100"}
-                </button>
-              )}
             </th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">当前结算周期</th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="latestSettlementRate" sort={sort} onSort={toggleSort}>最新结算费率</SortHeaderButton></th>
@@ -318,7 +363,23 @@ export default function ArbitrageMarketTable({
                 <td className="px-2.5 py-2 text-right">{displayNumber(row.indexPrice, formatPrice)}</td>
                 <td className="px-2.5 py-2 text-right">{displayNumber(row.change24h, (value) => formatSignedPercent(value), row.change24h !== null && row.change24h > 0 ? "text-green-400" : row.change24h !== null && row.change24h < 0 ? "text-red-400" : "text-gray-400")}</td>
                 <td className="px-2.5 py-2 text-right">{displayNumber(row.premium, (value) => formatSignedPercent(value * 100, 4), row.premium !== null && row.premium > 0 ? "text-green-400" : row.premium !== null && row.premium < 0 ? "text-red-400" : "text-gray-400")}</td>
-                <td className="px-2.5 py-2 text-right">{row.predictedFundingRate === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${row.predictedFundingRate > 0 ? "text-green-400" : row.predictedFundingRate < 0 ? "text-red-400" : "text-gray-400"}`}>{annualizedLabel(row, row.predictedFundingRate)}</span>}</td>
+                <td className="px-2.5 py-2 text-right" title={premiumIndexErrors.has(id) ? "溢价指数加载失败" : undefined}>
+                  {premiumIndexLoading.has(id) ? (
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border border-gray-600 border-b-indigo-400 motion-reduce:animate-none" />
+                  ) : (
+                    displayNumber(row.premiumIndex, (value) => formatSignedPercent(value * 100, 4), row.premiumIndex !== null && row.premiumIndex > 0 ? "text-green-400" : row.premiumIndex !== null && row.premiumIndex < 0 ? "text-red-400" : "text-gray-400")
+                  )}
+                </td>
+                <td className="px-2.5 py-2 text-right">
+                  {row.predictedFundingRate === null ? (
+                    <span className="text-gray-600">--</span>
+                  ) : (
+                    <div className="flex flex-col items-end gap-px">
+                      <span className={`whitespace-nowrap font-mono text-xs ${row.predictedFundingRate > 0 ? "text-green-400" : row.predictedFundingRate < 0 ? "text-red-400" : "text-gray-400"}`}>{annualizedLabel(row, row.predictedFundingRate)}</span>
+                      <span className="whitespace-nowrap font-mono text-[10px] text-gray-500">{rawFundingLabel(row, row.predictedFundingRate)}</span>
+                    </div>
+                  )}
+                </td>
                 <td className="px-2.5 py-2 text-right">{displayNumber(row.quoteTurnover24h, formatVolume, "text-gray-400")}</td>
                 <td className="px-2.5 py-2 text-right">{displayNumber(row.openInterestNotional, formatVolume, "text-gray-400")}</td>
                 <td className="px-2.5 py-2 text-right" title={detailErrors.has(id) ? "详情加载失败" : undefined}>{detailLoading.has(id) ? <span className="inline-block h-3 w-3 animate-spin rounded-full border border-gray-600 border-b-indigo-400 motion-reduce:animate-none" /> : displayNumber(row.historicalVolatility, (value) => `${value.toFixed(2)}%`, "text-orange-400")}</td>
@@ -344,7 +405,16 @@ export default function ArbitrageMarketTable({
                   )}
                 </td>
                 <td className="px-2.5 py-2 text-right"><span className="whitespace-nowrap font-mono text-xs text-gray-300">{fundingIntervalLabel(row)}</span></td>
-                <td className="px-2.5 py-2 text-right">{row.latestSettlementRate === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.latestSettlementRate)}`}>{annualizedLabel(row, row.latestSettlementRate)}</span>}</td>
+                <td className="px-2.5 py-2 text-right">
+                  {row.latestSettlementRate === null ? (
+                    <span className="text-gray-600">--</span>
+                  ) : (
+                    <div className="flex flex-col items-end gap-px">
+                      <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.latestSettlementRate)}`}>{annualizedLabel(row, row.latestSettlementRate)}</span>
+                      <span className="whitespace-nowrap font-mono text-[10px] text-gray-500">{rawFundingLabel(row, row.latestSettlementRate)}</span>
+                    </div>
+                  )}
+                </td>
                 <td className="px-2.5 py-2 text-right">{row.averageFundingRate2d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate2d)}`}>{annualizedLabel(row, row.averageFundingRate2d, true)}</span>}</td>
                 <td className="px-2.5 py-2 text-right">{row.averageFundingRate7d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate7d)}`}>{annualizedLabel(row, row.averageFundingRate7d, true)}</span>}</td>
                 <td className="px-2.5 py-2 text-right">{row.averageFundingRate30d === null ? <span className="text-gray-600">--</span> : <span className={`whitespace-nowrap font-mono text-xs ${rateSignClass(row.averageFundingRate30d)}`}>{annualizedLabel(row, row.averageFundingRate30d, true)}</span>}</td>

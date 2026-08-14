@@ -18,11 +18,13 @@ import {
 import {
   DEFAULT_IMPACT_NOTIONAL,
   IMPACT_NOTIONAL_PRESETS,
+  DEFAULT_PREMIUM_INDEX_NOTIONAL,
+  PREMIUM_INDEX_NOTIONAL_PRESETS,
+  computePremiumIndex,
   fetchSearchImpactSpreadDetail,
   type ImpactSpreadDetailResult,
 } from "@/lib/impact-price";
 import { fetchSpotImpactSpreadDetail } from "@/lib/spot-impact-price";
-import type { ImpactDepthMode } from "@/lib/order-book-impact";
 import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candles";
 import type { SpotCandleResult } from "@/lib/spot-search-candles";
@@ -212,11 +214,29 @@ export default function SpotPerpArbitrageController() {
   const [impactNotional, setImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const [customNotional, setCustomNotional] = useState(String(DEFAULT_IMPACT_NOTIONAL));
   const [editingCustomNotional, setEditingCustomNotional] = useState(false);
-  const [impactDepthMode, setImpactDepthMode] = useState<ImpactDepthMode>("standard");
   const [impactResults, setImpactResults] = useState<Map<string, ImpactSpreadDetailResult>>(new Map());
   const [impactLoading, setImpactLoading] = useState<Set<string>>(new Set());
   const [impactErrors, setImpactErrors] = useState<Set<string>>(new Set());
   const impactAbortRef = useRef<AbortController | null>(null);
+
+  const [premiumIndexNotional, setPremiumIndexNotional] = useState(DEFAULT_PREMIUM_INDEX_NOTIONAL);
+  const [premiumIndexCustomNotional, setPremiumIndexCustomNotional] = useState(String(DEFAULT_PREMIUM_INDEX_NOTIONAL));
+  const [editingPremiumIndexCustom, setEditingPremiumIndexCustom] = useState(false);
+  const [premiumIndexResults, setPremiumIndexResults] = useState<Map<string, ImpactSpreadDetailResult>>(new Map());
+  const [premiumIndexLoading, setPremiumIndexLoading] = useState<Set<string>>(new Set());
+  const [premiumIndexErrors, setPremiumIndexErrors] = useState<Set<string>>(new Set());
+  const premiumIndexAbortRef = useRef<AbortController | null>(null);
+
+  // 手动刷新：点击刷新按钮后重拉市场列表，并通过 markets 引用变化级联重算详情/买卖价差/溢价指数。
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  // 抓取参数快照 ref：render 期间同步最新值，供「搜索变化 / 手动刷新」触发抓取时读取。
+  // 参数本身变化不直接触发重算（避免调整 impact 额/价差模式时立即重拉数据）。
+  const impactParamsRef = useRef({ spreadMode, impactNotional });
+  impactParamsRef.current = { spreadMode, impactNotional };
+
+  const premiumIndexParamsRef = useRef({ premiumIndexNotional });
+  premiumIndexParamsRef.current = { premiumIndexNotional };
 
   const [selection, setSelection] = useState<OrderedSelection>(EMPTY_SELECTION);
   const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
@@ -256,7 +276,7 @@ export default function SpotPerpArbitrageController() {
       setUniverse(markets);
     });
     return () => controller.abort();
-  }, []);
+  }, [refreshTick]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 500);
@@ -390,7 +410,8 @@ export default function SpotPerpArbitrageController() {
     impactAbortRef.current?.abort();
     setImpactResults(new Map());
     setImpactErrors(new Set());
-    if (spreadMode !== "impact" || !validSearch || searchResult.markets.length === 0) {
+    const { spreadMode: mode, impactNotional: notional } = impactParamsRef.current;
+    if (mode !== "impact" || !validSearch || searchResult.markets.length === 0) {
       setImpactLoading(new Set());
       return;
     }
@@ -403,8 +424,8 @@ export default function SpotPerpArbitrageController() {
       const id = String(marketId(market));
       try {
         const result = market.kind === "perp"
-          ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, impactNotional, impactDepthMode)
-          : await fetchSpotImpactSpreadDetail(market.source, impactNotional, controller.signal, impactDepthMode);
+          ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, notional, "max")
+          : await fetchSpotImpactSpreadDetail(market.source, notional, controller.signal, "max");
         if (!controller.signal.aborted) setImpactResults((current) => new Map(current).set(id, result));
       } catch (error) {
         if (!controller.signal.aborted && !isAbortError(error)) {
@@ -422,16 +443,60 @@ export default function SpotPerpArbitrageController() {
     };
     void runBounded(markets, 2, controller.signal, fetchImpact, 100);
     return () => controller.abort();
-  }, [impactDepthMode, impactNotional, resultKey, searchResult.markets, spreadMode, validSearch]);
+  }, [resultKey, searchResult.markets, validSearch]);
+
+  useEffect(() => {
+    premiumIndexAbortRef.current?.abort();
+    setPremiumIndexResults(new Map());
+    setPremiumIndexErrors(new Set());
+    const { premiumIndexNotional: notional } = premiumIndexParamsRef.current;
+    if (!validSearch || searchResult.markets.length === 0) {
+      setPremiumIndexLoading(new Set());
+      return;
+    }
+    const controller = new AbortController();
+    premiumIndexAbortRef.current = controller;
+    const markets = searchResult.markets.filter((market) => market.kind === "perp");
+    setPremiumIndexLoading(new Set(markets.map((market) => String(marketId(market)))));
+
+    const fetchPremiumImpact = async (market: ArbitrageMarket) => {
+      const id = String(marketId(market));
+      try {
+        const result = market.kind === "perp"
+          ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, notional, "max")
+          : null;
+        if (!controller.signal.aborted) setPremiumIndexResults((current) => new Map(current).set(id, result));
+      } catch (error) {
+        if (!controller.signal.aborted && !isAbortError(error)) {
+          setPremiumIndexErrors((current) => new Set(current).add(id));
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setPremiumIndexLoading((current) => {
+            const next = new Set(current);
+            next.delete(id);
+            return next;
+          });
+        }
+      }
+    };
+    void runBounded(markets, 2, controller.signal, fetchPremiumImpact, 100);
+    return () => controller.abort();
+  }, [resultKey, searchResult.markets, validSearch]);
 
   const tableRows = useMemo(() => searchResult.markets.map((market) => {
     const id = String(marketId(market));
     const impact = impactResults.get(id);
-    return toTableRow(market, {
+    const premiumImpact = premiumIndexResults.get(id);
+    const row = toTableRow(market, {
       ...details.get(id),
       impactSpread: impact !== null && typeof impact === "object" ? impact.spread : null,
     });
-  }), [details, impactResults, searchResult.markets]);
+    const premiumIndex = premiumImpact !== null && typeof premiumImpact === "object" && row.indexPrice !== null
+      ? computePremiumIndex(premiumImpact.bidPrice, premiumImpact.askPrice, row.indexPrice)
+      : null;
+    return { ...row, premiumIndex };
+  }), [details, impactResults, premiumIndexResults, searchResult.markets]);
 
   const comboMode = searchResult.query.kind === "combo";
   const selectedChartIncludesBitget = hasSelectedBitgetPerp(selection.leg1, selection.leg2);
@@ -493,6 +558,7 @@ export default function SpotPerpArbitrageController() {
     oiAbortRef.current?.abort();
     detailAbortRef.current?.abort();
     impactAbortRef.current?.abort();
+    premiumIndexAbortRef.current?.abort();
     chartAbortRef.current?.abort();
   }, []);
 
@@ -555,6 +621,13 @@ export default function SpotPerpArbitrageController() {
     if (!Number.isFinite(parsed) || parsed <= 0) return;
     setImpactNotional(parsed);
     setEditingCustomNotional(false);
+  };
+
+  const applyPremiumIndexCustomNotional = () => {
+    const parsed = Number(premiumIndexCustomNotional);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    setPremiumIndexNotional(parsed);
+    setEditingPremiumIndexCustom(false);
   };
 
   const toggleExchange = (exchange: ArbitrageExchange) => {
@@ -651,7 +724,22 @@ export default function SpotPerpArbitrageController() {
           </div>
           <span>Perp：{perpUniverseState === "loading" ? "加载中" : perpUniverseState === "error" ? "不可用" : "已就绪"}</span>
           <span>Spot：{spotUniverseState === "loading" ? "加载中" : spotUniverseState === "error" ? "不可用" : "已就绪"}</span>
-          {validSearch && searchResult.markets.length > 0 && <span className="text-gray-400">{searchResult.markets.length} 个匹配市场</span>}
+          {validSearch && searchResult.markets.length > 0 && (
+            <>
+              <span className="text-gray-400">{searchResult.markets.length} 个匹配市场</span>
+              <button
+                type="button"
+                onClick={() => setRefreshTick((tick) => tick + 1)}
+                className="inline-flex items-center gap-1 rounded-md border border-gray-600 bg-gray-900 px-2 py-0.5 text-xs font-medium text-gray-300 transition-colors hover:border-gray-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                title="按当前选择重新获取并计算表格数据"
+              >
+                <svg aria-hidden="true" className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M4.5 9a7.5 7.5 0 0112.6-3.6l2.4 2.6M19.5 15a7.5 7.5 0 01-12.6 3.6l-2.4-2.6" />
+                </svg>
+                刷新
+              </button>
+            </>
+          )}
           {(perpUniverseState === "error" || spotUniverseState === "error") && <span className="text-amber-400">部分市场源不可用，仍可使用已加载结果。</span>}
         </div>
       </section>
@@ -702,8 +790,23 @@ export default function SpotPerpArbitrageController() {
             }}
             onCustomNotionalChange={setCustomNotional}
             onApplyCustomNotional={applyCustomNotional}
-            impactDepthMode={impactDepthMode}
-            onToggleImpactDepth={() => setImpactDepthMode((current) => current === "standard" ? "max" : "standard")}
+            premiumIndexNotional={premiumIndexNotional}
+            premiumIndexNotionalPresets={PREMIUM_INDEX_NOTIONAL_PRESETS as readonly number[]}
+            premiumIndexCustomNotional={premiumIndexCustomNotional}
+            editingPremiumIndexCustom={editingPremiumIndexCustom}
+            onPremiumIndexPresetChange={(value) => {
+              if (value === "custom") {
+                setPremiumIndexCustomNotional(String(premiumIndexNotional));
+                setEditingPremiumIndexCustom(true);
+              } else {
+                setEditingPremiumIndexCustom(false);
+                setPremiumIndexNotional(Number(value));
+              }
+            }}
+            onPremiumIndexCustomNotionalChange={setPremiumIndexCustomNotional}
+            onApplyPremiumIndexCustomNotional={applyPremiumIndexCustomNotional}
+            premiumIndexLoading={premiumIndexLoading}
+            premiumIndexErrors={premiumIndexErrors}
             onSelect={(row) => selectMarket(row.market)}
           />
         </>

@@ -23,6 +23,35 @@ import {
 export const DEFAULT_IMPACT_NOTIONAL = 1000;
 export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
 
+export const DEFAULT_PREMIUM_INDEX_NOTIONAL = 5000;
+export const PREMIUM_INDEX_NOTIONAL_PRESETS = [2000, 4000, 5000, 10000, 25000] as const;
+
+/**
+ * Binance-style premium index from impact prices and the venue index price.
+ *
+ * premiumIndex = [ max(0, bidPrice − indexPrice) − max(0, indexPrice − askPrice) ] / indexPrice
+ *
+ * `bidPrice` / `askPrice` are the impact bid/ask VWAP prices (冲击买价/冲击卖价)
+ * for a given quote notional; `indexPrice` is the exchange index price.
+ * Returns null when any input is missing/invalid or the index price is non-positive.
+ */
+export function computePremiumIndex(
+  bidPrice: number,
+  askPrice: number,
+  indexPrice: number,
+): number | null {
+  if (
+    !Number.isFinite(bidPrice)
+    || !Number.isFinite(askPrice)
+    || !Number.isFinite(indexPrice)
+    || indexPrice <= 0
+  ) {
+    return null;
+  }
+  const numerator = Math.max(0, bidPrice - indexPrice) - Math.max(0, indexPrice - askPrice);
+  return numerator / indexPrice;
+}
+
 // ==================== Types ====================
 
 /** Result of an impact spread computation. */

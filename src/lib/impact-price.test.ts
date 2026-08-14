@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { fetchImpactSpread, fetchImpactSpreadDetail, normalizeGatePerpOrderBook } from "./impact-price";
+import { computePremiumIndex, fetchImpactSpread, fetchImpactSpreadDetail, normalizeGatePerpOrderBook } from "./impact-price";
 import type { BybitRequest } from "./adapters/bybit";
 
 const gateBook = {
@@ -9,6 +9,27 @@ const gateBook = {
 
 afterEach(() => {
   (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+});
+
+describe("computePremiumIndex", () => {
+  test("computes the Binance-style premium index from impact bid/ask and index price", () => {
+    // bid 102 / ask 101 / index 100 → [2 - 0] / 100 = 0.02
+    expect(computePremiumIndex(102, 101, 100)).toBeCloseTo(0.02, 12);
+    // bid 99 / ask 98 / index 100 → [0 - 2] / 100 = -0.02
+    expect(computePremiumIndex(99, 98, 100)).toBeCloseTo(-0.02, 12);
+    // symmetric around index → 0
+    expect(computePremiumIndex(101, 99, 100)).toBeCloseTo(0, 12);
+  });
+
+  test.each([
+    ["non-finite bid", Number.NaN, 101, 100],
+    ["non-finite ask", 102, Number.NaN, 100],
+    ["non-finite index", 102, 101, Number.NaN],
+    ["zero index", 102, 101, 0],
+    ["negative index", 102, 101, -100],
+  ] as const)("returns null for %s", (_label, bid, ask, index) => {
+    expect(computePremiumIndex(bid, ask, index)).toBeNull();
+  });
 });
 
 describe("normalizeGatePerpOrderBook", () => {

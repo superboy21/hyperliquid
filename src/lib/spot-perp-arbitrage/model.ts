@@ -40,6 +40,7 @@ export interface ArbitrageTableRow {
   indexPrice: number | null;
   change24h: number | null;
   premium: number | null;
+  premiumIndex: number | null;
   predictedFundingRate: number | null;
   quoteTurnover24h: number | null;
   openInterestNotional: number | null;
@@ -114,6 +115,7 @@ export function toTableRow(
       indexPrice: null,
       change24h: finite(source.change24h),
       premium: null,
+      premiumIndex: null,
       predictedFundingRate: null,
       quoteTurnover24h: finite(source.quoteVolume),
       openInterestNotional: null,
@@ -143,6 +145,7 @@ export function toTableRow(
     indexPrice,
     change24h: finite(source.change24h),
     premium,
+    premiumIndex: null,
     predictedFundingRate: finite(source.fundingRate),
     quoteTurnover24h: finite(source.quoteVolume),
     openInterestNotional: finite(source.notionalValue),
