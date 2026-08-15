@@ -3,7 +3,7 @@ import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
 import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
 
 export type BybitCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
-export type BybitAction = "instruments" | "tickers" | "funding-history" | "kline" | "orderbook";
+export type BybitAction = "instruments" | "tickers" | "funding-history" | "kline" | "premium-index-price-kline" | "orderbook";
 
 export interface BybitInstrument {
   symbol?: string;
@@ -398,12 +398,14 @@ const BYBIT_ACTION_PATHS: Record<BybitAction, string> = {
   tickers: "/v5/market/tickers",
   "funding-history": "/v5/market/funding/history",
   kline: "/v5/market/kline",
+  "premium-index-price-kline": "/v5/market/premium-index-price-kline",
   orderbook: "/v5/market/orderbook",
 };
 const BYBIT_ACTION_DEFAULTS: Partial<Record<BybitAction, Record<string, string>>> = {
   instruments: { status: "Trading", limit: "1000" },
   "funding-history": { limit: "200" },
   kline: { limit: "1000" },
+  "premium-index-price-kline": { limit: "200" },
   orderbook: { limit: "100" },
 };
 
@@ -422,6 +424,7 @@ const BYBIT_PROXY_ALLOWED_PARAMS: Record<BybitAction, readonly string[]> = {
   tickers: [],
   "funding-history": ["symbol", "startTime", "endTime", "limit"],
   kline: ["symbol", "interval", "start", "end", "limit"],
+  "premium-index-price-kline": ["symbol", "interval", "start", "end", "limit"],
   orderbook: ["symbol", "limit"],
 };
 

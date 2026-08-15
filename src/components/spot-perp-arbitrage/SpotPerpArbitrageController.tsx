@@ -25,6 +25,7 @@ import {
   type ImpactSpreadDetailResult,
 } from "@/lib/impact-price";
 import { fetchSpotImpactSpreadDetail } from "@/lib/spot-impact-price";
+import { fetchOfficialPremium, prefetchOfficialPremiumContext } from "@/lib/official-premium";
 import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candles";
 import type { SpotCandleResult } from "@/lib/spot-search-candles";
@@ -67,6 +68,7 @@ import SingleMarketAnalyticsDashboard from "./SingleMarketAnalyticsDashboard";
 
 type UniverseState = "loading" | "ready" | "error";
 type SpreadMode = "top" | "impact";
+type PremiumIndexMode = "adaptive" | "manual";
 type ChartPayload =
   | { kind: "single"; leg: LoadedLeg }
   | { kind: "perp-combo"; result: ComboCandleResult }
@@ -222,7 +224,9 @@ export default function SpotPerpArbitrageController() {
   const [premiumIndexNotional, setPremiumIndexNotional] = useState(DEFAULT_PREMIUM_INDEX_NOTIONAL);
   const [premiumIndexCustomNotional, setPremiumIndexCustomNotional] = useState(String(DEFAULT_PREMIUM_INDEX_NOTIONAL));
   const [editingPremiumIndexCustom, setEditingPremiumIndexCustom] = useState(false);
+  const [premiumIndexMode, setPremiumIndexMode] = useState<PremiumIndexMode>("adaptive");
   const [premiumIndexResults, setPremiumIndexResults] = useState<Map<string, ImpactSpreadDetailResult>>(new Map());
+  const [officialPremiumResults, setOfficialPremiumResults] = useState<Map<string, number | null>>(new Map());
   const [premiumIndexLoading, setPremiumIndexLoading] = useState<Set<string>>(new Set());
   const [premiumIndexErrors, setPremiumIndexErrors] = useState<Set<string>>(new Set());
   const premiumIndexAbortRef = useRef<AbortController | null>(null);
@@ -235,8 +239,8 @@ export default function SpotPerpArbitrageController() {
   const impactParamsRef = useRef({ spreadMode, impactNotional });
   impactParamsRef.current = { spreadMode, impactNotional };
 
-  const premiumIndexParamsRef = useRef({ premiumIndexNotional });
-  premiumIndexParamsRef.current = { premiumIndexNotional };
+  const premiumIndexParamsRef = useRef({ premiumIndexNotional, premiumIndexMode });
+  premiumIndexParamsRef.current = { premiumIndexNotional, premiumIndexMode };
 
   const [selection, setSelection] = useState<OrderedSelection>(EMPTY_SELECTION);
   const [chartInterval, setChartInterval] = useState<SearchChartInterval>("1d");
@@ -448,8 +452,9 @@ export default function SpotPerpArbitrageController() {
   useEffect(() => {
     premiumIndexAbortRef.current?.abort();
     setPremiumIndexResults(new Map());
+    setOfficialPremiumResults(new Map());
     setPremiumIndexErrors(new Set());
-    const { premiumIndexNotional: notional } = premiumIndexParamsRef.current;
+    const { premiumIndexNotional: notional, premiumIndexMode: mode } = premiumIndexParamsRef.current;
     if (!validSearch || searchResult.markets.length === 0) {
       setPremiumIndexLoading(new Set());
       return;
@@ -459,13 +464,24 @@ export default function SpotPerpArbitrageController() {
     const markets = searchResult.markets.filter((market) => market.kind === "perp");
     setPremiumIndexLoading(new Set(markets.map((market) => String(marketId(market)))));
 
-    const fetchPremiumImpact = async (market: ArbitrageMarket) => {
+    // 自适应模式：Hyperliquid（原生/HIP-3）与 OKX 的全量 premium 只请求一次，供逐市场查表。
+    const ctxPromise = mode === "adaptive" ? prefetchOfficialPremiumContext(controller.signal) : Promise.resolve(null);
+
+    const fetchPremium = async (market: ArbitrageMarket) => {
       const id = String(marketId(market));
       try {
-        const result = market.kind === "perp"
-          ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, notional, "max")
-          : null;
-        if (!controller.signal.aborted) setPremiumIndexResults((current) => new Map(current).set(id, result));
+        if (mode === "adaptive") {
+          const ctx = await ctxPromise;
+          const result = market.kind === "perp" && ctx !== null
+            ? await fetchOfficialPremium(market.source, controller.signal, ctx)
+            : null;
+          if (!controller.signal.aborted) setOfficialPremiumResults((current) => new Map(current).set(id, result));
+        } else {
+          const result = market.kind === "perp"
+            ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, notional, "max")
+            : null;
+          if (!controller.signal.aborted) setPremiumIndexResults((current) => new Map(current).set(id, result));
+        }
       } catch (error) {
         if (!controller.signal.aborted && !isAbortError(error)) {
           setPremiumIndexErrors((current) => new Set(current).add(id));
@@ -480,7 +496,7 @@ export default function SpotPerpArbitrageController() {
         }
       }
     };
-    void runBounded(markets, 2, controller.signal, fetchPremiumImpact, 100);
+    void runBounded(markets, 2, controller.signal, fetchPremium, 100);
     return () => controller.abort();
   }, [resultKey, searchResult.markets, validSearch]);
 
@@ -492,11 +508,13 @@ export default function SpotPerpArbitrageController() {
       ...details.get(id),
       impactSpread: impact !== null && typeof impact === "object" ? impact.spread : null,
     });
-    const premiumIndex = premiumImpact !== null && typeof premiumImpact === "object" && row.indexPrice !== null
-      ? computePremiumIndex(premiumImpact.bidPrice, premiumImpact.askPrice, row.indexPrice)
-      : null;
+    const premiumIndex = premiumIndexMode === "adaptive"
+      ? officialPremiumResults.get(id) ?? null
+      : premiumImpact !== null && typeof premiumImpact === "object" && row.indexPrice !== null
+        ? computePremiumIndex(premiumImpact.bidPrice, premiumImpact.askPrice, row.indexPrice)
+        : null;
     return { ...row, premiumIndex };
-  }), [details, impactResults, premiumIndexResults, searchResult.markets]);
+  }), [details, impactResults, officialPremiumResults, premiumIndexMode, premiumIndexResults, searchResult.markets]);
 
   const comboMode = searchResult.query.kind === "combo";
   const selectedChartIncludesBitget = hasSelectedBitgetPerp(selection.leg1, selection.leg2);
@@ -805,6 +823,8 @@ export default function SpotPerpArbitrageController() {
             }}
             onPremiumIndexCustomNotionalChange={setPremiumIndexCustomNotional}
             onApplyPremiumIndexCustomNotional={applyPremiumIndexCustomNotional}
+            premiumIndexMode={premiumIndexMode}
+            onPremiumIndexModeChange={setPremiumIndexMode}
             premiumIndexLoading={premiumIndexLoading}
             premiumIndexErrors={premiumIndexErrors}
             onSelect={(row) => selectMarket(row.market)}

@@ -32,6 +32,7 @@ const ACTIONS: Record<string, ActionSpec> = {
   tickers: { path: "/v5/market/tickers", allowed: [], required: [] },
   "funding-history": { path: "/v5/market/funding/history", allowed: ["symbol", "startTime", "endTime", "limit"], required: ["symbol"] },
   kline: { path: "/v5/market/kline", allowed: ["symbol", "interval", "start", "end", "limit"], required: ["symbol", "interval"] },
+  "premium-index-price-kline": { path: "/v5/market/premium-index-price-kline", allowed: ["symbol", "interval", "start", "end", "limit"], required: ["symbol", "interval"] },
   orderbook: { path: "/v5/market/orderbook", allowed: ["symbol", "limit"], required: ["symbol"] },
 };
 
@@ -87,12 +88,14 @@ export async function GET(request: NextRequest) {
     instruments: "1000",
     "funding-history": "200",
     kline: "1000",
+    "premium-index-price-kline": "200",
     orderbook: "100",
   };
   const limitMax: Record<string, number> = {
     instruments: 1000,
     "funding-history": 200,
     kline: 1000,
+    "premium-index-price-kline": 1000,
     orderbook: 1000,
   };
   const limit = params.get("limit") ?? limitDefaults[actionName] ?? null;

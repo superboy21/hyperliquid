@@ -7,6 +7,7 @@ import type { ArbitrageTableRow } from "@/lib/spot-perp-arbitrage";
 import { formatAnnualizedRate, formatPrice, formatVolume } from "@/lib/types";
 
 type SpreadMode = "top" | "impact";
+type PremiumIndexMode = "adaptive" | "manual";
 type SortField =
   | "exchange"
   | "pair"
@@ -51,6 +52,8 @@ interface Props {
   onPremiumIndexPresetChange: (value: string) => void;
   onPremiumIndexCustomNotionalChange: (value: string) => void;
   onApplyPremiumIndexCustomNotional: () => void;
+  premiumIndexMode: PremiumIndexMode;
+  onPremiumIndexModeChange: (mode: PremiumIndexMode) => void;
   premiumIndexLoading: ReadonlySet<string>;
   premiumIndexErrors: ReadonlySet<string>;
   onSelect: (row: ArbitrageTableRow) => void;
@@ -190,6 +193,8 @@ export default function ArbitrageMarketTable({
   onPremiumIndexPresetChange,
   onPremiumIndexCustomNotionalChange,
   onApplyPremiumIndexCustomNotional,
+  premiumIndexMode,
+  onPremiumIndexModeChange,
   premiumIndexLoading,
   premiumIndexErrors,
   onSelect,
@@ -236,13 +241,22 @@ export default function ArbitrageMarketTable({
                 <SortHeaderButton field="premiumIndex" sort={sort} onSort={toggleSort}>溢价指数</SortHeaderButton>
                 <div className="flex flex-wrap items-center justify-end gap-1">
                   <select
-                    aria-label="溢价指数 Impact 名义金额"
-                    value={editingPremiumIndexCustom ? "custom" : String(premiumIndexNotional)}
-                    onChange={(event) => onPremiumIndexPresetChange(event.target.value)}
+                    aria-label="溢价指数来源"
+                    value={premiumIndexMode === "adaptive" ? "adaptive" : editingPremiumIndexCustom ? "custom" : String(premiumIndexNotional)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "adaptive") {
+                        onPremiumIndexModeChange("adaptive");
+                      } else {
+                        onPremiumIndexModeChange("manual");
+                        onPremiumIndexPresetChange(value);
+                      }
+                    }}
                     className="rounded border border-gray-600 bg-gray-900 px-1 py-0.5 text-[9px] text-gray-300 outline-none focus:border-indigo-400"
                   >
+                    <option value="adaptive">自适应</option>
                     {premiumIndexNotionalPresets.map((value) => <option key={value} value={value}>${value}</option>)}
-                    {!editingPremiumIndexCustom && !premiumIndexNotionalPresets.includes(premiumIndexNotional) && <option value={premiumIndexNotional}>${premiumIndexNotional}</option>}
+                    {premiumIndexMode !== "adaptive" && !editingPremiumIndexCustom && !premiumIndexNotionalPresets.includes(premiumIndexNotional) && <option value={premiumIndexNotional}>${premiumIndexNotional}</option>}
                     <option value="custom">自定义</option>
                   </select>
                   {editingPremiumIndexCustom && (

@@ -200,6 +200,8 @@ type OkxNativeFundingRateEntry = {
   settFundingRate?: string;
   markPx?: string;
   indexPx?: string;
+  premium?: string;
+  impactValue?: string;
 };
 
 type OkxNativeInstrumentEntry = {

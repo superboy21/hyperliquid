@@ -73,7 +73,7 @@ interface AssetContext {
   dayBaseVlm: string;
 }
 
-async function fetchHyperliquidInfo<T>(
+export async function fetchHyperliquidInfo<T>(
   body: Record<string, unknown>,
   maxAttempts: number = 3,
   signal?: AbortSignal,
