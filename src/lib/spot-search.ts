@@ -32,9 +32,12 @@ export interface SpotMarketRow {
 export interface SpotDetailResult {
   historicalVolatility: number | null;
   topSpread: number | null;
+  topSpreadSource: SpotTopSpreadSource | null;
   bestBid?: number;
   bestAsk?: number;
 }
+
+export type SpotTopSpreadSource = "orderbook" | "ticker-bbo";
 
 const EXCHANGE_COLORS: Record<SpotExchangeName, string> = {
   Hyperliquid: "blue",
@@ -358,16 +361,48 @@ function readBestPrices(exchange: SpotExchangeName, payload: unknown): { bestBid
   return { bestBid: priceAt(bids), bestAsk: priceAt(asks) };
 }
 
+function hasCompleteBbo(prices: { bestBid?: number; bestAsk?: number }): boolean {
+  return positive(prices.bestBid) !== undefined && positive(prices.bestAsk) !== undefined;
+}
+
+async function readBitgetReality(row: SpotMarketRow, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const response = await spotFetch(
+      row.exchange,
+      new URLSearchParams({ action: "instrument", symbol: row.rawSymbol }),
+      { signal },
+    );
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return arrayPayload(payload).some((value) => {
+      const instrument = object(value);
+      return instrument?.symbol === row.rawSymbol && instrument?.isReality === "yes";
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return false;
+  }
+}
+
 export async function fetchSpotDetail(row: SpotMarketRow, signal?: AbortSignal): Promise<SpotDetailResult> {
   const [candles, bookResponse] = await Promise.all([
     fetchSpotCandlesWithLimit(row, "1d", 30, signal),
     spotFetch(row.exchange, new URLSearchParams(bookQuery(row, 1)), { signal }),
   ]);
   if (!bookResponse.ok) throw new Error(`${row.exchange} spot book failed (${bookResponse.status})`);
-  const prices = readBestPrices(row.exchange, await bookResponse.json());
+  let prices = readBestPrices(row.exchange, await bookResponse.json());
+  let topSpreadSource: SpotTopSpreadSource | null = hasCompleteBbo(prices) ? "orderbook" : null;
+  if (row.exchange === "Bitget" && topSpreadSource === null && await readBitgetReality(row, signal)) {
+    const tickerPrices = { bestBid: positive(row.bestBid), bestAsk: positive(row.bestAsk) };
+    if (hasCompleteBbo(tickerPrices)) {
+      prices = tickerPrices;
+      topSpreadSource = "ticker-bbo";
+    }
+  }
   return {
     historicalVolatility: calculateSpotHistoricalVolatility(candles.candles),
     topSpread: spread(prices.bestBid, prices.bestAsk),
+    topSpreadSource,
     ...prices,
   };
 }

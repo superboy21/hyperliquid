@@ -67,3 +67,18 @@ describe("UTC spot candle mappings", () => {
     }
   });
 });
+
+describe("Bitget Spot instrument requests", () => {
+  test("injects the SPOT category and forwards only the raw symbol", () => {
+    const built = buildSpotUpstreamRequest("bitget", params("action=instrument&symbol=BTCUSDT"));
+    expect(typeof built).not.toBe("string");
+    if (typeof built !== "string") expect(built.url).toBe("https://api.bitget.com/api/v3/market/instruments?category=SPOT&symbol=BTCUSDT");
+  });
+
+  test("rejects instrument requests for other exchanges and malformed parameters", () => {
+    expect(buildSpotUpstreamRequest("binance", params("action=instrument&symbol=BTCUSDT"))).toBe("Unknown or missing action");
+    expect(buildSpotUpstreamRequest("bitget", params("action=instrument"))).toBe("Missing symbol");
+    expect(buildSpotUpstreamRequest("bitget", params("action=instrument&symbol=BTCUSDT&limit=1"))).toBe("Unknown or repeated parameter");
+    expect(buildSpotUpstreamRequest("bitget", params("action=instrument&symbol=BTC USDT"))).toBe("Invalid symbol");
+  });
+});

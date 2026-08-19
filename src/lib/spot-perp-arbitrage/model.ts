@@ -1,5 +1,5 @@
 import type { SearchExchangeRate } from "../search";
-import type { SpotMarketRow } from "../spot-search";
+import type { SpotMarketRow, SpotTopSpreadSource } from "../spot-search";
 
 declare const marketIdBrand: unique symbol;
 
@@ -21,6 +21,7 @@ export type ArbitrageMarket = PerpMarket | SpotMarket;
 export interface MarketTableDetail {
   historicalVolatility?: number | null;
   topSpread?: number | null;
+  topSpreadSource?: SpotTopSpreadSource | null;
   impactSpread?: number | null;
   bestBid?: number | null;
   bestAsk?: number | null;
@@ -46,6 +47,7 @@ export interface ArbitrageTableRow {
   openInterestNotional: number | null;
   historicalVolatility: number | null;
   topSpread: number | null;
+  topSpreadSource: SpotTopSpreadSource | null;
   impactSpread: number | null;
   latestSettlementRate: number | null;
   averageFundingRate2d: number | null;
@@ -121,6 +123,7 @@ export function toTableRow(
       openInterestNotional: null,
       historicalVolatility: finite(detail.historicalVolatility),
       topSpread: finite(detail.topSpread),
+      topSpreadSource: detail.topSpreadSource ?? null,
       impactSpread: finite(detail.impactSpread),
       latestSettlementRate: null,
       averageFundingRate2d: null,
@@ -151,6 +154,7 @@ export function toTableRow(
     openInterestNotional: finite(source.notionalValue),
     historicalVolatility: finite(detail.historicalVolatility) ?? finite(source.historicalVolatility),
     topSpread: finite(detail.topSpread) ?? finite(source.bidAskSpread),
+    topSpreadSource: null,
     impactSpread: finite(detail.impactSpread),
     latestSettlementRate: finite(detail.lastSettlementRate) ?? finite(source.lastSettlementRate),
     averageFundingRate2d: finite(detail.avgFundingRate2d) ?? finite(source.avgFundingRate2d),

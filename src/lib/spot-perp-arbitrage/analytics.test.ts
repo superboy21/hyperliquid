@@ -253,6 +253,31 @@ describe("two-leg dashboard analytics", () => {
     expect(dashboard.fundingAlignedCount).toBe(1);
   });
 
+  test("non-intraday perp pairs use only strict both-actual funding metadata", () => {
+    const combo: ComboCandleResult = {
+      candles: [],
+      fundingRates: [
+        { time: 10, rate: 0.0075, annualizedRate: 0.75, firstFunding: { rate: 0.01, annualizedRate: 1 }, secondFunding: { rate: 0.0025, annualizedRate: 0.25 } },
+        { time: 20, rate: 0.03, annualizedRate: 3, firstFunding: { rate: 0.03, annualizedRate: 3 }, secondFunding: null },
+        { time: 30, rate: -0.01, annualizedRate: -1, firstFunding: null, secondFunding: { rate: 0.01, annualizedRate: 1 } },
+        { time: 40, rate: 0.04, annualizedRate: 4, firstFunding: { rate: 0.05, annualizedRate: 5 }, secondFunding: { rate: 0.01, annualizedRate: 1 } },
+      ],
+      dashboardFundingRates: [], firstQuoteTurnover: [], secondQuoteTurnover: [],
+      interval: "1d", exchange: "Binance", symbol: "BTC-ETH", mode: "spread",
+      firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+      legProvenance: [] as never,
+    };
+
+    const dashboard = pairDashboardAnalytics(combo, 0);
+    expect(dashboard.fundingLeg1).toEqual({ mean: 3, count: 2 });
+    expect(dashboard.fundingLeg2).toEqual({ mean: 0.625, count: 2 });
+    expect(dashboard.fundingAnnualized).toEqual({ mean: 2.375, count: 2 });
+    expect(dashboard.fundingAnnualized.mean).toBe(
+      dashboard.fundingLeg1!.mean! - dashboard.fundingLeg2!.mean!,
+    );
+    expect(dashboard.fundingAlignedCount).toBe(2);
+  });
+
   test.each(["1d", "1w", "1m"] as const)("%s perp pairs retain strict aligned funding behavior", (interval) => {
     const combo: ComboCandleResult = {
       candles: [], fundingRates: [],

@@ -15,6 +15,12 @@ const row: SpotMarketRow = {
   baseVolume: 1, fetchedAt: 1,
 };
 
+const bitgetRow: SpotMarketRow = {
+  exchange: "Bitget", exchangeColor: "teal", pair: "BTC/USDT", baseAsset: "BTC", quoteAsset: "USDT",
+  rawSymbol: "BTCUSDT", marketKey: "BTCUSDT", midPrice: 100, bestBid: 99, bestAsk: 101,
+  change24h: 1, quoteVolume: 10, baseVolume: 1, fetchedAt: 1,
+};
+
 describe("spot search contracts", () => {
   test("identity is exchange plus transport market key; filtering covers published market fields but never the exchange name", () => {
     const rows = [row, { ...row, exchange: "OKX" as const, exchangeColor: "emerald", rawSymbol: "ETH-USDC", marketKey: "ETH-USDC", pair: "ETH/USDC", baseAsset: "ETH", quoteAsset: "USDC" }];
@@ -122,6 +128,66 @@ describe("spot search contracts", () => {
     expect(detail.bestAsk).toBe(101);
     expect(detail.topSpread).toBeCloseTo(2, 10);
     expect(detail.historicalVolatility).toBeNull();
+  });
+
+  test("uses populated orderbook BBO without requesting Bitget metadata", async () => {
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/api/v2/spot/market/orderbook")) return Response.json({ data: { bids: [["99", "1"]], asks: [["101", "1"]] } });
+      return Response.json({ data: [] });
+    });
+    const detail = await fetchSpotDetail(bitgetRow);
+    expect(detail).toMatchObject({ bestBid: 99, bestAsk: 101, topSpreadSource: "orderbook" });
+    expect(urls.some((url) => url.includes("/api/v3/market/instruments"))).toBe(false);
+  });
+
+  test("guards Bitget ticker BBO fallback with an exact reality instrument match", async () => {
+    const cases: Array<[string, unknown, boolean]> = [
+      ["yes", { data: [{ symbol: "BTCUSDT", isReality: "yes" }] }, true],
+      ["no", { data: [{ symbol: "BTCUSDT", isReality: "no" }] }, false],
+      ["missing", { data: [{ symbol: "BTCUSDT" }] }, false],
+      ["mismatched", { data: [{ symbol: "ETHUSDT", isReality: "yes" }] }, false],
+    ];
+    for (const [, metadata, shouldFallback] of cases) {
+      (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+      spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/api/v3/market/instruments")) return Response.json(metadata);
+        if (url.includes("/api/v2/spot/market/orderbook")) return Response.json({ data: { bids: [], asks: [] } });
+        return Response.json({ data: [] });
+      });
+      const detail = await fetchSpotDetail(bitgetRow);
+      expect(detail.topSpreadSource).toBe(shouldFallback ? "ticker-bbo" : null);
+      if (shouldFallback) expect(detail.topSpread).toBeCloseTo(2, 10);
+      else expect(detail.topSpread).toBeNull();
+      expect(detail.bestBid).toBe(shouldFallback ? 99 : undefined);
+      expect(detail.bestAsk).toBe(shouldFallback ? 101 : undefined);
+    }
+  });
+
+  test("treats Bitget metadata failure as best effort", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/v3/market/instruments")) throw new Error("metadata unavailable");
+      if (url.includes("/api/v2/spot/market/orderbook")) return Response.json({ data: { bids: [], asks: [] } });
+      return Response.json({ data: [] });
+    });
+    await expect(fetchSpotDetail(bitgetRow)).resolves.toMatchObject({ topSpread: null, topSpreadSource: null });
+  });
+
+  test("does not use ticker fallback for a non-Bitget empty book", async () => {
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/api/v3/depth")) return Response.json({ bids: [], asks: [] });
+      return Response.json([]);
+    });
+    const detail = await fetchSpotDetail(row);
+    expect(detail).toMatchObject({ topSpread: null, topSpreadSource: null });
+    expect(urls.some((url) => url.includes("/api/v3/market/instruments"))).toBe(false);
   });
 });
 

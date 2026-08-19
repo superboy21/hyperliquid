@@ -136,11 +136,6 @@ function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
   PairDashboardAnalytics,
   "fundingAnnualized" | "fundingLeg1" | "fundingLeg2" | "fundingAlignedCount"
 > {
-  if (!INTRADAY_PERP_PAIR_INTERVALS.has(visible.interval)) {
-    const funding = average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate));
-    return { fundingAnnualized: funding, fundingLeg1: null, fundingLeg2: null, fundingAlignedCount: funding.count };
-  }
-
   const points = [...visible.fundingRates].sort((a, b) => a.time - b.time);
   // Legacy hand-built results may not carry per-leg metadata. Preserve their
   // established aligned dashboard metric; production combo results always do.
@@ -148,6 +143,25 @@ function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
     const funding = average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate));
     return { fundingAnnualized: funding, fundingLeg1: null, fundingLeg2: null, fundingAlignedCount: funding.count };
   }
+
+  if (!INTRADAY_PERP_PAIR_INTERVALS.has(visible.interval)) {
+    const alignedPoints = points.filter((point) => (
+      actualLegFunding(point, point.firstFunding)
+      && actualLegFunding(point, point.secondFunding)
+    ));
+    const fundingLeg1 = average(alignedPoints.map((point) => point.firstFunding!.annualizedRate));
+    const fundingLeg2 = average(alignedPoints.map((point) => point.secondFunding!.annualizedRate));
+    return {
+      fundingAnnualized: {
+        mean: fundingLeg1.mean === null || fundingLeg2.mean === null ? null : fundingLeg1.mean - fundingLeg2.mean,
+        count: alignedPoints.length,
+      },
+      fundingLeg1,
+      fundingLeg2,
+      fundingAlignedCount: alignedPoints.length,
+    };
+  }
+
   const startIndex = points.findIndex((point) => (
     actualLegFunding(point, point.firstFunding)
     && actualLegFunding(point, point.secondFunding)

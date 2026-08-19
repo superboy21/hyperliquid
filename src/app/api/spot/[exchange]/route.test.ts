@@ -24,6 +24,14 @@ describe("strict spot facade", () => {
     expect(calls).toBe(0);
   });
 
+  test("strictly limits the instrument action to Bitget Spot", () => {
+    const bitget = buildSpotUpstreamRequest("bitget", params("action=instrument&symbol=BTCUSDT"));
+    expect(typeof bitget).not.toBe("string");
+    if (typeof bitget !== "string") expect(bitget.url).toBe("https://api.bitget.com/api/v3/market/instruments?category=SPOT&symbol=BTCUSDT");
+    expect(buildSpotUpstreamRequest("okx", params("action=instrument&symbol=BTC-USDT"))).toBe("Unknown or missing action");
+    expect(buildSpotUpstreamRequest("bitget", params("action=instrument&symbol=BTCUSDT&marketId=1"))).toBe("Unknown or repeated parameter");
+  });
+
   test("passes through successful JSON but does not expose upstream error payloads", async () => {
     const request = new NextRequest("http://localhost/api/spot/gateio?action=list");
     const success = await handleSpotRequest(request, "gateio", async () => Response.json([{ currency_pair: "BTC_USDT" }]));

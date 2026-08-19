@@ -49,6 +49,11 @@ const EXCHANGE_COLORS: Record<string, string> = {
   Lighter: "#A855F7",       // purple-500
   OKX: "#10B981",           // emerald-500
   Bitget: "#14B8A6",        // teal-500
+  Bybit: "#F97316",         // orange-500 — must be hex: the funding area
+                            // gradient appends an alpha suffix (`${color}33`),
+                            // and CSS keyword "orange" would produce an
+                            // invalid color that crashes zrender's
+                            // CanvasGradient.addColorStop (page-level crash).
 };
 
 /**

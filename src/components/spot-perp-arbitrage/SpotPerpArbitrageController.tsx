@@ -168,6 +168,7 @@ function spotDetail(detail: SpotDetailResult): MarketTableDetail {
   return {
     historicalVolatility: detail.historicalVolatility,
     topSpread: detail.topSpread,
+    topSpreadSource: detail.topSpreadSource,
     bestBid: detail.bestBid,
     bestAsk: detail.bestAsk,
   };

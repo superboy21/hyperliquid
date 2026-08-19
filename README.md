@@ -205,7 +205,7 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 
 ### 现货严格代理
 
-`/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX、Bitget 和 Bybit 七家交易所的严格现货门面，只允许 `list`、`candles`、`book` 三类操作，并校验交易所、参数白名单、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
+`/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX、Bitget 和 Bybit 七家交易所的严格现货门面，允许 `list`、`candles`、`book` 三类操作，以及仅 Bitget 可用的 `instrument` 元数据操作（用于核验 Reality instruments）；所有参数仍严格白名单校验，并校验交易所、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
 
 ### Bitget V3 UTA
 

@@ -3,7 +3,7 @@
 // direct-first fetcher (`spot-fetch.ts`). Pure URL/init construction with no
 // Next.js or server dependencies so it can run in the browser bundle.
 
-export type SpotAction = "list" | "candles" | "book";
+export type SpotAction = "list" | "candles" | "book" | "instrument";
 export type SpotUpstreamRequest = { url: string; init: RequestInit & { timeout?: number } };
 export type ExchangeSlug = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx" | "bitget" | "bybit";
 
@@ -21,6 +21,7 @@ const ACTION_PARAMS: Record<SpotAction, readonly string[]> = {
   list: [],
   candles: ["symbol", "marketId", "interval", "limit", "startTime", "endTime"],
   book: ["symbol", "marketId", "limit"],
+  instrument: ["symbol"],
 };
 const INTERVALS = new Set(["1w", "1d", "4h", "1h", "5m", "1m"]);
 const SYMBOL_RE = /^[A-Za-z0-9@._:/-]{1,80}$/;
@@ -46,8 +47,9 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
   if (!EXCHANGES.has(exchangeValue)) return "Unknown exchange";
   const exchange = exchangeValue as ExchangeSlug;
   const actionValue = params.get("action");
-  if (actionValue !== "list" && actionValue !== "candles" && actionValue !== "book") return "Unknown or missing action";
+  if (actionValue !== "list" && actionValue !== "candles" && actionValue !== "book" && actionValue !== "instrument") return "Unknown or missing action";
   const action = actionValue as SpotAction;
+  if (action === "instrument" && exchange !== "bitget") return "Unknown or missing action";
   const allowed = new Set(["action", ...ACTION_PARAMS[action]]);
   for (const key of params.keys()) if (!allowed.has(key) || params.getAll(key).length !== 1) return "Unknown or repeated parameter";
   const symbol = params.get("symbol");
@@ -73,7 +75,11 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
   const query = new URLSearchParams();
   let path = "";
   let init: RequestInit & { timeout?: number } = { method: "GET", timeout: 15_000 };
-  if (action === "list") {
+  if (action === "instrument") {
+    path = "/api/v3/market/instruments";
+    query.set("category", "SPOT");
+    query.set("symbol", symbol!);
+  } else if (action === "list") {
     if (exchange === "hyperliquid") {
       path = "/info"; init = { ...init, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "spotMetaAndAssetCtxs" }) };
     } else if (exchange === "gateio") path = "/api/v4/spot/tickers";

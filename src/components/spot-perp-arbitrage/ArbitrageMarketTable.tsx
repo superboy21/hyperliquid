@@ -346,6 +346,7 @@ export default function ArbitrageMarketTable({
             const leg2 = selectedLeg2Id === id;
             const impact = impactResults.get(id);
             const waitingForSpread = spreadMode === "impact" ? impactLoading.has(id) : detailLoading.has(id);
+            const showTickerBboWarning = spreadMode === "top" && row.market.kind === "spot" && row.topSpread !== null && row.topSpreadSource === "ticker-bbo";
             return (
               <tr
                 key={id}
@@ -409,6 +410,7 @@ export default function ArbitrageMarketTable({
                   ) : (
                     <div className="flex flex-col items-end gap-px">
                       {displayNumber(spreadMode === "top" ? row.topSpread : row.impactSpread, (value) => `${value.toFixed(4)}%`)}
+                      {showTickerBboWarning && <span className="whitespace-nowrap font-mono text-[9px] text-amber-400" title="参考报价：来自 Ticker BBO，公开 Order Book 无深度数据，不代表可立即成交。">Ticker BBO · 无深度数据</span>}
                       {spreadMode === "impact" && impact !== null && typeof impact === "object" && (
                         <>
                           <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="买入冲击价差">买入 {formatSignedPercent(impact.buyImpactSpread, 4)}</span>

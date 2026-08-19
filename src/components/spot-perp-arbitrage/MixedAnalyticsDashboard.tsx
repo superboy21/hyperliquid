@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   marketDisplaySymbol,
   visibleDashboardAnalytics,
@@ -43,10 +43,20 @@ function gapLabel(value: number | null): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+function annualizedFundingLabel(value: number | null): string {
+  if (value === null) return "--";
+  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
+}
+
+function fundingMeanTone(value: number | null): string {
+  if (value === null || value === 0) return "bg-gray-800/80 text-gray-300";
+  return value > 0 ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300";
+}
+
 interface PrimaryMetricCard {
   label: string;
   value: string;
-  note: string;
+  note: ReactNode;
   tone: string;
   gapPercent?: number | null;
   featured?: boolean;
@@ -135,8 +145,22 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
     if (funding) {
       cards.push({
         label: "年化资金费率差均值",
-        value: funding.mean === null ? "--" : `${funding.mean >= 0 ? "+" : ""}${(funding.mean * 100).toFixed(2)}%`,
-        note: `腿1 ${leg1}（${analysis.dashboard.fundingLeg1?.count ?? 0}个）− 腿2 ${leg2}（${analysis.dashboard.fundingLeg2?.count ?? 0}个）`,
+        value: annualizedFundingLabel(funding.mean),
+        note: (
+          <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿1 {leg1}</span>
+            <span className={`rounded-sm px-1 font-mono font-medium ${fundingMeanTone(analysis.dashboard.fundingLeg1?.mean ?? null)}`}>
+              {annualizedFundingLabel(analysis.dashboard.fundingLeg1?.mean ?? null)}
+            </span>
+            <span className="text-gray-600">（{analysis.dashboard.fundingLeg1?.count ?? 0}个）</span>
+            <span aria-hidden="true" className="text-gray-700">·</span>
+            <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿2 {leg2}</span>
+            <span className={`rounded-sm px-1 font-mono font-medium ${fundingMeanTone(analysis.dashboard.fundingLeg2?.mean ?? null)}`}>
+              {annualizedFundingLabel(analysis.dashboard.fundingLeg2?.mean ?? null)}
+            </span>
+            <span className="text-gray-600">（{analysis.dashboard.fundingLeg2?.count ?? 0}个）</span>
+          </span>
+        ),
         tone: funding.mean === null ? "text-gray-500" : funding.mean >= 0 ? "text-emerald-300" : "text-red-300",
       });
     }
