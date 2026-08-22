@@ -96,6 +96,7 @@ describe("strategy recommendations", () => {
 
     expect(recommendation.gross).toBeCloseTo(1);
     expect(recommendation.netReturn).toBeCloseTo(0.9);
+    expect(recommendation.usdReturn).toBeCloseTo(27);
     expect(recommendation.annualized).toBeCloseTo(32.85);
   });
 

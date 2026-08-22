@@ -32,6 +32,7 @@ export interface StrategyRecommendation {
   sell: StrategyLeg;
   gross: number;
   netReturn: number;
+  usdReturn: number;
   annualized: number;
 }
 
@@ -134,6 +135,7 @@ export function computeStrategyRecommendations(
         sell: leg(sellMarket, sellPrices.bid),
         gross,
         netReturn,
+        usdReturn: settings.impactNotional * netReturn / 100,
         annualized: netReturn * 365 / days,
       });
     }

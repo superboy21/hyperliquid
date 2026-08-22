@@ -66,6 +66,7 @@ describe("StrategyRecommendations", () => {
         sell: { id: "sell", exchange: "OKX", symbol: "BTC", kind: "perp", price: 101 },
         gross: 1,
         netReturn: 0.9,
+        usdReturn: 27,
         annualized: 23.46,
       }],
       impactLoading: false,
@@ -100,11 +101,14 @@ describe("StrategyRecommendations", () => {
     expect(markup).toContain("卖出执行价");
     expect(markup).toContain("套利空间");
     expect(markup).toContain("扣费后收益");
+    expect(markup).toContain("美元收益");
     expect(markup).toContain("按 30 天年化收益率");
+    expect(markup).toContain("$27.00");
     expect(markup).toContain("Binance");
     expect(markup).toContain("BTC");
     expect(markup).toContain("永续");
     expect(markup).toContain("OKX");
-    expect(markup.indexOf("按 30 天年化收益率")).toBeGreaterThan(markup.indexOf("扣费后收益"));
+    expect(markup.indexOf("美元收益")).toBeGreaterThan(markup.indexOf("扣费后收益"));
+    expect(markup.indexOf("按 30 天年化收益率")).toBeGreaterThan(markup.indexOf("美元收益"));
   });
 });

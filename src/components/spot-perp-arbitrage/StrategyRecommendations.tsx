@@ -36,6 +36,11 @@ function priceClass(value: number): string {
   return value >= 0 ? "text-emerald-300" : "text-red-300";
 }
 
+function formatUsd(value: number): string {
+  const sign = value >= 0 ? "" : "-";
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
+}
+
 export default function StrategyRecommendations({
   recommendations,
   impactLoading,
@@ -144,7 +149,7 @@ export default function StrategyRecommendations({
       ) : (
         <div className="mt-4 overflow-x-auto rounded-lg border border-gray-700 bg-gray-900/40">
           <div className="border-b border-gray-700 px-3 py-2 text-xs text-violet-200">策略图表：A 买入 · B 卖出 · A / B Ratio</div>
-          <table className="w-full min-w-[980px] text-left text-xs" aria-label="策略推荐表格">
+          <table className="w-full min-w-[1080px] text-left text-xs" aria-label="策略推荐表格">
             <caption className="sr-only">当前可执行套利策略推荐</caption>
             <thead className="border-b border-gray-700 bg-gray-900/80 text-[11px] font-medium text-gray-500">
               <tr>
@@ -155,6 +160,7 @@ export default function StrategyRecommendations({
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">卖出执行价</th>
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">套利空间</th>
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">扣费后收益</th>
+                <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">美元收益</th>
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">按 {convergenceDays} 天年化收益率</th>
               </tr>
             </thead>
@@ -194,6 +200,7 @@ export default function StrategyRecommendations({
                   <td className="whitespace-nowrap px-3 py-3 text-right align-top font-mono text-fuchsia-300">{formatPrice(recommendation.sell.price)}</td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono ${priceClass(recommendation.gross)}`}>{percent(recommendation.gross)}</td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono ${priceClass(recommendation.netReturn)}`}>{percent(recommendation.netReturn)}</td>
+                  <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono ${priceClass(recommendation.usdReturn)}`}>{formatUsd(recommendation.usdReturn)}</td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono font-semibold ${priceClass(recommendation.annualized)}`}>{percent(recommendation.annualized)}</td>
                 </tr>
               ))}
