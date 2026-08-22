@@ -1,6 +1,7 @@
 export * from "./analytics";
 export * from "./combine";
 export * from "./chart-time-selection";
+export * from "./chart-plan";
 export * from "./load";
 export * from "./market";
 export * from "./model";
@@ -8,3 +9,4 @@ export * from "./query";
 export * from "./selection";
 export * from "./series";
 export * from "./single-market-analytics";
+export * from "./strategy";

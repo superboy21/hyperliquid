@@ -61,6 +61,12 @@ interface Props {
   onPremiumIndexModeChange: (mode: PremiumIndexMode) => void;
   premiumIndexLoading: ReadonlySet<string>;
   premiumIndexErrors: ReadonlySet<string>;
+  strategyOpen: boolean;
+  onStrategyToggle: () => void;
+  strategyExcludedMarketIds: ReadonlySet<string>;
+  onStrategyMarketToggle: (id: string, included: boolean) => void;
+  onStrategySelectAll: () => void;
+  onStrategyDeselectAll: () => void;
   onSelect: (row: ArbitrageTableRow) => void;
 }
 
@@ -253,6 +259,12 @@ export default function ArbitrageMarketTable({
   onPremiumIndexModeChange,
   premiumIndexLoading,
   premiumIndexErrors,
+  strategyOpen,
+  onStrategyToggle,
+  strategyExcludedMarketIds,
+  onStrategyMarketToggle,
+  onStrategySelectAll,
+  onStrategyDeselectAll,
   onSelect,
 }: Props) {
   const [sort, setSort] = useState<{ field: SortField; descending: boolean }>({
@@ -291,9 +303,20 @@ export default function ArbitrageMarketTable({
 
   return (
     <div className="overflow-x-auto rounded-lg border border-gray-700 bg-gray-800">
-      <table className="w-full min-w-[1680px]">
+      <table className={`w-full ${strategyOpen ? "min-w-[1780px]" : "min-w-[1680px]"}`}>
         <thead>
           <tr className="border-b border-gray-700 bg-gray-800/95">
+            {strategyOpen && (
+              <th className="w-[112px] px-2.5 py-2 text-left text-[11px] font-medium text-gray-400">
+                <div className="flex flex-col gap-1">
+                  <span className="whitespace-nowrap">策略参与</span>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={onStrategySelectAll} aria-label="策略全选" className="rounded border border-gray-600 px-1 py-0.5 text-[9px] text-gray-400 hover:border-gray-400 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-300">全选</button>
+                    <button type="button" onClick={onStrategyDeselectAll} aria-label="策略全不选" className="rounded border border-gray-600 px-1 py-0.5 text-[9px] text-gray-400 hover:border-gray-400 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-300">全不选</button>
+                  </div>
+                </div>
+              </th>
+            )}
             <th className="px-2.5 py-2 text-left text-[11px] font-medium text-gray-400"><SortHeaderButton field="exchange" sort={headerSort} onSort={toggleSort}>交易所</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-left text-[11px] font-medium text-gray-400"><SortHeaderButton field="pair" sort={headerSort} onSort={toggleSort}>交易对</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="midpoint" sort={headerSort} onSort={toggleSort}>中间价</SortHeaderButton></th>
@@ -348,7 +371,14 @@ export default function ArbitrageMarketTable({
             <th className="w-[250px] px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">
               <div className="flex flex-col items-end gap-1.5">
                 <SortHeaderButton field="spread" sort={headerSort} onSort={toggleSort}>买卖价差</SortHeaderButton>
-                <div className="inline-flex rounded border border-gray-600 bg-gray-900/70 p-0.5" aria-label="价差类型">
+                <div className="flex items-center justify-end gap-1">
+                  <button
+                    type="button"
+                    aria-pressed={strategyOpen}
+                    onClick={onStrategyToggle}
+                    className={`rounded border px-1.5 py-0.5 text-[9px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-300 ${strategyOpen ? "border-violet-400/60 bg-violet-500/20 text-violet-200" : "border-gray-600 text-gray-500 hover:border-gray-500 hover:text-gray-300"}`}
+                  >寻找策略</button>
+                  <div className="inline-flex rounded border border-gray-600 bg-gray-900/70 p-0.5" aria-label="价差类型">
                   {(["top", "impact"] as SpreadMode[]).map((mode) => (
                     <button
                       key={mode}
@@ -364,6 +394,7 @@ export default function ArbitrageMarketTable({
                       {mode === "top" ? "Top" : "Impact"}
                     </button>
                   ))}
+                  </div>
                 </div>
               </div>
               {spreadMode === "impact" && (
@@ -426,6 +457,7 @@ export default function ArbitrageMarketTable({
             const id = String(row.id);
             const leg1 = selectedLeg1Id === id;
             const leg2 = selectedLeg2Id === id;
+            const strategyIncluded = !strategyExcludedMarketIds.has(id);
             const impact = impactResults.get(id);
             const waitingForSpread = spreadMode === "impact" ? impactLoading.has(id) : detailLoading.has(id);
             const showTickerBboWarning = spreadMode === "top" && row.market.kind === "spot" && row.topSpread !== null && row.topSpreadSource === "ticker-bbo";
@@ -446,6 +478,22 @@ export default function ArbitrageMarketTable({
                   leg1 ? "bg-indigo-950/55" : leg2 ? "bg-fuchsia-950/45" : "hover:bg-gray-700/50"
                 }`}
               >
+                {strategyOpen && (
+                  <td className="px-2.5 py-2 align-middle" onClick={(event) => event.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={strategyIncluded}
+                      aria-label={`${strategyIncluded ? "取消" : "加入"}策略：${row.exchange} ${row.pair}`}
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      onChange={(event) => {
+                        event.stopPropagation();
+                        onStrategyMarketToggle(id, event.currentTarget.checked);
+                      }}
+                      className="h-3.5 w-3.5 rounded border-gray-600 bg-gray-900 text-violet-500 focus:ring-2 focus:ring-violet-400"
+                    />
+                  </td>
+                )}
                 <td className="px-2.5 py-2"><span className="flex items-center gap-1.5 whitespace-nowrap"><span className={`h-2 w-2 rounded-full ${EXCHANGE_DOT_COLORS[row.exchange] ?? "bg-gray-400"}`} /><span className="text-xs text-gray-300">{row.exchange}</span></span></td>
                 <td className="px-2.5 py-2">
                   <div className="flex items-center gap-1.5 whitespace-nowrap">

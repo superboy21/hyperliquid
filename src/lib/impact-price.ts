@@ -20,8 +20,8 @@ import {
   type OrderBookImpactDetailResult,
 } from "./order-book-impact";
 
-export const DEFAULT_IMPACT_NOTIONAL = 1000;
-export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 5000, 10000] as const;
+export const DEFAULT_IMPACT_NOTIONAL = 3000;
+export const IMPACT_NOTIONAL_PRESETS = [200, 1000, 3000, 5000, 10000] as const;
 
 export const DEFAULT_PREMIUM_INDEX_NOTIONAL = 5000;
 export const PREMIUM_INDEX_NOTIONAL_PRESETS = [2000, 4000, 5000, 10000, 25000] as const;

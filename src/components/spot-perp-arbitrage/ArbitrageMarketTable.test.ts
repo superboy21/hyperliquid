@@ -127,10 +127,10 @@ describe("Arbitrage market table impact prices", () => {
       selectedLeg1Id: null,
       selectedLeg2Id: null,
       comboMode: false,
-      detailLoading: new Set(),
-      detailErrors: new Set(),
-      impactLoading: new Set(),
-      impactErrors: new Set(),
+      detailLoading: new Set<string>(),
+      detailErrors: new Set<string>(),
+      impactLoading: new Set<string>(),
+      impactErrors: new Set<string>(),
       impactResults: new Map([[String(row.id), impact]]),
       spreadMode: "impact",
       onSpreadModeChange: () => {},
@@ -150,8 +150,14 @@ describe("Arbitrage market table impact prices", () => {
       onApplyPremiumIndexCustomNotional: () => {},
       premiumIndexMode: "adaptive",
       onPremiumIndexModeChange: () => {},
-      premiumIndexLoading: new Set(),
-      premiumIndexErrors: new Set(),
+      premiumIndexLoading: new Set<string>(),
+      premiumIndexErrors: new Set<string>(),
+      strategyOpen: false,
+      onStrategyToggle: () => {},
+      strategyExcludedMarketIds: new Set<string>(),
+      onStrategyMarketToggle: () => {},
+      onStrategySelectAll: () => {},
+      onStrategyDeselectAll: () => {},
       onSelect: () => {},
     }));
 
@@ -164,16 +170,17 @@ describe("Arbitrage market table impact prices", () => {
     expect(markup).toContain('aria-label="按最低买入执行价排序"');
     expect(markup).toContain('aria-label="按最高卖出执行价排序"');
     expect(markup).toContain('aria-pressed="false"');
+    expect(markup).not.toContain("策略参与");
 
     const topMarkup = renderToStaticMarkup(createElement(ArbitrageMarketTable, {
       rows: [row],
       selectedLeg1Id: null,
       selectedLeg2Id: null,
       comboMode: false,
-      detailLoading: new Set(),
-      detailErrors: new Set(),
-      impactLoading: new Set(),
-      impactErrors: new Set(),
+      detailLoading: new Set<string>(),
+      detailErrors: new Set<string>(),
+      impactLoading: new Set<string>(),
+      impactErrors: new Set<string>(),
       impactResults: new Map([[String(row.id), impact]]),
       spreadMode: "top",
       onSpreadModeChange: () => {},
@@ -193,11 +200,66 @@ describe("Arbitrage market table impact prices", () => {
       onApplyPremiumIndexCustomNotional: () => {},
       premiumIndexMode: "adaptive",
       onPremiumIndexModeChange: () => {},
-      premiumIndexLoading: new Set(),
-      premiumIndexErrors: new Set(),
+      premiumIndexLoading: new Set<string>(),
+      premiumIndexErrors: new Set<string>(),
+      strategyOpen: false,
+      onStrategyToggle: () => {},
+      strategyExcludedMarketIds: new Set<string>(),
+      onStrategyMarketToggle: () => {},
+      onStrategySelectAll: () => {},
+      onStrategyDeselectAll: () => {},
       onSelect: () => {},
     }));
     expect(topMarkup).not.toContain("最优买价");
     expect(topMarkup).not.toContain("最优卖价");
+    expect(topMarkup).not.toContain("策略参与");
+
+    const excludedRow = spotRow("OKX", "EXCLUDED");
+    const strategyMarkup = renderToStaticMarkup(createElement(ArbitrageMarketTable, {
+      rows: [row, excludedRow],
+      selectedLeg1Id: null,
+      selectedLeg2Id: null,
+      comboMode: false,
+      detailLoading: new Set<string>(),
+      detailErrors: new Set<string>(),
+      impactLoading: new Set<string>(),
+      impactErrors: new Set<string>(),
+      impactResults: new Map([[String(row.id), impact], [String(excludedRow.id), impact]]),
+      spreadMode: "impact",
+      onSpreadModeChange: () => {},
+      impactNotional: 1000,
+      impactNotionalPresets: [1000],
+      customNotional: "",
+      editingCustomNotional: false,
+      onPresetChange: () => {},
+      onCustomNotionalChange: () => {},
+      onApplyCustomNotional: () => {},
+      premiumIndexNotional: 5000,
+      premiumIndexNotionalPresets: [5000],
+      premiumIndexCustomNotional: "",
+      editingPremiumIndexCustom: false,
+      onPremiumIndexPresetChange: () => {},
+      onPremiumIndexCustomNotionalChange: () => {},
+      onApplyPremiumIndexCustomNotional: () => {},
+      premiumIndexMode: "adaptive",
+      onPremiumIndexModeChange: () => {},
+      premiumIndexLoading: new Set<string>(),
+      premiumIndexErrors: new Set<string>(),
+      strategyOpen: true,
+      onStrategyToggle: () => {},
+      strategyExcludedMarketIds: new Set([String(excludedRow.id)]),
+      onStrategyMarketToggle: () => {},
+      onStrategySelectAll: () => {},
+      onStrategyDeselectAll: () => {},
+      onSelect: () => {},
+    }));
+    expect(strategyMarkup).toContain("策略参与");
+    expect(strategyMarkup.indexOf("策略参与")).toBeLessThan(strategyMarkup.indexOf("交易所"));
+    expect(strategyMarkup).toContain('aria-label="策略全选"');
+    expect(strategyMarkup).toContain('aria-label="策略全不选"');
+    expect(strategyMarkup).toContain('aria-label="取消策略：Binance BTC/USDT"');
+    expect(strategyMarkup).toContain('aria-label="加入策略：OKX EXCLUDED/USDT"');
+    expect(strategyMarkup.match(/type="checkbox"/g)?.length).toBe(2);
+    expect(strategyMarkup.match(/type="checkbox"[^>]*checked=""/g)?.length).toBe(1);
   });
 });
