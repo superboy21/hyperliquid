@@ -242,6 +242,7 @@ export default function SpotPerpArbitrageController() {
   const [strategyOpen, setStrategyOpen] = useState(false);
   const [strategyExcludedMarketIds, setStrategyExcludedMarketIds] = useState<Set<string>>(new Set());
   const [strategyChartOverride, setStrategyChartOverride] = useState<StrategyChartOverride | null>(null);
+  const [strategyChartMode, setStrategyChartMode] = useState<"ratio" | "spread">("ratio");
   const [selectedRecommendationKey, setSelectedRecommendationKey] = useState<string | null>(null);
   const [strategyDraft, setStrategyDraft] = useState<StrategyDraftSettings>(DEFAULT_STRATEGY_DRAFT);
   const [appliedImpactNotional, setAppliedImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
@@ -558,8 +559,13 @@ export default function SpotPerpArbitrageController() {
 
   const comboMode = searchResult.query.kind === "combo";
   const effectiveChartPlan = useMemo(
-    () => createChartPlan(searchResult.query, selection, strategyChartOverride, searchResult.markets),
-    [searchResult.markets, searchResult.query, selection, strategyChartOverride],
+    () => createChartPlan(
+      searchResult.query,
+      selection,
+      strategyChartOverride === null ? null : { ...strategyChartOverride, mode: strategyChartMode },
+      searchResult.markets,
+    ),
+    [searchResult.markets, searchResult.query, selection, strategyChartOverride, strategyChartMode],
   );
   const singleSpotChart = effectiveChartPlan?.kind === "single" && effectiveChartPlan.leg1.kind === "spot";
   const selectedChartIncludesBitget = effectiveChartPlan?.kind === "combo"
@@ -689,6 +695,7 @@ export default function SpotPerpArbitrageController() {
     chartAbortRef.current?.abort();
     chartGenerationRef.current += 1;
     setStrategyChartOverride(null);
+    setStrategyChartMode("ratio");
     setSelectedRecommendationKey(null);
     setChartPayload(null);
     setChartLoading(false);
@@ -707,6 +714,10 @@ export default function SpotPerpArbitrageController() {
     setSelection(EMPTY_SELECTION);
     setSelectedRecommendationKey(key);
     setStrategyChartOverride({ buyId: recommendation.buy.id, sellId: recommendation.sell.id });
+  };
+
+  const toggleStrategyChartMode = () => {
+    setStrategyChartMode((current) => current === "ratio" ? "spread" : "ratio");
   };
 
   const toggleStrategy = () => {
@@ -912,6 +923,8 @@ export default function SpotPerpArbitrageController() {
               onApplyCustomNotional={applyCustomNotional}
               onRecommendationSelect={selectRecommendation}
               selectedRecommendationKey={selectedRecommendationKey}
+              chartMode={strategyChartMode}
+              onChartModeToggle={toggleStrategyChartMode}
               draft={strategyDraft}
               onDraftChange={updateStrategyDraft}
               hasUnappliedChanges={hasUnappliedStrategyChanges}
@@ -922,7 +935,7 @@ export default function SpotPerpArbitrageController() {
               <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="min-w-0">
                   <h2 id="arbitrage-chart-title" className="truncate text-sm font-semibold text-white">{selectedTitle}</h2>
-                  {effectiveChartPlan.kind === "combo" && effectiveChartPlan.source === "strategy" && <p className="mt-1 text-xs text-violet-300">A 买入 · B 卖出 · A / B Ratio</p>}
+                  {effectiveChartPlan.kind === "combo" && effectiveChartPlan.source === "strategy" && <p className="mt-1 text-xs text-violet-300">A 买入 · B 卖出 · {effectiveChartPlan.mode === "spread" ? "A − B Spread" : "A / B Ratio"}</p>}
                   <p className="mt-1 text-xs text-gray-500">{chartPayload?.kind === "perp-combo" ? `${visiblePerpCombo?.candles.length ?? 0} 个共同时间点` : chartPayload?.kind === "spot-combo" ? `${visibleSpotCombo?.points.length ?? 0} 个共同时间点` : "单市场原始图表"}</p>
                   <p className="mt-1 text-xs text-cyan-300/80">拖动选择精确 UTC 区间；点击 K 线，方向键移动，Shift + 方向键扩展。</p>
                 </div>

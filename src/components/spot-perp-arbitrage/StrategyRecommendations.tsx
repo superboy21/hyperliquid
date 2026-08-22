@@ -19,6 +19,8 @@ interface Props {
   onApplyCustomNotional: () => void;
   onRecommendationSelect: (recommendation: StrategyRecommendation) => void;
   selectedRecommendationKey: string | null;
+  chartMode: "ratio" | "spread";
+  onChartModeToggle: () => void;
   draft: StrategyDraftSettings;
   onDraftChange: (field: DraftField, value: string | boolean) => void;
   hasUnappliedChanges: boolean;
@@ -54,6 +56,8 @@ export default function StrategyRecommendations({
   onApplyCustomNotional,
   onRecommendationSelect,
   selectedRecommendationKey,
+  chartMode,
+  onChartModeToggle,
   draft,
   onDraftChange,
   hasUnappliedChanges,
@@ -148,7 +152,19 @@ export default function StrategyRecommendations({
         <div className="mt-4 rounded border border-gray-700 bg-gray-900/40 px-3 py-4 text-center text-xs text-gray-500" role="status">当前设置下没有满足条件的可执行组合。</div>
       ) : (
         <div className="mt-4 overflow-x-auto rounded-lg border border-gray-700 bg-gray-900/40">
-          <div className="border-b border-gray-700 px-3 py-2 text-xs text-violet-200">策略图表：A 买入 · B 卖出 · A / B Ratio</div>
+          <div className="flex items-center justify-between gap-2 border-b border-gray-700 px-3 py-2 text-xs text-violet-200">
+            <span>策略图表：A 买入 · B 卖出 · {chartMode === "ratio" ? "A / B Ratio" : "A − B Spread"}</span>
+            {selectedRecommendationKey !== null && (
+              <button
+                type="button"
+                onClick={onChartModeToggle}
+                aria-pressed={chartMode === "spread"}
+                className="shrink-0 rounded border border-violet-500/50 bg-violet-900/30 px-2 py-0.5 text-[11px] font-medium text-violet-200 transition-colors hover:border-violet-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+              >
+                {chartMode === "ratio" ? "切换为 A − B Spread" : "切换为 A / B Ratio"}
+              </button>
+            )}
+          </div>
           <table className="w-full min-w-[1080px] text-left text-xs" aria-label="策略推荐表格">
             <caption className="sr-only">当前可执行套利策略推荐</caption>
             <thead className="border-b border-gray-700 bg-gray-900/80 text-[11px] font-medium text-gray-500">

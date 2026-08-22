@@ -69,6 +69,13 @@ describe("chart plan", () => {
     expect(spreadPlan).toMatchObject({ kind: "combo", mode: "ratio", leg1: eth, leg2: btc, source: "strategy" });
   });
 
+  test("strategy override can switch to an A − B spread chart while keeping buy/sell legs", () => {
+    const override = { buyId: String(marketId(eth)), sellId: String(marketId(btc)), mode: "spread" as const };
+    const plan = createChartPlan({ kind: "normal", term: "btc" }, selection(btc), override, markets);
+
+    expect(plan).toMatchObject({ kind: "combo", mode: "spread", leg1: eth, leg2: btc, source: "strategy" });
+  });
+
   test("returns null for stale, missing, or same-ID overrides", () => {
     const btcId = String(marketId(btc));
     const ethId = String(marketId(eth));

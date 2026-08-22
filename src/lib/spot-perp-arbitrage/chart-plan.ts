@@ -5,6 +5,8 @@ import type { OrderedSelection } from "./selection";
 export interface StrategyChartOverride {
   buyId: string;
   sellId: string;
+  /** Defaults to "ratio"; "spread" renders A − B instead of A / B. */
+  mode?: "spread" | "ratio";
 }
 
 export type ChartPlan =
@@ -25,7 +27,7 @@ export function createChartPlan(
     const buy = marketsById.get(strategyOverride.buyId);
     const sell = marketsById.get(strategyOverride.sellId);
     if (!buy || !sell) return null;
-    return { kind: "combo", mode: "ratio", leg1: buy, leg2: sell, source: "strategy" };
+    return { kind: "combo", mode: strategyOverride.mode === "spread" ? "spread" : "ratio", leg1: buy, leg2: sell, source: "strategy" };
   }
 
   if (query.kind === "normal") {

@@ -18,6 +18,8 @@ describe("StrategyRecommendations", () => {
       onApplyCustomNotional: () => {},
       onRecommendationSelect: () => {},
       selectedRecommendationKey: null,
+      chartMode: "ratio",
+      onChartModeToggle: () => {},
       draft: { minGross: "0.3", maxGross: "1.5", totalFee: "0.1", spotOnlyBuy: true, convergenceDays: "3" },
       onDraftChange: () => {},
       hasUnappliedChanges: true,
@@ -80,6 +82,8 @@ describe("StrategyRecommendations", () => {
       onApplyCustomNotional: () => {},
       onRecommendationSelect: () => {},
       selectedRecommendationKey: "buy:sell",
+      chartMode: "ratio",
+      onChartModeToggle: () => {},
       draft: { minGross: "0.5", maxGross: "1.5", totalFee: "0.1", spotOnlyBuy: true, convergenceDays: "30" },
       onDraftChange: () => {},
       hasUnappliedChanges: false,
@@ -87,6 +91,8 @@ describe("StrategyRecommendations", () => {
 
     expect(markup).toContain("按 30 天年化");
     expect(markup).toContain("A 买入 · B 卖出 · A / B Ratio");
+    expect(markup).toContain("切换为 A − B Spread");
+    expect(markup).toContain('aria-pressed="false"');
     expect(markup).toContain('role="button"');
     expect(markup).toContain('tabindex="0"');
     expect(markup).toContain('aria-pressed="true"');
@@ -110,5 +116,51 @@ describe("StrategyRecommendations", () => {
     expect(markup).toContain("OKX");
     expect(markup.indexOf("美元收益")).toBeGreaterThan(markup.indexOf("扣费后收益"));
     expect(markup.indexOf("按 30 天年化收益率")).toBeGreaterThan(markup.indexOf("美元收益"));
+  });
+
+  test("offers the A − B spread toggle only while a strategy chart is active", () => {
+    const baseProps = {
+      recommendations: [{
+        rank: 1,
+        buy: { id: "buy", exchange: "Binance", symbol: "BTC", kind: "perp" as const, price: 100 },
+        sell: { id: "sell", exchange: "OKX", symbol: "BTC", kind: "perp" as const, price: 101 },
+        gross: 1,
+        netReturn: 0.9,
+        usdReturn: 27,
+        annualized: 23.46,
+      }],
+      impactLoading: false,
+      impactNotional: 1000,
+      convergenceDays: 3,
+      impactNotionalPresets: [1000],
+      customNotional: "1000",
+      editingCustomNotional: false,
+      onImpactPresetChange: () => {},
+      onCustomNotionalChange: () => {},
+      onApplyCustomNotional: () => {},
+      onRecommendationSelect: () => {},
+      draft: { minGross: "0.5", maxGross: "1.5", totalFee: "0.1", spotOnlyBuy: true, convergenceDays: "3" },
+      onDraftChange: () => {},
+      hasUnappliedChanges: false,
+    };
+
+    const unselected = renderToStaticMarkup(createElement(StrategyRecommendations, {
+      ...baseProps,
+      selectedRecommendationKey: null,
+      chartMode: "ratio" as const,
+      onChartModeToggle: () => {},
+    }));
+    expect(unselected).toContain("A 买入 · B 卖出 · A / B Ratio");
+    expect(unselected).not.toContain("切换为");
+
+    const spreadMode = renderToStaticMarkup(createElement(StrategyRecommendations, {
+      ...baseProps,
+      selectedRecommendationKey: "buy:sell",
+      chartMode: "spread" as const,
+      onChartModeToggle: () => {},
+    }));
+    expect(spreadMode).toContain("A 买入 · B 卖出 · A − B Spread");
+    expect(spreadMode).toContain("切换为 A / B Ratio");
+    expect(spreadMode).toContain('aria-pressed="true"');
   });
 });
