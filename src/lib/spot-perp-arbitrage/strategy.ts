@@ -38,7 +38,7 @@ export interface StrategyRecommendation {
 
 export const DEFAULT_STRATEGY_SETTINGS: StrategySettings = {
   impactNotional: DEFAULT_IMPACT_NOTIONAL,
-  minGross: 0.3,
+  minGross: 0.2,
   maxGross: 1.5,
   totalFee: 0.1,
   spotOnlyBuy: true,

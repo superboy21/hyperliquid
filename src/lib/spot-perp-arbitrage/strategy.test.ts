@@ -106,7 +106,7 @@ describe("strategy recommendations", () => {
     expect(applyStrategyDraft(draft, 500)).toEqual({
       impactNotional: 500, minGross: 1, maxGross: 2, totalFee: 0.2, spotOnlyBuy: false, convergenceDays: 3,
     });
-    expect(DEFAULT_STRATEGY_SETTINGS).toMatchObject({ impactNotional: 3000, minGross: 0.3, convergenceDays: 3 });
+    expect(DEFAULT_STRATEGY_SETTINGS).toMatchObject({ impactNotional: 3000, minGross: 0.2, convergenceDays: 3 });
   });
 
   test("compares every distinct search result regardless of base asset or quote currency", () => {
