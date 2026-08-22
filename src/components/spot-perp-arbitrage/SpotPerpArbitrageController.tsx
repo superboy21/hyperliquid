@@ -205,7 +205,6 @@ export default function SpotPerpArbitrageController() {
   const oiAbortRef = useRef<AbortController | null>(null);
   const oiGenerationRef = useRef(0);
   const oiResultContractRef = useRef("");
-  const currentResultMarketsRef = useRef<readonly ArbitrageMarket[]>([]);
 
   const [details, setDetails] = useState<Map<string, MarketTableDetail>>(new Map());
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
@@ -312,16 +311,12 @@ export default function SpotPerpArbitrageController() {
   const oiResultContract = `${query}\u0000${debouncedQuery}\u0000${spotQuote}\u0000${validSearch ? "valid" : "inactive"}\u0000${resultKey}`;
 
   useEffect(() => {
-    currentResultMarketsRef.current = searchResult.markets;
-  }, [searchResult.markets]);
-
-  useEffect(() => {
     oiAbortRef.current?.abort();
     const generation = ++oiGenerationRef.current;
     oiResultContractRef.current = oiResultContract;
     if (!validSearch || !debouncedQuery.trim()) return;
 
-    const targets = selectPendingBinanceOpenInterestTargets(currentResultMarketsRef.current);
+    const targets = selectPendingBinanceOpenInterestTargets(searchResult.markets);
     if (targets.length === 0) return;
     const controller = new AbortController();
     oiAbortRef.current = controller;
@@ -342,7 +337,7 @@ export default function SpotPerpArbitrageController() {
         }
       });
     return () => controller.abort();
-  }, [debouncedQuery, oiResultContract, validSearch]);
+  }, [debouncedQuery, oiResultContract, searchResult.markets, validSearch]);
 
   useEffect(() => {
     detailAbortRef.current?.abort();

@@ -139,7 +139,12 @@ export async function binanceFetch(endpoint: string, params: string, init?: Requ
       const retryResponse = await fetch(directUrl, init);
       if (retryResponse.ok) return retryResponse;
     }
-  } catch {
+  } catch (error) {
+    // An aborted request belongs to the caller's cancelled operation. Do not
+    // turn it into a proxy request, which could otherwise outlive a refresh.
+    if (init?.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+      throw error;
+    }
     // Direct connection failed (CORS/network), fall through to proxy
   }
 
@@ -454,8 +459,8 @@ export async function hydrateBinanceOpenInterest(
       batch.map(async (symbol) => {
         try {
           const [oiResponse, premiumResponse] = await Promise.all([
-            binanceFetch("openInterest", `symbol=${encodeURIComponent(symbol)}`),
-            binanceFetch("premiumIndex", `symbol=${encodeURIComponent(symbol)}`),
+            binanceFetch("openInterest", `symbol=${encodeURIComponent(symbol)}`, { signal }),
+            binanceFetch("premiumIndex", `symbol=${encodeURIComponent(symbol)}`, { signal }),
           ]);
 
           if (!oiResponse.ok || !premiumResponse.ok) {

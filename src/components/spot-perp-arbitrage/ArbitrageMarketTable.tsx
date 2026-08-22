@@ -8,7 +8,7 @@ import { formatAnnualizedRate, formatPrice, formatVolume } from "@/lib/types";
 
 type SpreadMode = "top" | "impact";
 type PremiumIndexMode = "adaptive" | "manual";
-type SortField =
+export type SortField =
   | "exchange"
   | "pair"
   | "midpoint"
@@ -25,6 +25,11 @@ type SortField =
   | "averageFundingRate2d"
   | "averageFundingRate7d"
   | "averageFundingRate30d";
+export type ImpactPriceSort = "askPrice" | "bidPrice";
+export interface TableSort {
+  field: SortField;
+  descending: boolean;
+}
 
 interface Props {
   rows: ArbitrageTableRow[];
@@ -136,6 +141,57 @@ function valueForSort(row: ArbitrageTableRow, field: SortField, spreadMode: Spre
   return row[field];
 }
 
+function compareSortValues(
+  first: number | string | null,
+  second: number | string | null,
+  descending: boolean,
+): number {
+  if (first === null && second === null) return 0;
+  if (first === null) return 1;
+  if (second === null) return -1;
+  const comparison = typeof first === "string" && typeof second === "string"
+    ? first.localeCompare(second)
+    : Number(first) - Number(second);
+  return descending ? -comparison : comparison;
+}
+
+function sortRows(rows: readonly ArbitrageTableRow[], sort: TableSort, spreadMode: SpreadMode): ArbitrageTableRow[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((first, second) => compareSortValues(
+      valueForSort(first.row, sort.field, spreadMode),
+      valueForSort(second.row, sort.field, spreadMode),
+      sort.descending,
+    ) || first.index - second.index)
+    .map(({ row }) => row);
+}
+
+function impactPriceForSort(detail: ImpactSpreadDetailResult | undefined, field: ImpactPriceSort): number | null {
+  if (detail === null || typeof detail !== "object") return null;
+  const price = detail[field];
+  return typeof price === "number" && Number.isFinite(price) ? price : null;
+}
+
+/** Sort by an impact execution price while retaining the current table sort as the tie-breaker. */
+export function sortRowsByImpactPrice(
+  rows: readonly ArbitrageTableRow[],
+  impactResults: ReadonlyMap<string, ImpactSpreadDetailResult>,
+  sort: TableSort,
+  field: ImpactPriceSort,
+): ArbitrageTableRow[] {
+  const headerSortedRows = sortRows(rows, sort, "impact");
+  return headerSortedRows
+    .map((row, index) => ({ row, index, price: impactPriceForSort(impactResults.get(String(row.id)), field) }))
+    .sort((first, second) => {
+      if (first.price === null && second.price === null) return first.index - second.index;
+      if (first.price === null) return 1;
+      if (second.price === null) return -1;
+      return (field === "askPrice" ? first.price - second.price : second.price - first.price)
+        || first.index - second.index;
+    })
+    .map(({ row }) => row);
+}
+
 function displayNumber(value: number | null, formatter: (value: number) => string, className = "text-gray-300") {
   return value === null
     ? <span className="text-gray-600">--</span>
@@ -150,7 +206,7 @@ function SortHeaderButton({
 }: {
   field: SortField;
   children: ReactNode;
-  sort: { field: SortField; descending: boolean };
+  sort: { field: SortField | null; descending: boolean };
   onSort: (field: SortField) => void;
 }) {
   return (
@@ -203,42 +259,50 @@ export default function ArbitrageMarketTable({
     field: "quoteTurnover24h",
     descending: true,
   });
+  const [impactPriceSort, setImpactPriceSort] = useState<ImpactPriceSort | null>(null);
 
   const sortedRows = useMemo(() => {
-    return [...rows].sort((first, second) => {
-      const a = valueForSort(first, sort.field, spreadMode);
-      const b = valueForSort(second, sort.field, spreadMode);
-      if (a === null && b === null) return 0;
-      if (a === null) return 1;
-      if (b === null) return -1;
-      const comparison = typeof a === "string" && typeof b === "string"
-        ? a.localeCompare(b)
-        : Number(a) - Number(b);
-      return sort.descending ? -comparison : comparison;
-    });
-  }, [rows, sort, spreadMode]);
+    if (spreadMode === "impact" && impactPriceSort !== null) {
+      return sortRowsByImpactPrice(rows, impactResults, sort, impactPriceSort);
+    }
+    return sortRows(rows, sort, spreadMode);
+  }, [rows, sort, spreadMode, impactPriceSort, impactResults]);
 
   const toggleSort = (field: SortField) => {
+    setImpactPriceSort(null);
     setSort((current) => ({
       field,
       descending: current.field === field ? !current.descending : true,
     }));
   };
 
+  const toggleImpactPriceSort = (field: ImpactPriceSort) => {
+    setImpactPriceSort((current) => current === field ? null : field);
+  };
+
+  const handleSpreadModeChange = (mode: SpreadMode) => {
+    if (mode !== spreadMode) setImpactPriceSort(null);
+    onSpreadModeChange(mode);
+  };
+
+  const headerSort = spreadMode === "impact" && impactPriceSort !== null
+    ? { field: null, descending: false }
+    : sort;
+
   return (
     <div className="overflow-x-auto rounded-lg border border-gray-700 bg-gray-800">
       <table className="w-full min-w-[1680px]">
         <thead>
           <tr className="border-b border-gray-700 bg-gray-800/95">
-            <th className="px-2.5 py-2 text-left text-[11px] font-medium text-gray-400"><SortHeaderButton field="exchange" sort={sort} onSort={toggleSort}>交易所</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-left text-[11px] font-medium text-gray-400"><SortHeaderButton field="pair" sort={sort} onSort={toggleSort}>交易对</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="midpoint" sort={sort} onSort={toggleSort}>中间价</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="indexPrice" sort={sort} onSort={toggleSort}>指数价格</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="change24h" sort={sort} onSort={toggleSort}>24h涨跌</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="premium" sort={sort} onSort={toggleSort}>中间价折溢价</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-left text-[11px] font-medium text-gray-400"><SortHeaderButton field="exchange" sort={headerSort} onSort={toggleSort}>交易所</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-left text-[11px] font-medium text-gray-400"><SortHeaderButton field="pair" sort={headerSort} onSort={toggleSort}>交易对</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="midpoint" sort={headerSort} onSort={toggleSort}>中间价</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="indexPrice" sort={headerSort} onSort={toggleSort}>指数价格</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="change24h" sort={headerSort} onSort={toggleSort}>24h涨跌</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="premium" sort={headerSort} onSort={toggleSort}>中间价折溢价</SortHeaderButton></th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">
               <div className="flex flex-col items-end gap-1.5">
-                <SortHeaderButton field="premiumIndex" sort={sort} onSort={toggleSort}>溢价指数</SortHeaderButton>
+                <SortHeaderButton field="premiumIndex" sort={headerSort} onSort={toggleSort}>溢价指数</SortHeaderButton>
                 <div className="flex flex-wrap items-center justify-end gap-1">
                   <select
                     aria-label="溢价指数来源"
@@ -277,20 +341,20 @@ export default function ArbitrageMarketTable({
                 </div>
               </div>
             </th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="predictedFundingRate" sort={sort} onSort={toggleSort}>预测费率</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="quoteTurnover24h" sort={sort} onSort={toggleSort}>24h成交额</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="openInterestNotional" sort={sort} onSort={toggleSort}>持仓价值</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="historicalVolatility" sort={sort} onSort={toggleSort}>历史波动率</SortHeaderButton></th>
-            <th className="w-[190px] px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="predictedFundingRate" sort={headerSort} onSort={toggleSort}>预测费率</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="quoteTurnover24h" sort={headerSort} onSort={toggleSort}>24h成交额</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="openInterestNotional" sort={headerSort} onSort={toggleSort}>持仓价值</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="historicalVolatility" sort={headerSort} onSort={toggleSort}>历史波动率</SortHeaderButton></th>
+            <th className="w-[250px] px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">
               <div className="flex flex-col items-end gap-1.5">
-                <SortHeaderButton field="spread" sort={sort} onSort={toggleSort}>买卖价差</SortHeaderButton>
+                <SortHeaderButton field="spread" sort={headerSort} onSort={toggleSort}>买卖价差</SortHeaderButton>
                 <div className="inline-flex rounded border border-gray-600 bg-gray-900/70 p-0.5" aria-label="价差类型">
                   {(["top", "impact"] as SpreadMode[]).map((mode) => (
                     <button
                       key={mode}
                       type="button"
                       aria-pressed={spreadMode === mode}
-                      onClick={() => onSpreadModeChange(mode)}
+                      onClick={() => handleSpreadModeChange(mode)}
                       className={`rounded px-1.5 py-0.5 text-[9px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-300 ${
                         spreadMode === mode
                           ? mode === "top" ? "bg-blue-500/25 text-blue-300" : "bg-orange-500/25 text-orange-300"
@@ -303,7 +367,7 @@ export default function ArbitrageMarketTable({
                 </div>
               </div>
               {spreadMode === "impact" && (
-                <div className="mt-1.5 flex flex-wrap items-center justify-end gap-1">
+                <div className="mt-1.5 flex items-center justify-end gap-1 whitespace-nowrap">
                   <select
                     aria-label="Impact 名义金额"
                     value={editingCustomNotional ? "custom" : String(impactNotional)}
@@ -329,14 +393,32 @@ export default function ArbitrageMarketTable({
                       <button type="button" onClick={onApplyCustomNotional} className="rounded text-emerald-400 hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-300">✓</button>
                     </>
                   )}
+                  <div className="flex shrink-0 items-center gap-0.5" aria-label="Impact 最优价排序">
+                    <button
+                      type="button"
+                      title="按最低买入执行价排序"
+                      aria-label="按最低买入执行价排序"
+                      aria-pressed={impactPriceSort === "askPrice"}
+                      onClick={() => toggleImpactPriceSort("askPrice")}
+                      className={`rounded border px-1 py-0.5 text-[9px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-orange-300 ${impactPriceSort === "askPrice" ? "border-orange-400/60 bg-orange-500/25 text-orange-200" : "border-transparent text-gray-500 hover:border-gray-600 hover:text-gray-300"}`}
+                    >最优买价</button>
+                    <button
+                      type="button"
+                      title="按最高卖出执行价排序"
+                      aria-label="按最高卖出执行价排序"
+                      aria-pressed={impactPriceSort === "bidPrice"}
+                      onClick={() => toggleImpactPriceSort("bidPrice")}
+                      className={`rounded border px-1 py-0.5 text-[9px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-orange-300 ${impactPriceSort === "bidPrice" ? "border-orange-400/60 bg-orange-500/25 text-orange-200" : "border-transparent text-gray-500 hover:border-gray-600 hover:text-gray-300"}`}
+                    >最优卖价</button>
+                  </div>
                 </div>
               )}
             </th>
             <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400">当前结算周期</th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="latestSettlementRate" sort={sort} onSort={toggleSort}>最新结算费率</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate2d" sort={sort} onSort={toggleSort}>平均费率（2天）</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate7d" sort={sort} onSort={toggleSort}>平均费率（7天）</SortHeaderButton></th>
-            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate30d" sort={sort} onSort={toggleSort}>平均费率（30天）</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="latestSettlementRate" sort={headerSort} onSort={toggleSort}>最新结算费率</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate2d" sort={headerSort} onSort={toggleSort}>平均费率（2天）</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate7d" sort={headerSort} onSort={toggleSort}>平均费率（7天）</SortHeaderButton></th>
+            <th className="px-2.5 py-2 text-right text-[11px] font-medium text-gray-400"><SortHeaderButton field="averageFundingRate30d" sort={headerSort} onSort={toggleSort}>平均费率（30天）</SortHeaderButton></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-700">

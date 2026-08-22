@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { binanceFetch } from "../adapters/binance";
 import type { SearchExchangeRate } from "../search";
 import type { SpotMarketRow } from "../spot-search";
 import {
@@ -83,5 +84,47 @@ describe("Binance open-interest hydration helpers", () => {
     expect(applyBinanceOpenInterestHydration(universe, new Map([
       ["ETH", { openInterest: 1, notionalValue: 100 }],
     ]))).toBe(universe);
+  });
+
+  test("reselects a same-ID pending row after refresh and restores its OI notional", () => {
+    const hydratedBeforeRefresh = asPerpMarket(perp({
+      openInterest: 12,
+      notionalValue: 1_200,
+      oiLoaded: true,
+    }));
+    const pendingAfterRefresh = asPerpMarket(perp({
+      openInterest: 0,
+      notionalValue: 5_000,
+      oiLoaded: false,
+    }));
+    expect(marketId(pendingAfterRefresh)).toBe(marketId(hydratedBeforeRefresh));
+    expect(selectPendingBinanceOpenInterestTargets([hydratedBeforeRefresh])).toEqual([]);
+
+    const targets = selectPendingBinanceOpenInterestTargets([pendingAfterRefresh]);
+    expect(targets).toEqual([pendingAfterRefresh.source]);
+
+    const updated = applyBinanceOpenInterestHydration([pendingAfterRefresh], new Map([
+      [pendingAfterRefresh.source.symbol, { openInterest: 12, notionalValue: 1_200 }],
+    ]));
+    expect(updated[0].source).toMatchObject({ openInterest: 12, notionalValue: 1_200, oiLoaded: true });
+  });
+
+  test("does not fall back to the proxy after an aborted direct request", async () => {
+    const originalFetch = globalThis.fetch;
+    const controller = new AbortController();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      controller.abort();
+      throw new DOMException("Aborted", "AbortError");
+    }) as typeof fetch;
+
+    try {
+      await expect(binanceFetch("openInterest", "symbol=BTCUSDT", { signal: controller.signal }))
+        .rejects.toMatchObject({ name: "AbortError" });
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
