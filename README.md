@@ -6,6 +6,7 @@
 
 - **七交易所资金费率监控**：追踪 Hyperliquid、Gate.io、Binance、OKX、Lighter、Bitget 和 Bybit 的永续合约资金费率
 - **Spot/Perp 组合分析**：统一搜索七家交易所的现货与永续市场，按选择顺序分析 Perp/Perp、Spot/Spot 或混合价差与比率；现货侧涵盖价格、成交额、波动率与盘口价差
+- **Impact 策略推荐**：基于 Impact 执行价自动枚举跨市场买低卖高组合，默认展示前五名，支持套利空间、手续费、Spot 只能买与收敛天数即时筛选，并给出扣费后收益、美元收益与年化收益率
 - **历史数据分析**：查看 30 天资金费率历史及统计指标
 - **智能排序与筛选**：按费率、价格、成交量、持仓量、24h 涨跌幅排序
 - **资产类型筛选**：按标准资产、XYZ-Hip3、Vntl-Hip3、Para-Hip3、Km-Hip3 分类查看
@@ -27,8 +28,7 @@
 src/
 ├── app/                    # Next.js App Router
 │   ├── funding/            # 资金费率监控页面
-│   ├── search/             # 跨交易所搜索页面
-│   ├── spot_perp_arbitrage/ # Spot/Perp 组合分析页面
+│   ├── search/             # 跨交易所搜索与 Spot/Perp 组合分析页面
 │   ├── api/spot/[exchange] # 七交易所现货公开市场严格代理
 │   ├── api/bitget/         # Bitget V3 UTA 公开市场 API 服务端代理
 │   ├── layout.tsx          # 根布局
@@ -84,10 +84,12 @@ Hyperliquid 资金费率监控主组件，包含：
 - 历史资金费率与成交额子图
 
 ### SpotSearchCandlesChart.tsx
-现货双面板图表（共享组件，位于 `src/components/spot-perp-arbitrage/`）：上方为 K 线，下方可切换报价币成交额或基础币成交量；现货图表不包含资金费率。该组件由 `/spot_perp_arbitrage` 的选中现货市场来源图表复用。独立的 `/spotsearch` 页面及其 `SpotMarketSearch` 控制器已移除；现货列表、K 线、订单簿与 Impact 计算继续由共享数据层（`/api/spot/[exchange]`、`src/lib/spot-*`）提供。
+现货双面板图表（共享组件，位于 `src/components/spot-perp-arbitrage/`）：上方为 K 线，下方可切换报价币成交额或基础币成交量；现货图表不包含资金费率。该组件由 `/search` 的选中现货市场来源图表复用。独立的 `/spotsearch` 页面及其 `SpotMarketSearch` 控制器已移除；现货列表、K 线、订单簿与 Impact 计算继续由共享数据层（`/api/spot/[exchange]`、`src/lib/spot-*`）提供。
 
 ### SpotPerpArbitrageController.tsx
-`/spot_perp_arbitrage` 是仅用于市场分析的七交易所 Spot+Perp 统一搜索页。现货默认筛选 `USDT`，可切换 `USDC`、`U`、`USD1`、`USD` 或全部；普通查询可选择单市场并复用来源图表。紧凑语法 `A-B`/`A/B` 分别生成价差/比率，点击顺序确定第一、第二腿；其中 `BTC/USDT` 明确按 BTC 与 USDT 两项的比率查询解析，而不是精确现货交易对查询。
+`/search` 是仅用于市场分析的七交易所 Spot+Perp 统一搜索页。现货默认筛选 `USDT`，可切换 `USDC`、`U`、`USD1`、`USD` 或全部；普通查询可选择单市场并复用来源图表。紧凑语法 `A-B`/`A/B` 分别生成价差/比率，点击顺序确定第一、第二腿；其中 `BTC/USDT` 明确按 BTC 与 USDT 两项的比率查询解析，而不是精确现货交易对查询。
+
+页面还提供 Impact 策略推荐（`寻找策略`）：基于 Impact 买入/卖出执行价枚举所有启用市场的跨市场组合，默认展示套利空间区间内的前五名；策略模式下结果表支持逐市场勾选参与并即时重排，点击推荐行会在结果表上方打开 A 买入/B 卖出的组合图，默认为 `A / B Ratio`，可通过标题旁按钮切换为 `A − B Spread`，再次点击同一推荐即关闭图表。
 
 双腿分析按精确时间戳交集和较短可用历史对齐：Perp/Perp 保留原搜索组合图行为，Spot/Spot 与混合组合展示各腿成交额来源，混合组合还展示有观测值的带符号资金费率。混合分析面板始终消费当前可见时间范围，可按每侧 `0%`、`1%`、`2.5%`、`5%` 或 `10%` 对派生收盘值去尾，并显示均值、总体标准差区间、保留/移除数量及 Spot/Perp 成交额均值；页面不执行自动交易或套利下单。
 
@@ -171,7 +173,17 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 
 ### Spot/Perp 组合分析
 
-`/spot_perp_arbitrage` 将七家交易所的 Spot 与 Perp 市场合并到同一查询和结果表中。页面支持来源单市场图表，以及按选择顺序生成的 Perp/Perp、Spot/Spot 和混合组合图；组合窗口以精确对齐后的较短历史为准，混合统计与图表共享同一可见范围。现货列表、K 线、订单簿与 Impact 深度继续由共享数据层提供（`/api/spot/[exchange]`、`src/lib/spot-*`、`src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`）。本功能用于观察与统计，不包含自动套利执行。
+`/search` 将七家交易所的 Spot 与 Perp 市场合并到同一查询和结果表中。页面支持来源单市场图表，以及按选择顺序生成的 Perp/Perp、Spot/Spot 和混合组合图；组合窗口以精确对齐后的较短历史为准，混合统计与图表共享同一可见范围。现货列表、K 线、订单簿与 Impact 深度继续由共享数据层提供（`/api/spot/[exchange]`、`src/lib/spot-*`、`src/components/spot-perp-arbitrage/SpotSearchCandlesChart.tsx`）。本功能用于观察与统计，不包含自动套利执行。
+
+### Impact 策略推荐
+
+在 `/search` 点击 `寻找策略` 可打开策略推荐面板：
+
+- **组合枚举**：基于 Impact 买入执行价（ask VWAP）与卖出执行价（bid VWAP），比较所有启用市场的跨市场方向，跳过自身配对与无效深度；开启「Spot 只能买」时现货只能作为买入腿
+- **默认参数**：Impact value `$3000`、套利空间 `0.3%–1.5%`、总手续费率 `0.1%`、收敛 `3 天`（支持 3/7/14/30/90/180 天预设及自定义）
+- **即时筛选**：套利空间、手续费、Spot 只能买、收敛天数与市场勾选均基于当前 Impact 结果即时重算，只有修改 Impact value 需要手动刷新
+- **收益列**：套利空间、扣费后收益、美元收益（Impact value × 扣费后收益率）以及按收敛天数年化的收益率
+- **策略图表**：点击推荐行打开 A 买入/B 卖出组合图，默认 `A / B Ratio`，可切换为 `A − B Spread`；再次点击同一行关闭图表
 
 ### 数据更新频率
 
@@ -247,6 +259,17 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 - 所有贡献者
 
 ## 更新日志
+
+### v2026.08.22
+- 新增 Impact 策略推荐（`寻找策略`）：基于 Impact 买入/卖出执行价枚举所有启用市场的跨市场组合，默认展示套利空间区间内的前五名
+- 策略设置支持套利空间、总手续费率、Spot 只能买与收敛天数即时重算；Impact value 默认 `$3000`，修改后需手动刷新生效
+- 推荐表新增扣费后收益、美元收益（Impact value × 扣费后收益率）与按收敛天数年化的收益率列
+- 策略模式下结果表新增逐市场参与勾选与全选/全不选，取消勾选即时重排推荐且不重新请求盘口
+- 点击推荐行在结果表上方打开 A 买入/B 卖出组合图，默认 `A / B Ratio`，可一键切换为 `A − B Spread`；再次点击同一行关闭图表
+- 所有单市场/价差/比率图表及统计面板移至搜索区之后、结果表之前
+- Impact 模式结果行显示买入/卖出冲击执行价，并支持最优买价/最优卖价临时排序
+- 修复手动刷新后 Binance 持仓价值占位不再重新水合的问题
+- 验证通过：413 项测试、TypeScript 类型检查、ESLint 与 diff 检查
 
 ### v2026.08.02
 - 新增 `/spot_perp_arbitrage` 六交易所 Spot+Perp 统一搜索与分析页，支持来源单市场图表及 Perp/Perp、Spot/Spot、混合价差/比率组合
