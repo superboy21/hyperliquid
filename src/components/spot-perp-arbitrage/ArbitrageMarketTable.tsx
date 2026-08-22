@@ -413,8 +413,8 @@ export default function ArbitrageMarketTable({
                       {showTickerBboWarning && <span className="whitespace-nowrap font-mono text-[9px] text-amber-400" title="参考报价：来自 Ticker BBO，公开 Order Book 无深度数据，不代表可立即成交。">Ticker BBO · 无深度数据</span>}
                       {spreadMode === "impact" && impact !== null && typeof impact === "object" && (
                         <>
-                          <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="买入冲击价差">买入 {formatSignedPercent(impact.buyImpactSpread, 4)}</span>
-                          <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="卖出冲击价差">卖出 {formatSignedPercent(impact.sellImpactSpread, 4)}</span>
+                          <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="买入冲击价差及实际执行价格">买入 {formatSignedPercent(impact.buyImpactSpread, 4)} · 执行价 {formatPrice(impact.askPrice)}</span>
+                          <span className="whitespace-nowrap font-mono text-[10px] text-gray-500" title="卖出冲击价差及实际执行价格">卖出 {formatSignedPercent(impact.sellImpactSpread, 4)} · 执行价 {formatPrice(impact.bidPrice)}</span>
                         </>
                       )}
                     </div>
