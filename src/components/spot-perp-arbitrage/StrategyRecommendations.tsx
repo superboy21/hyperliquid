@@ -1,6 +1,12 @@
 "use client";
 
-import type { StrategyDraftSettings, StrategyRecommendation } from "@/lib/spot-perp-arbitrage";
+import {
+  DEFAULT_STRATEGY_SETTINGS,
+  STRATEGY_RECOMMENDATION_LIMITS,
+  type StrategyDraftSettings,
+  type StrategyRecommendation,
+  type StrategyRecommendationLimit,
+} from "@/lib/spot-perp-arbitrage";
 import { formatPrice } from "@/lib/types";
 
 const CONVERGENCE_PRESETS = ["3", "7", "14", "30", "90", "180"] as const;
@@ -9,6 +15,8 @@ type DraftField = keyof StrategyDraftSettings;
 interface Props {
   recommendations: readonly StrategyRecommendation[];
   impactLoading: boolean;
+  recommendationLimit: StrategyRecommendationLimit;
+  onRecommendationLimitChange: (value: StrategyRecommendationLimit) => void;
   impactNotional: number;
   convergenceDays: number;
   impactNotionalPresets: readonly number[];
@@ -46,6 +54,8 @@ function formatUsd(value: number): string {
 export default function StrategyRecommendations({
   recommendations,
   impactLoading,
+  recommendationLimit,
+  onRecommendationLimitChange,
   impactNotional,
   convergenceDays,
   impactNotionalPresets,
@@ -74,6 +84,31 @@ export default function StrategyRecommendations({
           <p className="mt-1 text-xs text-gray-500">基于 Impact 买入价与卖出价，寻找当前结果中的跨市场价差。</p>
         </div>
         <div className="flex flex-wrap items-end justify-start gap-2 text-xs xl:justify-end" aria-label="策略设置">
+          <label className="flex flex-col gap-1 text-gray-500">
+            推荐数量
+            <select
+              aria-label="策略推荐数量"
+              value={String(recommendationLimit)}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "all") {
+                  onRecommendationLimitChange("all");
+                  return;
+                }
+                const numericValue = Number(value);
+                onRecommendationLimitChange(
+                  STRATEGY_RECOMMENDATION_LIMITS.includes(numericValue as StrategyRecommendationLimit)
+                    ? numericValue as StrategyRecommendationLimit
+                    : DEFAULT_STRATEGY_SETTINGS.recommendationLimit,
+                );
+              }}
+              className="h-7 rounded border border-gray-700 bg-gray-900 px-1.5 text-[11px] text-gray-200 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400"
+            >
+              {STRATEGY_RECOMMENDATION_LIMITS.map((value) => (
+                <option key={value} value={String(value)}>{value === "all" ? "全部" : value}</option>
+              ))}
+            </select>
+          </label>
           <label className="flex flex-col gap-1 text-gray-500">
             Impact value
             <div className="flex items-center gap-1">

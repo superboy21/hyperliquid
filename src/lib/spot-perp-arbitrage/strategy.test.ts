@@ -50,6 +50,18 @@ describe("strategy recommendations", () => {
     expect(recommendations.map((item) => item.rank)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  test("applies each configured recommendation limit, including all qualifying results", () => {
+    const markets = [perp("Binance", "BTC"), perp("OKX", "BTC"), perp("Bybit", "BTC"), perp("Gate.io", "BTC"), perp("Lighter", "BTC")];
+    const impact = results(markets, [[100, 90], [100, 101.5], [100, 100.5], [100, 102], [100, 99]]);
+    const baseSettings = { ...DEFAULT_STRATEGY_SETTINGS, maxGross: 5, spotOnlyBuy: false };
+
+    expect(computeStrategyRecommendations(markets, impact, { ...baseSettings, recommendationLimit: 3 })).toHaveLength(3);
+    expect(computeStrategyRecommendations(markets, impact, { ...baseSettings, recommendationLimit: 5 })).toHaveLength(5);
+    expect(computeStrategyRecommendations(markets, impact, { ...baseSettings, recommendationLimit: 7 })).toHaveLength(7);
+    expect(computeStrategyRecommendations(markets, impact, { ...baseSettings, recommendationLimit: 10 })).toHaveLength(10);
+    expect(computeStrategyRecommendations(markets, impact, { ...baseSettings, recommendationLimit: "all" })).toHaveLength(12);
+  });
+
   test("includes both 0.5% and 1.5% boundaries", () => {
     const buy = perp("Binance", "BTC");
     const sell = perp("OKX", "BTC");
@@ -104,9 +116,10 @@ describe("strategy recommendations", () => {
     const draft = { minGross: "1", maxGross: "2", totalFee: "0.2", spotOnlyBuy: false, convergenceDays: "0" };
     expect(normalizeConvergenceDays(0)).toBe(3);
     expect(applyStrategyDraft(draft, 500)).toEqual({
-      impactNotional: 500, minGross: 1, maxGross: 2, totalFee: 0.2, spotOnlyBuy: false, convergenceDays: 3,
+      impactNotional: 500, minGross: 1, maxGross: 2, totalFee: 0.2, spotOnlyBuy: false, convergenceDays: 3, recommendationLimit: 5,
     });
-    expect(DEFAULT_STRATEGY_SETTINGS).toMatchObject({ impactNotional: 3000, minGross: 0.2, convergenceDays: 3 });
+    expect(applyStrategyDraft(draft, 500, "all").recommendationLimit).toBe("all");
+    expect(DEFAULT_STRATEGY_SETTINGS).toMatchObject({ impactNotional: 3000, minGross: 0.2, convergenceDays: 3, recommendationLimit: 5 });
   });
 
   test("compares every distinct search result regardless of base asset or quote currency", () => {
@@ -130,6 +143,7 @@ describe("strategy recommendations", () => {
       maxGross: 2,
       totalFee: DEFAULT_STRATEGY_SETTINGS.totalFee,
       convergenceDays: DEFAULT_STRATEGY_SETTINGS.convergenceDays,
+      recommendationLimit: DEFAULT_STRATEGY_SETTINGS.recommendationLimit,
     });
   });
 });

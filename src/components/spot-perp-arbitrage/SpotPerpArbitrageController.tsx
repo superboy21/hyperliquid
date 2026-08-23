@@ -60,6 +60,7 @@ import {
   type SpotQuoteFilter,
   type MarketKindFilter,
   type StrategyDraftSettings,
+  type StrategyRecommendationLimit,
   type StrategyChartOverride,
   type StrategyRecommendation,
 } from "@/lib/spot-perp-arbitrage";
@@ -245,6 +246,7 @@ export default function SpotPerpArbitrageController() {
   const [strategyChartMode, setStrategyChartMode] = useState<"ratio" | "spread">("ratio");
   const [selectedRecommendationKey, setSelectedRecommendationKey] = useState<string | null>(null);
   const [strategyDraft, setStrategyDraft] = useState<StrategyDraftSettings>(DEFAULT_STRATEGY_DRAFT);
+  const [strategyRecommendationLimit, setStrategyRecommendationLimit] = useState<StrategyRecommendationLimit>(DEFAULT_STRATEGY_SETTINGS.recommendationLimit);
   const [appliedImpactNotional, setAppliedImpactNotional] = useState(DEFAULT_IMPACT_NOTIONAL);
   const appliedImpactNotionalRef = useRef(DEFAULT_IMPACT_NOTIONAL);
 
@@ -544,8 +546,8 @@ export default function SpotPerpArbitrageController() {
   }), [details, impactResults, officialPremiumResults, premiumIndexMode, premiumIndexResults, searchResult.markets]);
 
   const effectiveStrategySettings = useMemo(
-    () => applyStrategyDraft(strategyDraft, appliedImpactNotional),
-    [appliedImpactNotional, strategyDraft],
+    () => applyStrategyDraft(strategyDraft, appliedImpactNotional, strategyRecommendationLimit),
+    [appliedImpactNotional, strategyDraft, strategyRecommendationLimit],
   );
   const strategyEligibleMarkets = useMemo(
     () => searchResult.markets.filter((market) => !strategyExcludedMarketIds.has(String(marketId(market)))),
@@ -913,6 +915,8 @@ export default function SpotPerpArbitrageController() {
             <StrategyRecommendations
               recommendations={strategyRecommendations}
               impactLoading={impactLoading.size > 0}
+              recommendationLimit={strategyRecommendationLimit}
+              onRecommendationLimitChange={setStrategyRecommendationLimit}
               impactNotional={impactNotional}
               convergenceDays={effectiveStrategySettings.convergenceDays}
               impactNotionalPresets={IMPACT_NOTIONAL_PRESETS as readonly number[]}

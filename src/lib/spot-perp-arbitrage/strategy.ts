@@ -8,6 +8,7 @@ export interface StrategySettings {
   totalFee: number;
   spotOnlyBuy: boolean;
   convergenceDays: number;
+  recommendationLimit: StrategyRecommendationLimit;
 }
 
 export interface StrategyDraftSettings {
@@ -36,6 +37,9 @@ export interface StrategyRecommendation {
   annualized: number;
 }
 
+export const STRATEGY_RECOMMENDATION_LIMITS = [3, 5, 7, 10, "all"] as const;
+export type StrategyRecommendationLimit = typeof STRATEGY_RECOMMENDATION_LIMITS[number];
+
 export const DEFAULT_STRATEGY_SETTINGS: StrategySettings = {
   impactNotional: DEFAULT_IMPACT_NOTIONAL,
   minGross: 0.2,
@@ -43,9 +47,8 @@ export const DEFAULT_STRATEGY_SETTINGS: StrategySettings = {
   totalFee: 0.1,
   spotOnlyBuy: true,
   convergenceDays: 3,
+  recommendationLimit: 5,
 };
-
-export const MAX_STRATEGY_RECOMMENDATIONS = 5;
 
 function finiteOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
@@ -65,6 +68,7 @@ function normalizeRange(minGross: number, maxGross: number): { minGross: number;
 export function applyStrategyDraft(
   draft: StrategyDraftSettings,
   impactNotional: number,
+  recommendationLimit: StrategyRecommendationLimit = DEFAULT_STRATEGY_SETTINGS.recommendationLimit,
 ): StrategySettings {
   const minGross = Number(draft.minGross);
   const maxGross = Number(draft.maxGross);
@@ -79,6 +83,7 @@ export function applyStrategyDraft(
     totalFee: Number.isFinite(fee) && fee >= 0 ? fee : DEFAULT_STRATEGY_SETTINGS.totalFee,
     spotOnlyBuy: draft.spotOnlyBuy,
     convergenceDays: normalizeConvergenceDays(days, DEFAULT_STRATEGY_SETTINGS.convergenceDays),
+    recommendationLimit,
   };
 }
 
@@ -101,7 +106,7 @@ function leg(market: ArbitrageMarket, price: number): StrategyLeg {
   };
 }
 
-/** Enumerate executable cross-market directions, rank by gross spread, and keep only the top five. */
+/** Enumerate executable cross-market directions, rank by gross spread, and apply the configured result limit. */
 export function computeStrategyRecommendations(
   markets: readonly ArbitrageMarket[],
   impactResults: ReadonlyMap<string, ImpactSpreadDetailResult>,
@@ -142,5 +147,9 @@ export function computeStrategyRecommendations(
   }
 
   candidates.sort((first, second) => second.gross - first.gross || first.buy.id.localeCompare(second.buy.id) || first.sell.id.localeCompare(second.sell.id));
-  return candidates.slice(0, MAX_STRATEGY_RECOMMENDATIONS).map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+  const recommendationLimit = settings.recommendationLimit ?? DEFAULT_STRATEGY_SETTINGS.recommendationLimit;
+  const limitedCandidates = recommendationLimit === "all"
+    ? candidates
+    : candidates.slice(0, recommendationLimit);
+  return limitedCandidates.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 }

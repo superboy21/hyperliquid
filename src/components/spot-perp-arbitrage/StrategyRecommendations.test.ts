@@ -8,6 +8,8 @@ describe("StrategyRecommendations", () => {
     const markup = renderToStaticMarkup(createElement(StrategyRecommendations, {
       recommendations: [],
       impactLoading: false,
+      recommendationLimit: 5,
+      onRecommendationLimitChange: () => {},
       impactNotional: 5000,
       convergenceDays: 3,
       impactNotionalPresets: [1000, 3000, 5000],
@@ -26,6 +28,12 @@ describe("StrategyRecommendations", () => {
     }));
 
     expect(markup).toContain('aria-label="策略 Impact value"');
+    expect(markup).toContain('aria-label="策略推荐数量"');
+    expect(markup).toContain('<option value="5" selected="">5</option>');
+    expect(markup.indexOf('<option value="3">3</option>')).toBeLessThan(markup.indexOf('<option value="5" selected="">5</option>'));
+    expect(markup.indexOf('<option value="5" selected="">5</option>')).toBeLessThan(markup.indexOf('<option value="7">7</option>'));
+    expect(markup.indexOf('<option value="7">7</option>')).toBeLessThan(markup.indexOf('<option value="10">10</option>'));
+    expect(markup.indexOf('<option value="10">10</option>')).toBeLessThan(markup.indexOf('<option value="all">全部</option>'));
     expect(markup).toContain('value="5000"');
     expect(markup).toContain("Spot 只能买");
     expect(markup).toContain("Impact value 已修改，点击上方“刷新”后生效。");
@@ -43,6 +51,8 @@ describe("StrategyRecommendations", () => {
     const settingsOnlyMarkup = renderToStaticMarkup(createElement(StrategyRecommendations, {
       recommendations: [],
       impactLoading: false,
+      recommendationLimit: 5,
+      onRecommendationLimitChange: () => {},
       impactNotional: 5000,
       convergenceDays: 30,
       impactNotionalPresets: [1000, 3000, 5000],
@@ -72,6 +82,8 @@ describe("StrategyRecommendations", () => {
         annualized: 23.46,
       }],
       impactLoading: false,
+      recommendationLimit: 5,
+      onRecommendationLimitChange: () => {},
       impactNotional: 1000,
       convergenceDays: 30,
       impactNotionalPresets: [1000],
@@ -130,6 +142,8 @@ describe("StrategyRecommendations", () => {
         annualized: 23.46,
       }],
       impactLoading: false,
+      recommendationLimit: 5,
+      onRecommendationLimitChange: () => {},
       impactNotional: 1000,
       convergenceDays: 3,
       impactNotionalPresets: [1000],
