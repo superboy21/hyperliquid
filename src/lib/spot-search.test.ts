@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   calculateSpotHistoricalVolatility,
+  clearBitgetRealityCache,
   fetchAllSpotMarkets,
   fetchSpotDetail,
   filterSpotMarkets,
+  getBitgetRealitySymbols,
   normalizeSpotMarkets,
   spotMarketIdentity,
   type SpotMarketRow,
@@ -193,4 +195,68 @@ describe("spot search contracts", () => {
 
 afterEach(() => {
   (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+  clearBitgetRealityCache();
+});
+
+describe("Bitget Reality token pricing", () => {
+  test("parses Reality symbols from the bulk Bitget instruments response", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/v3/market/instruments")) {
+        return Response.json({ data: [
+          { symbol: "RAAPLUSDT", isReality: "yes" },
+          { symbol: "RNVDAUSDT", isReality: "yes" },
+          { symbol: "BTCUSDT", isReality: "no" },
+        ] });
+      }
+      return Response.json({ data: [] });
+    });
+    const symbols = await getBitgetRealitySymbols();
+    expect(symbols.has("RAAPLUSDT")).toBe(true);
+    expect(symbols.has("RNVDAUSDT")).toBe(true);
+    expect(symbols.has("BTCUSDT")).toBe(false);
+  });
+
+  test("marks Bitget Reality tokens during universe loading", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("api.bitget.com") && url.includes("/instruments")) {
+        return Response.json({ data: [{ symbol: "RAAPLUSDT", isReality: "yes" }] });
+      }
+      if (url.includes("api.bitget.com") && url.includes("/tickers")) {
+        return Response.json({ data: [{ symbol: "RAAPLUSDT", lastPr: "100", bidPr: "99.9", askPr: "100.1" }] });
+      }
+      return Response.json({ data: [] });
+    });
+    const rows = await fetchAllSpotMarkets();
+    const raapl = rows.find((market) => market.rawSymbol === "RAAPLUSDT");
+    expect(raapl?.isRealityToken).toBe(true);
+    expect(rows.filter((market) => market.exchange === "Bitget").every((market) => market.isRealityToken !== true || market.rawSymbol === "RAAPLUSDT")).toBe(true);
+  });
+
+  test("prioritizes ticker BBO for Reality tokens without requesting the order book", async () => {
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      return Response.json({ data: [] });
+    });
+    const detail = await fetchSpotDetail({
+      ...bitgetRow, isRealityToken: true, bestBid: 309.79, bestAsk: 309.8,
+    });
+    expect(detail).toMatchObject({ topSpreadSource: "ticker-bbo", bestBid: 309.79, bestAsk: 309.8 });
+    expect(detail.topSpread).toBeCloseTo(((309.8 - 309.79) / ((309.79 + 309.8) / 2)) * 100, 6);
+    expect(urls.some((url) => url.includes("orderbook"))).toBe(false);
+    expect(urls.some((url) => url.includes("/api/v3/market/instruments"))).toBe(false);
+  });
+
+  test("falls back to the order book when a Reality token has no ticker BBO", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("orderbook")) return Response.json({ data: { bids: [["99", "1"]], asks: [["101", "1"]] } });
+      return Response.json({ data: [] });
+    });
+    const detail = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true, bestBid: undefined, bestAsk: undefined });
+    expect(detail).toMatchObject({ topSpreadSource: "orderbook", bestBid: 99, bestAsk: 101 });
+  });
 });

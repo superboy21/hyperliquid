@@ -28,6 +28,12 @@ export interface SpotMarketRow {
   quoteVolume: number;
   baseVolume: number;
   fetchedAt: number;
+  /**
+   * Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）。这类标的的真实可成交
+   * 报价在 ticker BBO（锚定美股盘口），公开 orderbook 仅是本地薄挂单簿、与成交脱节，
+   * 因此中间价/价差优先使用 ticker BBO，orderbook 仅作 fallback。
+   */
+  isRealityToken?: boolean;
 }
 
 export interface SpotDetailResult {
@@ -307,14 +313,59 @@ export function normalizeSpotMarkets(exchange: SpotExchangeName, payload: unknow
 
 const EXCHANGES: SpotExchangeName[] = ["Hyperliquid", "Gate.io", "Binance", "Lighter", "OKX", "Bitget", "Bybit"];
 
+// ==================== Bitget rToken (Reality Protocol) 识别 ====================
+// rToken 现货（RAAPLUSDT 等）订单经券商路由至美股撮合，ticker BBO 反映真实可成交价，
+// 公开 orderbook 只是本地薄挂单簿。通过全量 instruments 的 isReality 标记识别。
+
+interface RealityCacheEntry { expiresAt: number; symbols: ReadonlySet<string> }
+
+let bitgetRealityCache: RealityCacheEntry | null = null;
+const REALITY_CACHE_TTL_MS = 60 * 60 * 1000; // 1h：rToken 集合仅随新品上市变化
+
+/** Bitget SPOT 全量 instruments 中 isReality="yes" 的 symbol 集合（带缓存）。失败返回空集合。 */
+export async function getBitgetRealitySymbols(signal?: AbortSignal): Promise<ReadonlySet<string>> {
+  const now = Date.now();
+  if (bitgetRealityCache && bitgetRealityCache.expiresAt > now) return bitgetRealityCache.symbols;
+  try {
+    const response = await spotFetch("Bitget", new URLSearchParams({ action: "instruments" }), { signal });
+    if (!response.ok) return new Set();
+    const payload = await response.json();
+    const symbols = new Set<string>();
+    for (const value of arrayPayload(payload)) {
+      const instrument = object(value);
+      if (instrument?.symbol && instrument?.isReality === "yes") symbols.add(String(instrument.symbol));
+    }
+    bitgetRealityCache = { expiresAt: now + REALITY_CACHE_TTL_MS, symbols };
+    return symbols;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return new Set();
+  }
+}
+
+/** 供测试与手动失效用。 */
+export function clearBitgetRealityCache(): void {
+  bitgetRealityCache = null;
+}
+
 export async function fetchAllSpotMarkets(signal?: AbortSignal): Promise<SpotMarketRow[]> {
-  const settled = await Promise.allSettled(EXCHANGES.map(async (exchange) => {
-    const response = await spotFetch(exchange, new URLSearchParams({ action: "list" }), { signal });
-    if (!response.ok) throw new Error(`${exchange} spot list failed (${response.status})`);
-    return normalizeSpotMarkets(exchange, await response.json());
-  }));
+  const [settled, realitySymbols] = await Promise.all([
+    Promise.allSettled(EXCHANGES.map(async (exchange) => {
+      const response = await spotFetch(exchange, new URLSearchParams({ action: "list" }), { signal });
+      if (!response.ok) throw new Error(`${exchange} spot list failed (${response.status})`);
+      return normalizeSpotMarkets(exchange, await response.json());
+    })),
+    getBitgetRealitySymbols(signal),
+  ]);
   if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
-  return settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  return settled.flatMap((result, index) => {
+    if (result.status !== "fulfilled") return [];
+    const rows = result.value;
+    if (EXCHANGES[index] === "Bitget") {
+      for (const row of rows) row.isRealityToken = realitySymbols.has(row.rawSymbol);
+    }
+    return rows;
+  });
 }
 
 export function calculateSpotHistoricalVolatility(candles: readonly Pick<SpotCandlePoint, "close">[]): number | null {
@@ -435,16 +486,25 @@ export async function fetchSpotDetail(
   signal?: AbortSignal,
   bookMode: BookMode = "normal",
 ): Promise<SpotDetailResult> {
-  const [candles, bookResult] = await Promise.all([
-    fetchSpotCandlesWithLimit(row, "1d", 30, signal),
-    fetchSpotBookTop(row, signal, bookMode),
-  ]);
+  const candlesPromise = fetchSpotCandlesWithLimit(row, "1d", 30, signal);
+  const tickerBbo = { bestBid: positive(row.bestBid), bestAsk: positive(row.bestAsk) };
+  // Bitget rToken 现货：真实可成交报价在 ticker BBO（锚定美股盘口），公开 orderbook
+  // 只是本地薄挂单簿且与成交脱节，因此中间价与 Top 价差直接优先使用 ticker BBO。
+  if (row.isRealityToken && hasCompleteBbo(tickerBbo)) {
+    const candles = await candlesPromise;
+    return {
+      historicalVolatility: calculateSpotHistoricalVolatility(candles.candles),
+      topSpread: spread(tickerBbo.bestBid, tickerBbo.bestAsk),
+      topSpreadSource: "ticker-bbo",
+      ...tickerBbo,
+    };
+  }
+  const [candles, bookResult] = await Promise.all([candlesPromise, fetchSpotBookTop(row, signal, bookMode)]);
   let { prices, bookSource } = bookResult;
   let topSpreadSource: SpotTopSpreadSource | null = hasCompleteBbo(prices) ? "orderbook" : null;
   if (row.exchange === "Bitget" && topSpreadSource === null && await readBitgetReality(row, signal)) {
-    const tickerPrices = { bestBid: positive(row.bestBid), bestAsk: positive(row.bestAsk) };
-    if (hasCompleteBbo(tickerPrices)) {
-      prices = tickerPrices;
+    if (hasCompleteBbo(tickerBbo)) {
+      prices = tickerBbo;
       topSpreadSource = "ticker-bbo";
     }
   }

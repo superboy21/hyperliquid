@@ -3,7 +3,7 @@
 // direct-first fetcher (`spot-fetch.ts`). Pure URL/init construction with no
 // Next.js or server dependencies so it can run in the browser bundle.
 
-export type SpotAction = "list" | "candles" | "book" | "instrument";
+export type SpotAction = "list" | "candles" | "book" | "instrument" | "instruments";
 export type SpotUpstreamRequest = { url: string; init: RequestInit & { timeout?: number } };
 export type ExchangeSlug = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx" | "bitget" | "bybit";
 
@@ -22,6 +22,8 @@ const ACTION_PARAMS: Record<SpotAction, readonly string[]> = {
   candles: ["symbol", "marketId", "interval", "limit", "startTime", "endTime"],
   book: ["symbol", "marketId", "limit", "rpi"],
   instrument: ["symbol"],
+  // Bitget SPOT 全量 instruments（一次返回全部币对，含 isReality 标记，用于识别 rToken）。
+  instruments: [],
 };
 const INTERVALS = new Set(["1w", "1d", "4h", "1h", "5m", "1m"]);
 const SYMBOL_RE = /^[A-Za-z0-9@._:/-]{1,80}$/;
@@ -47,16 +49,16 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
   if (!EXCHANGES.has(exchangeValue)) return "Unknown exchange";
   const exchange = exchangeValue as ExchangeSlug;
   const actionValue = params.get("action");
-  if (actionValue !== "list" && actionValue !== "candles" && actionValue !== "book" && actionValue !== "instrument") return "Unknown or missing action";
+  if (actionValue !== "list" && actionValue !== "candles" && actionValue !== "book" && actionValue !== "instrument" && actionValue !== "instruments") return "Unknown or missing action";
   const action = actionValue as SpotAction;
-  if (action === "instrument" && exchange !== "bitget") return "Unknown or missing action";
+  if ((action === "instrument" || action === "instruments") && exchange !== "bitget") return "Unknown or missing action";
   const allowed = new Set(["action", ...ACTION_PARAMS[action]]);
   for (const key of params.keys()) if (!allowed.has(key) || params.getAll(key).length !== 1) return "Unknown or repeated parameter";
   const symbol = params.get("symbol");
   const marketId = integer(params.get("marketId"));
   if (symbol !== null && !SYMBOL_RE.test(symbol)) return "Invalid symbol";
   if (params.has("marketId") && marketId === null) return "Invalid marketId";
-  if (action !== "list") {
+  if (action !== "list" && action !== "instruments") {
     if (exchange === "lighter" ? marketId === null : !symbol) return exchange === "lighter" ? "Missing marketId" : "Missing symbol";
     if (exchange === "lighter" && symbol !== null) return "Unknown parameter for Lighter";
     if (exchange !== "lighter" && marketId !== null) return "Unknown parameter for exchange";
@@ -79,6 +81,10 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
     path = "/api/v3/market/instruments";
     query.set("category", "SPOT");
     query.set("symbol", symbol!);
+  } else if (action === "instruments") {
+    // 全量（无 symbol）：一次返回所有 SPOT 币对，含 isReality 标记（识别 rToken）。
+    path = "/api/v3/market/instruments";
+    query.set("category", "SPOT");
   } else if (action === "list") {
     if (exchange === "hyperliquid") {
       path = "/info"; init = { ...init, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "spotMetaAndAssetCtxs" }) };
