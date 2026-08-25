@@ -2,18 +2,28 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_STRATEGY_SETTINGS,
   applyStrategyDraft,
+  comboFundingRate,
+  comboImpactCost,
   computeStrategyRecommendations,
+  legAnnualizedFundingPercent,
+  legFundingRateValue,
   normalizeConvergenceDays,
+  type StrategyLegFunding,
 } from "./strategy";
 import { asPerpMarket, asSpotMarket, marketId } from "./model";
 import type { ArbitrageMarket } from "./model";
 import type { ImpactSpreadDetailResult } from "../impact-price";
 
-function perp(exchange: "Binance" | "OKX" | "Bybit" | "Gate.io" | "Lighter", symbol: string): ArbitrageMarket {
+function perp(
+  exchange: "Binance" | "OKX" | "Bybit" | "Gate.io" | "Lighter",
+  symbol: string,
+  funding: Partial<StrategyLegFunding> & { fundingInterval?: number } = {},
+): ArbitrageMarket {
   return asPerpMarket({
     exchange, exchangeColor: "yellow", symbol, rawSymbol: symbol, fundingRate: 0, markPrice: 100,
     indexPrice: 100, lastPrice: 100, change24h: 0, quoteVolume: 0, openInterest: 0,
     notionalValue: 0, fundingInterval: 8 * 3600, assetCategory: "Crypto",
+    ...funding,
   });
 }
 
@@ -145,5 +155,153 @@ describe("strategy recommendations", () => {
       convergenceDays: DEFAULT_STRATEGY_SETTINGS.convergenceDays,
       recommendationLimit: DEFAULT_STRATEGY_SETTINGS.recommendationLimit,
     });
+  });
+
+  test("attaches per-leg funding rates from sources and computes 组合资金费率 (buy − sell, spot = 0)", () => {
+    const buy = perp("Binance", "BTC", { fundingRate: 0.0001, avgFundingRate2d: 0.0001, avgFundingRate7d: 0.00012, avgFundingRate30d: 0.00009, lastSettlementRate: 0.00008 });
+    const sell = perp("OKX", "BTC", { fundingRate: -0.00005, avgFundingRate2d: -0.00005, avgFundingRate7d: -0.00004, avgFundingRate30d: -0.00006, lastSettlementRate: -0.00007 });
+    const spotBuy = spot("Binance", "ETH");
+    const markets = [buy, sell, spotBuy];
+    const impact = results(markets, [[100, 90], [100, 101], [100, 99]]);
+    const recommendations = computeStrategyRecommendations(markets, impact, {
+      ...DEFAULT_STRATEGY_SETTINGS, minGross: 0, maxGross: 5, spotOnlyBuy: false,
+    });
+
+    const combo = recommendations.find((item) => item.buy.id === String(marketId(buy)) && item.sell.id === String(marketId(sell)));
+    expect(combo).toBeDefined();
+    expect(combo!.buy.funding).toEqual({
+      latestSettlementRate: 0.00008, predictedFundingRate: 0.0001, averageFundingRate2d: 0.0001, averageFundingRate7d: 0.00012, averageFundingRate30d: 0.00009,
+    });
+    expect(legFundingRateValue(combo!.buy, "average2d")).toBe(0.0001);
+    expect(legFundingRateValue(combo!.sell, "average2d")).toBe(-0.00005);
+    expect(comboFundingRate(combo!.buy, combo!.sell, "average2d")).toBeCloseTo(0.00015);
+    expect(comboFundingRate(combo!.buy, combo!.sell, "latest")).toBeCloseTo(0.00015);
+    expect(comboFundingRate(combo!.buy, combo!.sell, "average7d")).toBeCloseTo(0.00016);
+    expect(comboFundingRate(combo!.buy, combo!.sell, "average30d")).toBeCloseTo(0.00015);
+    expect(comboFundingRate(combo!.buy, combo!.sell, "predicted")).toBeCloseTo(0.00015);
+
+    // spot legs always contribute 0 regardless of mode
+    const spotLegCombo = recommendations.find((item) => item.buy.id === String(marketId(spotBuy)));
+    expect(spotLegCombo).toBeDefined();
+    expect(legFundingRateValue(spotLegCombo!.buy, "average2d")).toBe(0);
+    expect(legFundingRateValue(spotLegCombo!.buy, "latest")).toBe(0);
+    expect(comboFundingRate(spotLegCombo!.buy, spotLegCombo!.sell, "average2d")).toBeCloseTo(0 - (-0.00005));
+  });
+
+  test("prefers the funding map passed from table rows over source values", () => {
+    const buy = perp("Binance", "BTC");
+    const sell = perp("OKX", "BTC");
+    const markets = [buy, sell];
+    const impact = results(markets, [[100, 90], [100, 101]]);
+    const fundingMap = new Map<string, StrategyLegFunding>([
+      [String(marketId(buy)), { latestSettlementRate: 0.001, predictedFundingRate: 0.001, averageFundingRate2d: 0.001, averageFundingRate7d: 0.001, averageFundingRate30d: 0.001 }],
+      [String(marketId(sell)), { latestSettlementRate: 0.0002, predictedFundingRate: 0.0002, averageFundingRate2d: 0.0002, averageFundingRate7d: 0.0002, averageFundingRate30d: 0.0002 }],
+    ]);
+    const [rec] = computeStrategyRecommendations(markets, impact, {
+      ...DEFAULT_STRATEGY_SETTINGS, minGross: 0, maxGross: 5, spotOnlyBuy: false,
+    }, fundingMap);
+
+    expect(comboFundingRate(rec.buy, rec.sell, "average2d")).toBeCloseTo(0.0008);
+    expect(comboFundingRate(rec.buy, rec.sell, "predicted")).toBeCloseTo(0.0008);
+    expect(rec.buy.funding!.latestSettlementRate).toBe(0.001);
+  });
+
+  test("normalizes Lighter average funding (percentage points) to the shared 8h-equivalent scale", () => {
+    // Lighter 平均费率是每小时百分数（0.0123 = 0.0123%），latest/predicted 是 8h 等价小数
+    const lighter = perp("Lighter", "BTC", {
+      fundingRate: 0.0001,
+      avgFundingRate2d: 0.0123,
+      avgFundingRate7d: 0.011,
+      avgFundingRate30d: 0.0105,
+      lastSettlementRate: 0.0001,
+    });
+    const binance = perp("Binance", "BTC", {
+      fundingRate: 0.0001,
+      avgFundingRate2d: 0.0001,
+      avgFundingRate7d: 0.0001,
+      avgFundingRate30d: 0.0001,
+      lastSettlementRate: 0.0001,
+    });
+    const markets = [lighter, binance];
+    const impact = results(markets, [[100, 90], [100, 101]]);
+    const [rec] = computeStrategyRecommendations(markets, impact, {
+      ...DEFAULT_STRATEGY_SETTINGS, minGross: 0, maxGross: 5, spotOnlyBuy: false,
+    });
+    const lighterLeg = rec.buy;
+    const binanceLeg = rec.sell;
+
+    // 平均模式：百分数 / 12.5 → 8h 等价小数；latest/predicted 原样
+    expect(legFundingRateValue(lighterLeg, "average2d")).toBeCloseTo(0.0123 / 12.5);
+    expect(legFundingRateValue(lighterLeg, "average7d")).toBeCloseTo(0.011 / 12.5);
+    expect(legFundingRateValue(lighterLeg, "average30d")).toBeCloseTo(0.0105 / 12.5);
+    expect(legFundingRateValue(lighterLeg, "latest")).toBeCloseTo(0.0001);
+    expect(legFundingRateValue(lighterLeg, "predicted")).toBeCloseTo(0.0001);
+    expect(legFundingRateValue(binanceLeg, "average2d")).toBeCloseTo(0.0001);
+
+    // 组合费率在同一刻度上相减
+    expect(comboFundingRate(lighterLeg, binanceLeg, "average2d")).toBeCloseTo(0.0123 / 12.5 - 0.0001);
+    expect(comboFundingRate(lighterLeg, binanceLeg, "latest")).toBeCloseTo(0);
+
+    // 年化与主表口径一致：Lighter 平均 0.0123% × 24 × 365 ≈ 107.75%
+    expect(legAnnualizedFundingPercent(lighterLeg, legFundingRateValue(lighterLeg, "average2d")!)).toBeCloseTo(0.0123 * 24 * 365);
+    expect(legAnnualizedFundingPercent(binanceLeg, 0.0001)).toBeCloseTo(10.95);
+  });
+
+  test("attaches impact/top spreads from the market maps and computes 冲击成本 (buy + sell, mode-switchable)", () => {
+    const buy = perp("Binance", "BTC");
+    const sell = perp("OKX", "BTC");
+    const markets = [buy, sell];
+    const impact = results(markets, [[100, 90], [100, 101]]);
+    const spreadMap = new Map<string, number | null>([
+      [String(marketId(buy)), 0.12],
+      [String(marketId(sell)), 0.08],
+    ]);
+    const topSpreadMap = new Map<string, number | null>([
+      [String(marketId(buy)), 0.02],
+      [String(marketId(sell)), 0.03],
+    ]);
+    const [rec] = computeStrategyRecommendations(markets, impact, {
+      ...DEFAULT_STRATEGY_SETTINGS, minGross: 0, maxGross: 5, spotOnlyBuy: false,
+    }, undefined, spreadMap, topSpreadMap);
+
+    expect(rec.buy.impactSpread).toBe(0.12);
+    expect(rec.sell.impactSpread).toBe(0.08);
+    expect(rec.buy.topSpread).toBe(0.02);
+    expect(rec.sell.topSpread).toBe(0.03);
+    // 默认 impact 模式
+    expect(comboImpactCost(rec.buy, rec.sell)).toBeCloseTo(0.2);
+    expect(comboImpactCost(rec.buy, rec.sell, "impact")).toBeCloseTo(0.2);
+    // 切换到 top 盘口价差
+    expect(comboImpactCost(rec.buy, rec.sell, "top")).toBeCloseTo(0.05);
+
+    // 未提供 spread map 时该腿为 null → 冲击成本 null（两种模式一致）
+    const [bare] = computeStrategyRecommendations(markets, impact, {
+      ...DEFAULT_STRATEGY_SETTINGS, minGross: 0, maxGross: 5, spotOnlyBuy: false,
+    });
+    expect(bare.buy.impactSpread).toBeNull();
+    expect(bare.buy.topSpread).toBeNull();
+    expect(comboImpactCost(bare.buy, bare.sell)).toBeNull();
+    expect(comboImpactCost(bare.buy, bare.sell, "top")).toBeNull();
+  });
+
+  test("annualizes a leg funding rate with its own interval and treats missing data as null", () => {
+    const buy = perp("Binance", "BTC", { avgFundingRate2d: 0.0001 });
+    const lighter = perp("Lighter", "BTC", { avgFundingRate2d: 0.0001 });
+    const markets = [buy, lighter];
+    const impact = results(markets, [[100, 90], [100, 101]]);
+    const [rec] = computeStrategyRecommendations(markets, impact, {
+      ...DEFAULT_STRATEGY_SETTINGS, minGross: 0, maxGross: 5, spotOnlyBuy: false,
+    });
+
+    // Binance 8h: 0.0001 * 3 settlements/day * 365 * 100
+    expect(legAnnualizedFundingPercent(rec.buy, 0.0001)).toBeCloseTo(10.95);
+    // Lighter feeds an 8h-equivalent rate: same annualization regardless of its 1h interval
+    expect(legAnnualizedFundingPercent(rec.sell, 0.0001)).toBeCloseTo(10.95);
+    // spot legs have no funding: rate value and annualized value are both 0
+    const spotLeg = { ...rec.buy, kind: "spot" as const, fundingIntervalSeconds: null, funding: undefined };
+    expect(legFundingRateValue(spotLeg, "average2d")).toBe(0);
+    expect(legAnnualizedFundingPercent(spotLeg, 0)).toBe(0);
+    // perp leg without any funding data resolves to null
+    expect(legFundingRateValue({ ...rec.buy, funding: undefined }, "average2d")).toBeNull();
   });
 });

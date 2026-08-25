@@ -60,6 +60,7 @@ import {
   type SpotQuoteFilter,
   type MarketKindFilter,
   type StrategyDraftSettings,
+  type StrategyLegFunding,
   type StrategyRecommendationLimit,
   type StrategyChartOverride,
   type StrategyRecommendation,
@@ -553,9 +554,35 @@ export default function SpotPerpArbitrageController() {
     () => searchResult.markets.filter((market) => !strategyExcludedMarketIds.has(String(marketId(market)))),
     [searchResult.markets, strategyExcludedMarketIds],
   );
+  // 资金费率直接取自搜索结果表（tableRows），保证策略表与主表口径一致。
+  const strategyFundingByMarket = useMemo(() => {
+    const map = new Map<string, StrategyLegFunding>();
+    for (const row of tableRows) {
+      map.set(String(row.id), {
+        latestSettlementRate: row.latestSettlementRate,
+        predictedFundingRate: row.predictedFundingRate,
+        averageFundingRate2d: row.averageFundingRate2d,
+        averageFundingRate7d: row.averageFundingRate7d,
+        averageFundingRate30d: row.averageFundingRate30d,
+      });
+    }
+    return map;
+  }, [tableRows]);
+  // 冲击成本：各腿在当前 impact value 下的买卖价差（百分数），同样取自搜索结果表。
+  const strategyImpactSpreadByMarket = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const row of tableRows) map.set(String(row.id), row.impactSpread);
+    return map;
+  }, [tableRows]);
+  // 冲击成本可切换到最优盘口（top）价差。
+  const strategyTopSpreadByMarket = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const row of tableRows) map.set(String(row.id), row.topSpread);
+    return map;
+  }, [tableRows]);
   const strategyRecommendations = useMemo(
-    () => computeStrategyRecommendations(strategyEligibleMarkets, impactResults, effectiveStrategySettings),
-    [effectiveStrategySettings, impactResults, strategyEligibleMarkets],
+    () => computeStrategyRecommendations(strategyEligibleMarkets, impactResults, effectiveStrategySettings, strategyFundingByMarket, strategyImpactSpreadByMarket, strategyTopSpreadByMarket),
+    [effectiveStrategySettings, impactResults, strategyEligibleMarkets, strategyFundingByMarket, strategyImpactSpreadByMarket, strategyTopSpreadByMarket],
   );
   const hasUnappliedStrategyChanges = impactNotional !== appliedImpactNotional;
 

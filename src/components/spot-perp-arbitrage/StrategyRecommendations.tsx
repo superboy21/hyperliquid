@@ -1,8 +1,20 @@
 "use client";
 
+import { useState } from "react";
+import type { ReactNode } from "react";
 import {
+  DEFAULT_FUNDING_RATE_MODE,
+  DEFAULT_IMPACT_COST_MODE,
   DEFAULT_STRATEGY_SETTINGS,
+  FUNDING_RATE_MODE_OPTIONS,
+  IMPACT_COST_MODE_OPTIONS,
   STRATEGY_RECOMMENDATION_LIMITS,
+  comboFundingRate,
+  comboImpactCost,
+  legAnnualizedFundingPercent,
+  legFundingRateValue,
+  type FundingRateMode,
+  type ImpactCostMode,
   type StrategyDraftSettings,
   type StrategyRecommendation,
   type StrategyRecommendationLimit,
@@ -51,6 +63,42 @@ function formatUsd(value: number): string {
   return `${sign}$${Math.abs(value).toFixed(2)}`;
 }
 
+function fundingSignClass(value: number): string {
+  return value > 0 ? "text-emerald-300" : value < 0 ? "text-red-300" : "text-gray-400";
+}
+
+function formatSignedPercent(value: number, digits: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
+}
+
+/** 组合资金费率单元格：年化（主）+ 原始单期费率差（次，即 买入−卖出）。 */
+function fundingRateCell(recommendation: StrategyRecommendation, mode: FundingRateMode): ReactNode {
+  const buyRate = legFundingRateValue(recommendation.buy, mode);
+  const sellRate = legFundingRateValue(recommendation.sell, mode);
+  if (buyRate === null || sellRate === null) {
+    return <span className="text-gray-600">--</span>;
+  }
+  const raw = (comboFundingRate(recommendation.buy, recommendation.sell, mode) ?? 0) * 100;
+  const buyAnnualized = legAnnualizedFundingPercent(recommendation.buy, buyRate);
+  const sellAnnualized = legAnnualizedFundingPercent(recommendation.sell, sellRate);
+  const annualized = buyAnnualized !== null && sellAnnualized !== null ? buyAnnualized - sellAnnualized : null;
+  return (
+    <div className="flex flex-col items-end gap-px">
+      {annualized !== null && (
+        <span className={`whitespace-nowrap font-mono text-xs ${fundingSignClass(annualized)}`}>{formatSignedPercent(annualized, 3)}</span>
+      )}
+      <span className={`whitespace-nowrap font-mono text-[10px] text-gray-500 ${raw !== 0 ? "" : "text-gray-600"}`}>{formatSignedPercent(raw, 4)}</span>
+    </div>
+  );
+}
+
+/** 冲击成本单元格：买入腿 + 卖出腿 的买卖价差（百分数），mode 选择 Impact（默认）或 Top 盘口价差。 */
+function impactCostCell(recommendation: StrategyRecommendation, mode: ImpactCostMode): ReactNode {
+  const cost = comboImpactCost(recommendation.buy, recommendation.sell, mode);
+  if (cost === null) return <span className="text-gray-600">--</span>;
+  return <span className="whitespace-nowrap font-mono text-xs text-gray-300">{`${cost.toFixed(4)}%`}</span>;
+}
+
 export default function StrategyRecommendations({
   recommendations,
   impactLoading,
@@ -75,6 +123,8 @@ export default function StrategyRecommendations({
   const convergenceSelectValue = CONVERGENCE_PRESETS.includes(draft.convergenceDays as typeof CONVERGENCE_PRESETS[number])
     ? draft.convergenceDays
     : "custom";
+  const [fundingRateMode, setFundingRateMode] = useState<FundingRateMode>(DEFAULT_FUNDING_RATE_MODE);
+  const [impactCostMode, setImpactCostMode] = useState<ImpactCostMode>(DEFAULT_IMPACT_COST_MODE);
 
   return (
     <section className="rounded-lg border border-violet-500/30 bg-violet-950/10 p-3 sm:p-4" aria-label="寻找策略推荐">
@@ -151,6 +201,32 @@ export default function StrategyRecommendations({
             总手续费率 (%)
             <input type="number" min="0" step="0.01" value={draft.totalFee} onChange={(event) => onDraftChange("totalFee", event.target.value)} className="h-7 w-20 rounded border border-gray-700 bg-gray-900 px-1.5 text-[11px] text-gray-200 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400" aria-label="总交易手续费率 (%)" />
           </label>
+          <label className="flex flex-col gap-1 text-gray-500">
+            冲击成本
+            <select
+              aria-label="冲击成本价差来源"
+              value={impactCostMode}
+              onChange={(event) => setImpactCostMode(event.target.value as ImpactCostMode)}
+              className="h-7 rounded border border-gray-700 bg-gray-900 px-1.5 text-[11px] text-gray-200 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400"
+            >
+              {IMPACT_COST_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-gray-500">
+            组合资金费率
+            <select
+              aria-label="组合资金费率模式"
+              value={fundingRateMode}
+              onChange={(event) => setFundingRateMode(event.target.value as FundingRateMode)}
+              className="h-7 rounded border border-gray-700 bg-gray-900 px-1.5 text-[11px] text-gray-200 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400"
+            >
+              {FUNDING_RATE_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
           <label className="flex h-7 items-center gap-1.5 whitespace-nowrap text-gray-300">
             <input type="checkbox" checked={draft.spotOnlyBuy} onChange={(event) => onDraftChange("spotOnlyBuy", event.target.checked)} className="h-3.5 w-3.5 rounded border-gray-600 bg-gray-900 text-violet-500 focus:ring-violet-400" />
             Spot 只能买
@@ -200,7 +276,7 @@ export default function StrategyRecommendations({
               </button>
             )}
           </div>
-          <table className="w-full min-w-[1080px] text-left text-xs" aria-label="策略推荐表格">
+          <table className="w-full min-w-[1200px] text-left text-xs" aria-label="策略推荐表格">
             <caption className="sr-only">当前可执行套利策略推荐</caption>
             <thead className="border-b border-gray-700 bg-gray-900/80 text-[11px] font-medium text-gray-500">
               <tr>
@@ -212,6 +288,8 @@ export default function StrategyRecommendations({
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">套利空间</th>
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">扣费后收益</th>
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">美元收益</th>
+                <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">冲击成本</th>
+                <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">组合资金费率</th>
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-right">按 {convergenceDays} 天年化收益率</th>
               </tr>
             </thead>
@@ -252,6 +330,8 @@ export default function StrategyRecommendations({
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono ${priceClass(recommendation.gross)}`}>{percent(recommendation.gross)}</td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono ${priceClass(recommendation.netReturn)}`}>{percent(recommendation.netReturn)}</td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono ${priceClass(recommendation.usdReturn)}`}>{formatUsd(recommendation.usdReturn)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-right align-top">{impactCostCell(recommendation, impactCostMode)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-right align-top">{fundingRateCell(recommendation, fundingRateMode)}</td>
                   <td className={`whitespace-nowrap px-3 py-3 text-right align-top font-mono font-semibold ${priceClass(recommendation.annualized)}`}>{percent(recommendation.annualized)}</td>
                 </tr>
               ))}
