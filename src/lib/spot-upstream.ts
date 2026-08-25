@@ -20,7 +20,7 @@ const EXCHANGES = new Set(Object.keys(HOSTS));
 const ACTION_PARAMS: Record<SpotAction, readonly string[]> = {
   list: [],
   candles: ["symbol", "marketId", "interval", "limit", "startTime", "endTime"],
-  book: ["symbol", "marketId", "limit"],
+  book: ["symbol", "marketId", "limit", "rpi"],
   instrument: ["symbol"],
 };
 const INTERVALS = new Set(["1w", "1d", "4h", "1h", "5m", "1m"]);
@@ -106,7 +106,15 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
     if (exchange === "okx") { if (start) query.set("after", start); if (end) query.set("before", end); }
     if (exchange === "bybit") { if (start) query.set("start", start); if (end) query.set("end", end); }
   } else {
-    if (exchange === "hyperliquid") { path = "/info"; init = { ...init, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "l2Book", coin: symbol }) }; }
+    const rpi = params.get("rpi") === "1";
+    if (rpi) {
+      // 含 RPI 订单的盘口专用端点（普通 order_book 端点均剔除 RPI 订单）。
+      if (exchange === "gateio") { path = "/api/v4/spot/rpi_order_book"; query.set("currency_pair", symbol!); query.set("limit", String(limit)); }
+      else if (exchange === "bybit") { path = "/v5/market/rpi_orderbook"; query.set("category", "spot"); query.set("symbol", symbol!); query.set("limit", String(limit)); }
+      else if (exchange === "okx") { path = "/api/v5/market/books-rpi"; query.set("instId", symbol!); query.set("sz", String(limit)); }
+      else if (exchange === "bitget") { path = "/api/v3/market/rpi-orderbook"; query.set("category", "SPOT"); query.set("symbol", symbol!); query.set("limit", String(limit)); }
+      else return "RPI book not supported for this exchange";
+    } else if (exchange === "hyperliquid") { path = "/info"; init = { ...init, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "l2Book", coin: symbol }) }; }
     else if (exchange === "gateio") { path = "/api/v4/spot/order_book"; query.set("currency_pair", symbol!); query.set("limit", String(limit)); query.set("interval", "0"); }
     else if (exchange === "binance") { path = "/api/v3/depth"; query.set("symbol", symbol!); query.set("limit", String(limit)); }
     else if (exchange === "lighter") { path = "/api/v1/orderBookOrders"; query.set("market_id", String(marketId)); query.set("limit", String(limit)); }

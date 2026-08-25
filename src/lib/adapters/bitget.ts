@@ -1,10 +1,11 @@
 import type { AssetCategory, CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
 import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
 import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
+import { clampRpiDepth, normalizeRpiSplitLevels, type BookMode } from "@/lib/rpi-book";
 
 export type BitgetCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
 export type BitgetRequestPriority = "interactive" | "normal" | "background";
-export type BitgetAction = "instruments" | "tickers" | "current-fund-rate" | "history-fund-rate" | "candles" | "history-candles" | "orderbook";
+export type BitgetAction = "instruments" | "tickers" | "current-fund-rate" | "history-fund-rate" | "candles" | "history-candles" | "orderbook" | "rpi-orderbook";
 
 export interface BitgetInstrument {
   symbol?: string;
@@ -372,12 +373,15 @@ const BITGET_ACTION_PATHS: Record<BitgetAction, string> = {
   candles: "/api/v3/market/candles",
   "history-candles": "/api/v3/market/history-candles",
   orderbook: "/api/v3/market/orderbook",
+  "rpi-orderbook": "/api/v3/market/rpi-orderbook",
 };
 const BITGET_ACTION_DEFAULTS: Partial<Record<BitgetAction, Record<string, string>>> = {
   "history-fund-rate": { cursor: "1", limit: "100" },
   candles: { type: "market", limit: "100" },
   "history-candles": { type: "market", limit: "100" },
   orderbook: { limit: "100" },
+  // RPI 订单簿最大 200 档（USDT-FUTURES 与 SPOT 一致，官方文档 default 5）。
+  "rpi-orderbook": { limit: "200" },
 };
 
 export function buildBitgetUrl(action: BitgetAction, params: Record<string, string> = {}): string {
@@ -587,8 +591,25 @@ export function normalizeBitgetOrderBook(payload: unknown): NormalizedBitgetOrde
   return { asks: parseSide(object.a ?? object.asks), bids: parseSide(object.b ?? object.bids) };
 }
 
-export async function fetchBitgetOrderBook(rawSymbol: string, limit = resolvePerpImpactDepth("Bitget"), signal?: AbortSignal, request: BitgetRequest = requestBitget) {
-  return normalizeBitgetOrderBook(await request("orderbook", { symbol: rawSymbol, limit: String(Math.max(1, Math.min(1000, Math.trunc(limit)))) }, signal));
+/**
+ * Bitget RPI 订单簿（/api/v3/market/rpi-orderbook）：与普通盘口同为 {a,b} 结构
+ * （scheduler 已 unwrap envelope），但每档是 [price, 非RPI数量, RPI数量] 三列，
+ * 含 RPI 的总数量 = 非RPI + RPI。
+ */
+export function normalizeBitgetRpiOrderBook(payload: unknown): NormalizedBitgetOrderBook {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new TypeError("Malformed Bitget RPI order book");
+  const object = payload as { a?: unknown; b?: unknown };
+  const toLevel = (level: { price: number; quantity: number }): NormalizedBitgetBookLevel => ({ price: level.price, baseQty: level.quantity });
+  return {
+    asks: normalizeRpiSplitLevels(object.a, "ask").map(toLevel),
+    bids: normalizeRpiSplitLevels(object.b, "bid").map(toLevel),
+  };
+}
+
+export async function fetchBitgetOrderBook(rawSymbol: string, limit = resolvePerpImpactDepth("Bitget"), signal?: AbortSignal, request: BitgetRequest = requestBitget, bookMode: BookMode = "normal") {
+  const action = bookMode === "rpi" ? "rpi-orderbook" : "orderbook";
+  const payload = await request(action, { symbol: rawSymbol, limit: String(Math.max(1, Math.min(1000, Math.trunc(limit)))) }, signal);
+  return bookMode === "rpi" ? normalizeBitgetRpiOrderBook(payload) : normalizeBitgetOrderBook(payload);
 }
 
 export function computeBitgetBboSpread(bestBid?: number | null, bestAsk?: number | null): number | null {
@@ -702,23 +723,30 @@ export function fetchBitgetImpactSpreadDetail(
   signal?: AbortSignal,
   request?: BitgetRequest,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<OrderBookImpactDetailResult>;
 export function fetchBitgetImpactSpreadDetail(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<OrderBookImpactDetailResult>;
 export async function fetchBitgetImpactSpreadDetail(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestOrLimit: BitgetRequest | number = requestBitget,
-  requestedLimit: number = resolvePerpImpactDepth("Bitget"),
+  requestedLimitOrBookMode: number | BookMode = resolvePerpImpactDepth("Bitget"),
+  bookMode: BookMode = "normal",
 ): Promise<OrderBookImpactDetailResult> {
   const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBitget;
-  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
-  const book = await fetchBitgetOrderBook(rawSymbol, limit, signal, request);
+  const limit = typeof requestOrLimit === "number"
+    ? requestOrLimit
+    : typeof requestedLimitOrBookMode === "number" ? requestedLimitOrBookMode : resolvePerpImpactDepth("Bitget");
+  const mode = typeof requestedLimitOrBookMode === "string" ? requestedLimitOrBookMode : bookMode;
+  const depth = mode === "rpi" ? clampRpiDepth("Bitget", "perp", limit) : limit;
+  const book = await fetchBitgetOrderBook(rawSymbol, depth, signal, request, mode);
   return computeBitgetImpactSpreadDetail(book, notionalUsd);
 }
 
@@ -728,23 +756,29 @@ export function fetchBitgetImpactSpread(
   signal?: AbortSignal,
   request?: BitgetRequest,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<BitgetImpactSpreadResult>;
 export function fetchBitgetImpactSpread(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<BitgetImpactSpreadResult>;
 export async function fetchBitgetImpactSpread(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestOrLimit: BitgetRequest | number = requestBitget,
-  requestedLimit: number = resolvePerpImpactDepth("Bitget"),
+  requestedLimitOrBookMode: number | BookMode = resolvePerpImpactDepth("Bitget"),
+  bookMode: BookMode = "normal",
 ): Promise<BitgetImpactSpreadResult> {
   const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBitget;
-  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
-  const detail = await fetchBitgetImpactSpreadDetail(rawSymbol, notionalUsd, signal, request, limit);
+  const limit = typeof requestOrLimit === "number"
+    ? requestOrLimit
+    : typeof requestedLimitOrBookMode === "number" ? requestedLimitOrBookMode : resolvePerpImpactDepth("Bitget");
+  const mode = typeof requestedLimitOrBookMode === "string" ? requestedLimitOrBookMode : bookMode;
+  const detail = await fetchBitgetImpactSpreadDetail(rawSymbol, notionalUsd, signal, request, limit, mode);
   if (detail === null || detail === "insufficient") return detail;
   return detail.spread;
 }

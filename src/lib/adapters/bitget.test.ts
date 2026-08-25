@@ -15,6 +15,7 @@ import {
   normalizeBitgetCandles,
   normalizeBitgetFundingRows,
   normalizeBitgetOrderBook,
+  normalizeBitgetRpiOrderBook,
   parseBitgetList,
   selectBitgetDetailCandles,
   type BitgetRequest,
@@ -203,6 +204,33 @@ describe("Bitget candles and books", () => {
     expect(normalizeBitgetOrderBook({ a: [["101", "2.5"]], b: [["100", "3"]] })).toEqual({
       asks: [{ price: 101, baseQty: 2.5 }], bids: [{ price: 100, baseQty: 3 }],
     });
+  });
+
+  test("merges non-RPI and RPI quantities in the RPI order book", () => {
+    expect(normalizeBitgetRpiOrderBook({ a: [["101", "2.5", "0.5"]], b: [["100", "3", "1"]] })).toEqual({
+      asks: [{ price: 101, baseQty: 3 }], bids: [{ price: 100, baseQty: 4 }],
+    });
+    expect(normalizeBitgetRpiOrderBook({ a: [], b: [] })).toEqual({ asks: [], bids: [] });
+  });
+
+  test("requests the RPI order book action and clamps depth to 200 levels", async () => {
+    const seen: Array<{ action: string; params: Record<string, string> }> = [];
+    const request: BitgetRequest = async (action, params) => {
+      seen.push({ action, params });
+      return {
+        a: [["101", "2.5", "0.5"], ["102", "10", "0"], ["103", "10", "0"]],
+        b: [["100", "3", "1"], ["99", "10", "0"], ["98", "10", "0"]],
+      };
+    };
+    const detail = await fetchBitgetImpactSpreadDetail("BTCUSDT", 1000, undefined, request, resolvePerpImpactDepth("Bitget", "max"), "rpi");
+    expect(seen).toHaveLength(1);
+    expect(seen[0].action).toBe("rpi-orderbook");
+    expect(seen[0].params.limit).toBe("200"); // max 1000 → RPI cap 200
+    expect(detail !== null && typeof detail === "object").toBe(true);
+    if (detail !== null && typeof detail === "object") {
+      expect(detail.bidPrice).toBeLessThan(detail.askPrice);
+      expect(detail.spread).toBeGreaterThan(0);
+    }
   });
 
   test("computes BBO and base-quantity impact spreads", () => {

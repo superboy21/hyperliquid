@@ -6,8 +6,9 @@ import { fetchL2Book } from "./hyperliquid";
 import { lighterFetch, getMarketMap } from "./lighter";
 import { binanceFetch } from "./adapters/binance";
 import { okxFetch } from "./adapters/okx";
-import { fetchBitgetImpactSpread, fetchBitgetImpactSpreadDetail } from "./adapters/bitget";
-import { fetchBybitImpactSpread, fetchBybitImpactSpreadDetail, type BybitRequest } from "./adapters/bybit";
+import { fetchBitgetImpactSpread, fetchBitgetImpactSpreadDetail, fetchBitgetOrderBook } from "./adapters/bitget";
+import { fetchBybitImpactSpread, fetchBybitImpactSpreadDetail, fetchBybitOrderBook, type BybitRequest } from "./adapters/bybit";
+import { bookTopBbo, clampRpiDepth, type BookMode } from "./rpi-book";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
 import {
   computeOrderBookImpactDetail,
@@ -190,10 +191,12 @@ async function fetchGateioBook(
   contract: string,
   depthLimit: number,
   signal?: AbortSignal,
+  bookMode: BookMode = "normal",
 ): Promise<NormalizedOrderBook | "no_multiplier" | null> {
   try {
+    const rpi = bookMode === "rpi" ? "&rpi=1" : "";
     const response = await fetch(
-      `/api/gate/futures/usdt/order_book?contract=${encodeURIComponent(contract)}&limit=${depthLimit}`,
+      `/api/gate/futures/usdt/order_book?contract=${encodeURIComponent(contract)}&limit=${depthLimit}${rpi}`,
       { signal, cache: "no-store" },
     );
 
@@ -206,6 +209,20 @@ async function fetchGateioBook(
   } catch {
     return null;
   }
+}
+
+function normalizeBinanceDepthPayload(data: { bids?: Array<[string, string]>; asks?: Array<[string, string]> }): NormalizedOrderBook {
+  const bids: NormalizedBookLevel[] = (data.bids ?? []).map(([px, qty]) => ({
+    price: Number.parseFloat(px),
+    quantity: Number.parseFloat(qty),
+  })).filter((l) => l.price > 0 && l.quantity > 0);
+
+  const asks: NormalizedBookLevel[] = (data.asks ?? []).map(([px, qty]) => ({
+    price: Number.parseFloat(px),
+    quantity: Number.parseFloat(qty),
+  })).filter((l) => l.price > 0 && l.quantity > 0);
+
+  return { bids, asks };
 }
 
 async function fetchBinanceBook(
@@ -227,17 +244,35 @@ async function fetchBinanceBook(
       asks: Array<[string, string]>;
     };
 
-    const bids: NormalizedBookLevel[] = (data.bids ?? []).map(([px, qty]) => ({
-      price: Number.parseFloat(px),
-      quantity: Number.parseFloat(qty),
-    })).filter((l) => l.price > 0 && l.quantity > 0);
+    return normalizeBinanceDepthPayload(data);
+  } catch {
+    return null;
+  }
+}
 
-    const asks: NormalizedBookLevel[] = (data.asks ?? []).map(([px, qty]) => ({
-      price: Number.parseFloat(px),
-      quantity: Number.parseFloat(qty),
-    })).filter((l) => l.price > 0 && l.quantity > 0);
+/**
+ * Binance USDⓈ-M RPI 盘口（/fapi/v1/rpiDepth）：RPI 订单已聚合进价位，响应与普通
+ * depth 同构；limit 仅支持 1000（权重 20）。对无 RPI 白名单的合约返回的即普通盘口。
+ */
+async function fetchBinanceRpiBook(
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<NormalizedOrderBook | null> {
+  try {
+    const response = await binanceFetch(
+      "rpiDepth",
+      `symbol=${encodeURIComponent(symbol)}&limit=1000`,
+      { signal },
+    );
 
-    return { bids, asks };
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      bids: Array<[string, string]>;
+      asks: Array<[string, string]>;
+    };
+
+    return normalizeBinanceDepthPayload(data);
   } catch {
     return null;
   }
@@ -248,9 +283,12 @@ async function fetchOkxBook(
   ctVal: number,
   depthLimit: number,
   signal?: AbortSignal,
+  bookMode: BookMode = "normal",
 ): Promise<NormalizedOrderBook | null> {
   try {
-    const endpoint = depthLimit > 400 ? "market/books-full" : "market/books";
+    const endpoint = bookMode === "rpi"
+      ? "market/books-rpi"
+      : depthLimit > 400 ? "market/books-full" : "market/books";
     const response = await okxFetch(
       `/api/okx?endpoint=${endpoint}&instId=${encodeURIComponent(instId)}&sz=${depthLimit}`,
       { signal, cache: "no-store" },
@@ -343,15 +381,59 @@ async function fetchImpactOrderBook(
   rawSymbol: string,
   signal: AbortSignal | undefined,
   depthMode: ImpactDepthMode,
+  bookMode: BookMode = "normal",
 ): Promise<NormalizedOrderBook | "no_ctVal" | "no_multiplier" | null> {
   switch (exchange) {
     case "Hyperliquid": return fetchHyperliquidBook(rawSymbol, signal);
-    case "Gate.io": { const b = await fetchGateioBook(rawSymbol, resolvePerpImpactDepth("Gate.io", depthMode), signal); return b === "no_multiplier" ? b : b; }
-    case "Binance": return fetchBinanceBook(rawSymbol, resolvePerpImpactDepth("Binance", depthMode), signal);
-    case "OKX": { const ctVal = await getOkxCtVal(rawSymbol, signal); if (ctVal === null) return "no_ctVal"; return fetchOkxBook(rawSymbol, ctVal, resolvePerpImpactDepth("OKX", depthMode), signal); }
+    case "Gate.io": { const b = await fetchGateioBook(rawSymbol, resolvePerpImpactDepth("Gate.io", depthMode), signal, bookMode); return b === "no_multiplier" ? b : b; }
+    case "Binance":
+      // rpiDepth limit 固定 1000，无需按 depthMode 缩放。
+      return bookMode === "rpi" ? fetchBinanceRpiBook(rawSymbol, signal) : fetchBinanceBook(rawSymbol, resolvePerpImpactDepth("Binance", depthMode), signal);
+    case "OKX": {
+      const ctVal = await getOkxCtVal(rawSymbol, signal);
+      if (ctVal === null) return "no_ctVal";
+      const depth = bookMode === "rpi"
+        ? clampRpiDepth("OKX", "perp", resolvePerpImpactDepth("OKX", depthMode))
+        : resolvePerpImpactDepth("OKX", depthMode);
+      return fetchOkxBook(rawSymbol, ctVal, depth, signal, bookMode);
+    }
     case "Lighter": return fetchLighterBook(rawSymbol, resolvePerpImpactDepth("Lighter", depthMode), signal);
     default: return null;
   }
+}
+
+/**
+ * 拉取单市场的最优一档（best bid/ask），供 RPI 模式下覆盖 perp 的 Top 价差与中间价。
+ * bookMode 为 "rpi" 时走各所 RPI 端点；失败（端点不可用/解析失败）返回 null，
+ * 由调用方回退普通盘口数据并提示用户。
+ */
+export async function fetchBookModeTopBbo(
+  exchange: string,
+  rawSymbol: string,
+  signal?: AbortSignal,
+  bookMode: BookMode = "normal",
+): Promise<{ bestBid?: number; bestAsk?: number } | null> {
+  const toBbo = (book: NormalizedOrderBook | "no_ctVal" | "no_multiplier" | null) => {
+    if (book === null || book === "no_ctVal" || book === "no_multiplier") return null;
+    return bookTopBbo(book);
+  };
+  if (exchange === "Bitget") {
+    try {
+      const book = await fetchBitgetOrderBook(rawSymbol, 1, signal, undefined, bookMode);
+      return toBbo({ bids: book.bids.map((l) => ({ price: l.price, quantity: l.baseQty })), asks: book.asks.map((l) => ({ price: l.price, quantity: l.baseQty })) });
+    } catch {
+      return null;
+    }
+  }
+  if (exchange === "Bybit") {
+    try {
+      const book = await fetchBybitOrderBook(rawSymbol, 1, signal, undefined, bookMode);
+      return toBbo({ bids: book.bids.map((l) => ({ price: l.price, quantity: l.baseQty })), asks: book.asks.map((l) => ({ price: l.price, quantity: l.baseQty })) });
+    } catch {
+      return null;
+    }
+  }
+  return toBbo(await fetchImpactOrderBook(exchange, rawSymbol, signal, "standard", bookMode));
 }
 
 /**
@@ -369,10 +451,11 @@ export async function fetchImpactSpread(
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
   depthMode: ImpactDepthMode = "standard",
   bybitRequest?: BybitRequest,
+  bookMode: BookMode = "normal",
 ): Promise<ImpactSpreadResult> {
-  if (exchange === "Bitget") return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
-  if (exchange === "Bybit") return fetchBybitImpactSpread(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode));
-  const book = await fetchImpactOrderBook(exchange, rawSymbol, signal, depthMode);
+  if (exchange === "Bitget") return fetchBitgetImpactSpread(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode), bookMode);
+  if (exchange === "Bybit") return fetchBybitImpactSpread(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode), bookMode);
+  const book = await fetchImpactOrderBook(exchange, rawSymbol, signal, depthMode, bookMode);
   if (book === "no_ctVal" || book === "no_multiplier") return book;
   if (!book) return null; // fetch error
   return computeOrderBookImpactSpread(book, notionalUsd);
@@ -386,10 +469,11 @@ export async function fetchImpactSpreadDetail(
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
   depthMode: ImpactDepthMode = "standard",
   bybitRequest?: BybitRequest,
+  bookMode: BookMode = "normal",
 ): Promise<ImpactSpreadDetailResult> {
-  if (exchange === "Bitget") return fetchBitgetImpactSpreadDetail(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode));
-  if (exchange === "Bybit") return fetchBybitImpactSpreadDetail(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode));
-  const book = await fetchImpactOrderBook(exchange, rawSymbol, signal, depthMode);
+  if (exchange === "Bitget") return fetchBitgetImpactSpreadDetail(rawSymbol, notionalUsd, signal, resolvePerpImpactDepth("Bitget", depthMode), bookMode);
+  if (exchange === "Bybit") return fetchBybitImpactSpreadDetail(rawSymbol, notionalUsd, signal, bybitRequest, resolvePerpImpactDepth("Bybit", depthMode), bookMode);
+  const book = await fetchImpactOrderBook(exchange, rawSymbol, signal, depthMode, bookMode);
   if (book === "no_ctVal" || book === "no_multiplier") return book;
   if (!book) return null; // fetch error
   return computeOrderBookImpactDetail(book, notionalUsd);
@@ -401,6 +485,7 @@ export function fetchSearchImpactSpreadDetail(
   signal?: AbortSignal,
   notionalUsd?: number,
   depthMode?: ImpactDepthMode,
+  bookMode?: BookMode,
 ): Promise<ImpactSpreadDetailResult>;
 export function fetchSearchImpactSpreadDetail(
   rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
@@ -408,16 +493,30 @@ export function fetchSearchImpactSpreadDetail(
   notionalUsd?: number,
   fetcher?: typeof fetchImpactSpreadDetail,
   depthMode?: ImpactDepthMode,
+  bookMode?: BookMode,
 ): Promise<ImpactSpreadDetailResult>;
 export async function fetchSearchImpactSpreadDetail(
   rate: Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol">,
   signal?: AbortSignal,
   notionalUsd: number = DEFAULT_IMPACT_NOTIONAL,
-  depthModeOrFetcher: ImpactDepthMode | typeof fetchImpactSpreadDetail = "standard",
-  depthModeAfterFetcher: ImpactDepthMode = "standard",
+  depthModeOrFetcher: ImpactDepthMode | BookMode | typeof fetchImpactSpreadDetail = "standard",
+  depthModeOrBookMode: ImpactDepthMode | BookMode = "standard",
+  bookMode: BookMode = "normal",
 ): Promise<ImpactSpreadDetailResult> {
   const rawSymbol = requireBitgetRawSymbol(rate);
+  const isMode = (value: unknown): value is ImpactDepthMode => value === "standard" || value === "max";
+  const isBookMode = (value: unknown): value is BookMode => value === "normal" || value === "rpi";
   const fetcher = typeof depthModeOrFetcher === "function" ? depthModeOrFetcher : fetchImpactSpreadDetail;
-  const depthMode = typeof depthModeOrFetcher === "function" ? depthModeAfterFetcher : depthModeOrFetcher;
-  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd, depthMode);
+  let depthMode: ImpactDepthMode;
+  let resolvedBookMode: BookMode;
+  if (typeof depthModeOrFetcher === "function") {
+    depthMode = isMode(depthModeOrBookMode) ? depthModeOrBookMode : "standard";
+    resolvedBookMode = isBookMode(depthModeOrBookMode) ? depthModeOrBookMode : bookMode;
+  } else {
+    depthMode = isMode(depthModeOrFetcher) ? depthModeOrFetcher : "standard";
+    resolvedBookMode = isBookMode(depthModeOrFetcher)
+      ? depthModeOrFetcher
+      : isBookMode(depthModeOrBookMode) ? depthModeOrBookMode : bookMode;
+  }
+  return fetcher(rate.exchange, rawSymbol, signal, notionalUsd, depthMode, undefined, resolvedBookMode);
 }

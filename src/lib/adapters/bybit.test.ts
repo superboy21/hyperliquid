@@ -24,6 +24,7 @@ import {
   normalizeBybitFundingHistory,
   normalizeBybitFundingRows,
   normalizeBybitOrderBook,
+  normalizeBybitRpiOrderBook,
   parseBybitFundingIntervalHours,
   parseBybitFundingIntervalSeconds,
   parseBybitList,
@@ -723,6 +724,35 @@ describe("Bybit candles and books", () => {
     expect(normalizeBybitOrderBook({ s: "BTCUSDT", b: [["100", "3"]], a: [["101", "2.5"]] })).toEqual({
       bids: [{ price: 100, baseQty: 3 }], asks: [{ price: 101, baseQty: 2.5 }],
     });
+  });
+
+  test("merges non-RPI and RPI quantities in the RPI order book", () => {
+    expect(normalizeBybitRpiOrderBook({ s: "BTCUSDT", b: [["100", "3", "1"]], a: [["101", "2.5", "0.5"]] })).toEqual({
+      bids: [{ price: 100, baseQty: 4 }], asks: [{ price: 101, baseQty: 3 }],
+    });
+    expect(normalizeBybitRpiOrderBook({ b: [], a: [] })).toEqual({ bids: [], asks: [] });
+  });
+
+  test("requests the RPI order book action and clamps depth to 50 levels", async () => {
+    const seen: Array<{ action: string; params: Record<string, string> }> = [];
+    const request: BybitRequest = async (action, params) => {
+      seen.push({ action, params });
+      return {
+        s: "BTCUSDT",
+        b: [["100", "3", "1"], ["99", "10", "0"], ["98", "10", "0"]],
+        a: [["101", "2.5", "0.5"], ["102", "10", "0"], ["103", "10", "0"]],
+      };
+    };
+    const detail = await fetchBybitImpactSpreadDetail("BTCUSDT", 1000, undefined, request, resolveBybitImpactDepth("max"), "rpi");
+    expect(seen).toHaveLength(1);
+    expect(seen[0].action).toBe("rpi-orderbook");
+    expect(seen[0].params.limit).toBe("50"); // max 500 → RPI cap 50
+    expect(detail !== null && typeof detail === "object").toBe(true);
+    if (detail !== null && typeof detail === "object") {
+      expect(detail.bidPrice).toBeLessThan(detail.askPrice);
+      // 含 RPI 的 bid 一档为 4（3+1），若按普通盘口只算 3 则首档深度不足 1000 名义。
+      expect(detail.spread).toBeGreaterThan(0);
+    }
   });
 
   test("computes BBO and base-quantity impact spreads", () => {

@@ -1,5 +1,6 @@
 import { fetchSpotCandlesWithLimit, type SpotCandlePoint } from "./spot-search-candles";
 import { spotFetch } from "./spot-fetch";
+import { hasRpiEndpoint, type BookMode } from "./rpi-book";
 
 export type SpotExchangeName =
   | "Hyperliquid"
@@ -35,6 +36,8 @@ export interface SpotDetailResult {
   topSpreadSource: SpotTopSpreadSource | null;
   bestBid?: number;
   bestAsk?: number;
+  /** 实际使用的盘口数据源：RPI 端点失败回退普通端点时标记为 "normal"。 */
+  bookSource?: "rpi" | "normal";
 }
 
 export type SpotTopSpreadSource = "orderbook" | "ticker-bbo";
@@ -332,14 +335,15 @@ function spread(bestBid?: number, bestAsk?: number): number | null {
   return mid > 0 ? ((bestAsk - bestBid) / mid) * 100 : null;
 }
 
-function bookQuery(row: SpotMarketRow, limit: number): string {
+function bookQuery(row: SpotMarketRow, limit: number, rpi = false): string {
   const params = new URLSearchParams({ action: "book", limit: String(limit) });
+  if (rpi) params.set("rpi", "1");
   if (row.exchange === "Lighter" && row.marketId !== undefined) params.set("marketId", String(row.marketId));
   else params.set("symbol", row.rawSymbol);
   return params.toString();
 }
 
-function readBestPrices(exchange: SpotExchangeName, payload: unknown): { bestBid?: number; bestAsk?: number } {
+function readBestPrices(exchange: SpotExchangeName, payload: unknown, rpi = false): { bestBid?: number; bestAsk?: number } {
   const root = object(payload);
   let bids: unknown = root?.bids;
   let asks: unknown = root?.asks;
@@ -348,7 +352,10 @@ function readBestPrices(exchange: SpotExchangeName, payload: unknown): { bestBid
     const first = object(root.data[0]); bids = first?.bids; asks = first?.asks;
   }
   if (exchange === "Bitget" && root?.data) {
-    const data = object(root.data); bids = data?.bids; asks = data?.asks;
+    const data = object(root.data);
+    // RPI 端点（/api/v3/market/rpi-orderbook）使用 a/b 键名，与普通盘口的 bids/asks 不同。
+    if (rpi) { bids = data?.b; asks = data?.a; }
+    else { bids = data?.bids; asks = data?.asks; }
   }
   if (exchange === "Bybit" && root?.result) {
     const result = object(root.result); bids = result?.b; asks = result?.a;
@@ -384,13 +391,55 @@ async function readBitgetReality(row: SpotMarketRow, signal?: AbortSignal): Prom
   }
 }
 
-export async function fetchSpotDetail(row: SpotMarketRow, signal?: AbortSignal): Promise<SpotDetailResult> {
-  const [candles, bookResponse] = await Promise.all([
+/** 拉取现货盘口最优一档；失败（非中止）返回 null。 */
+async function fetchSpotBookTopOnce(
+  row: SpotMarketRow,
+  signal: AbortSignal | undefined,
+  rpi: boolean,
+): Promise<{ bestBid?: number; bestAsk?: number } | null> {
+  try {
+    const response = await spotFetch(row.exchange, new URLSearchParams(bookQuery(row, 1, rpi)), { signal });
+    if (!response.ok) return null;
+    return readBestPrices(row.exchange, await response.json(), rpi);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return null;
+  }
+}
+
+/**
+ * 按 bookMode 拉取现货最优一档：
+ * - normal / 无 RPI 端点的产品：直接普通端点（失败抛错，保持原有 detailErrors 语义）。
+ * - rpi：先 RPI 端点，失败回退普通端点并标记 bookSource（调用方负责提示用户）。
+ */
+async function fetchSpotBookTop(
+  row: SpotMarketRow,
+  signal: AbortSignal | undefined,
+  bookMode: BookMode,
+): Promise<{ prices: { bestBid?: number; bestAsk?: number }; bookSource: "rpi" | "normal" }> {
+  const rpiWanted = bookMode === "rpi" && hasRpiEndpoint(row.exchange, "spot");
+  if (!rpiWanted) {
+    const prices = await fetchSpotBookTopOnce(row, signal, false);
+    if (prices === null) throw new Error(`${row.exchange} spot book failed (${row.rawSymbol})`);
+    return { prices, bookSource: "normal" };
+  }
+  const rpiPrices = await fetchSpotBookTopOnce(row, signal, true);
+  if (rpiPrices !== null) return { prices: rpiPrices, bookSource: "rpi" };
+  const normalPrices = await fetchSpotBookTopOnce(row, signal, false);
+  if (normalPrices === null) throw new Error(`${row.exchange} spot book failed (RPI and normal, ${row.rawSymbol})`);
+  return { prices: normalPrices, bookSource: "normal" };
+}
+
+export async function fetchSpotDetail(
+  row: SpotMarketRow,
+  signal?: AbortSignal,
+  bookMode: BookMode = "normal",
+): Promise<SpotDetailResult> {
+  const [candles, bookResult] = await Promise.all([
     fetchSpotCandlesWithLimit(row, "1d", 30, signal),
-    spotFetch(row.exchange, new URLSearchParams(bookQuery(row, 1)), { signal }),
+    fetchSpotBookTop(row, signal, bookMode),
   ]);
-  if (!bookResponse.ok) throw new Error(`${row.exchange} spot book failed (${bookResponse.status})`);
-  let prices = readBestPrices(row.exchange, await bookResponse.json());
+  let { prices, bookSource } = bookResult;
   let topSpreadSource: SpotTopSpreadSource | null = hasCompleteBbo(prices) ? "orderbook" : null;
   if (row.exchange === "Bitget" && topSpreadSource === null && await readBitgetReality(row, signal)) {
     const tickerPrices = { bestBid: positive(row.bestBid), bestAsk: positive(row.bestAsk) };
@@ -403,6 +452,7 @@ export async function fetchSpotDetail(row: SpotMarketRow, signal?: AbortSignal):
     historicalVolatility: calculateSpotHistoricalVolatility(candles.candles),
     topSpread: spread(prices.bestBid, prices.bestAsk),
     topSpreadSource,
+    bookSource,
     ...prices,
   };
 }

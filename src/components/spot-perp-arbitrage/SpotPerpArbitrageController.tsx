@@ -21,10 +21,12 @@ import {
   DEFAULT_PREMIUM_INDEX_NOTIONAL,
   PREMIUM_INDEX_NOTIONAL_PRESETS,
   computePremiumIndex,
+  fetchBookModeTopBbo,
   fetchSearchImpactSpreadDetail,
   type ImpactSpreadDetailResult,
 } from "@/lib/impact-price";
 import { fetchSpotImpactSpreadDetail } from "@/lib/spot-impact-price";
+import { hasRpiEndpoint, type BookMode } from "@/lib/rpi-book";
 import { fetchOfficialPremium, prefetchOfficialPremiumContext } from "@/lib/official-premium";
 import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candles";
@@ -192,6 +194,43 @@ function spotDetail(detail: SpotDetailResult): MarketTableDetail {
   };
 }
 
+function bboSpreadPct(bestBid?: number, bestAsk?: number): number | null {
+  if (!bestBid || !bestAsk || bestBid <= 0 || bestAsk <= 0) return null;
+  const mid = (bestBid + bestAsk) / 2;
+  return mid > 0 ? ((bestAsk - bestBid) / mid) * 100 : null;
+}
+
+/**
+ * 按盘口模式获取市场 impact 价差详情。RPI 模式下：
+ * - 无 RPI 端点的产品直接走普通盘口（不提示）；
+ * - 有 RPI 端点但请求失败（返回 null 或抛错）→ 回退普通盘口并回调 onRpiFallback 提示。
+ */
+async function fetchImpactDetailForMarket(
+  market: ArbitrageMarket,
+  notional: number,
+  signal: AbortSignal,
+  bookMode: BookMode,
+  onRpiFallback: (id: string, label: string) => void,
+): Promise<ImpactSpreadDetailResult> {
+  const kind = market.kind;
+  const id = String(marketId(market));
+  const fetchWith = (mode: BookMode) => market.kind === "perp"
+    ? fetchSearchImpactSpreadDetail(market.source, signal, notional, "max", mode)
+    : fetchSpotImpactSpreadDetail(market.source, notional, signal, "max", mode);
+  if (bookMode !== "rpi" || !hasRpiEndpoint(market.source.exchange, kind)) {
+    return fetchWith("normal");
+  }
+  try {
+    const rpi = await fetchWith("rpi");
+    if (rpi !== null) return rpi;
+  } catch (error) {
+    if (signal.aborted || isAbortError(error)) throw error;
+    // RPI 端点请求失败 → 走下方普通盘口回退。
+  }
+  onRpiFallback(id, `${market.source.exchange} ${marketDisplaySymbol(market)}`);
+  return fetchWith("normal");
+}
+
 function filterSinglePerp(result: SearchCandleResult, range: ArbitrageChartRange): SearchCandleResult {
   const duration = SINGLE_RANGE_MS[range];
   if (duration === null) return result;
@@ -263,6 +302,14 @@ export default function SpotPerpArbitrageController() {
 
   // 手动刷新：点击刷新按钮后重拉市场列表，并通过 markets 引用变化级联重算详情/买卖价差/溢价指数。
   const [refreshTick, setRefreshTick] = useState(0);
+
+  // 盘口数据源模式：RPI（默认，含 RPI 订单）或普通（剔除 RPI）。
+  // 切换即触发刷新（数据源模式切换 ≠ 参数微调），详见 handleBookModeChange。
+  const [bookMode, setBookMode] = useState<BookMode>("rpi");
+  const bookModeRef = useRef<BookMode>("rpi");
+  bookModeRef.current = bookMode;
+  // RPI 端点不可用、已回退普通盘口的市场：marketId → "交易所 交易对"。
+  const [rpiFallbackMarkets, setRpiFallbackMarkets] = useState<Map<string, string>>(new Map());
 
   // 抓取参数快照 ref：render 期间同步最新值，供「搜索变化 / 手动刷新」触发抓取时读取。
   // 参数本身变化不直接触发重算（避免调整 impact 额/价差模式时立即重拉数据）。
@@ -407,8 +454,26 @@ export default function SpotPerpArbitrageController() {
       const market = asPerpMarket(rate);
       const id = String(marketId(market));
       try {
+        const mode = bookModeRef.current;
         const result = await fetchDetailForSymbol(rate, controller.signal, undefined, { priority: "background" });
-        if (active()) setDetails((current) => new Map(current).set(id, perpDetail(result)));
+        let detail = perpDetail(result);
+        // RPI 模式：普通 detail 的 Top 价差来自 ticker BBO（不含 RPI），用 RPI 盘口最优一档覆盖。
+        if (mode === "rpi" && hasRpiEndpoint(rate.exchange, "perp")) {
+          const bbo = await fetchBookModeTopBbo(rate.exchange, rate.rawSymbol ?? rate.symbol, controller.signal, "rpi");
+          if (bbo !== null) {
+            const bestBid = bbo.bestBid;
+            const bestAsk = bbo.bestAsk;
+            detail = {
+              ...detail,
+              ...(bestBid === undefined ? {} : { bestBid }),
+              ...(bestAsk === undefined ? {} : { bestAsk }),
+              topSpread: bboSpreadPct(bestBid, bestAsk) ?? detail.topSpread,
+            };
+          } else if (!controller.signal.aborted) {
+            setRpiFallbackMarkets((current) => new Map(current).set(id, `${rate.exchange} ${marketDisplaySymbol(market)}`));
+          }
+        }
+        if (active()) setDetails((current) => new Map(current).set(id, detail));
       } catch (error) {
         fail(id, error);
       } finally {
@@ -419,8 +484,14 @@ export default function SpotPerpArbitrageController() {
       const market = asSpotMarket(row);
       const id = String(marketId(market));
       try {
-        const result = await fetchSpotDetail(row, controller.signal);
-        if (active()) setDetails((current) => new Map(current).set(id, spotDetail(result)));
+        const mode = bookModeRef.current;
+        const result = await fetchSpotDetail(row, controller.signal, mode);
+        if (active()) {
+          setDetails((current) => new Map(current).set(id, spotDetail(result)));
+          if (mode === "rpi" && hasRpiEndpoint(row.exchange, "spot") && result.bookSource === "normal") {
+            setRpiFallbackMarkets((current) => new Map(current).set(id, `${row.exchange} ${marketDisplaySymbol(market)}`));
+          }
+        }
       } catch (error) {
         fail(id, error);
       } finally {
@@ -457,9 +528,15 @@ export default function SpotPerpArbitrageController() {
     const fetchImpact = async (market: ArbitrageMarket) => {
       const id = String(marketId(market));
       try {
-        const result = market.kind === "perp"
-          ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, notional, "max")
-          : await fetchSpotImpactSpreadDetail(market.source, notional, controller.signal, "max");
+        const result = await fetchImpactDetailForMarket(
+          market,
+          notional,
+          controller.signal,
+          bookModeRef.current,
+          (fallbackId, label) => {
+            if (!controller.signal.aborted) setRpiFallbackMarkets((current) => new Map(current).set(fallbackId, label));
+          },
+        );
         if (!controller.signal.aborted) setImpactResults((current) => new Map(current).set(id, result));
       } catch (error) {
         if (!controller.signal.aborted && !isAbortError(error)) {
@@ -507,8 +584,11 @@ export default function SpotPerpArbitrageController() {
             : null;
           if (!controller.signal.aborted) setOfficialPremiumResults((current) => new Map(current).set(id, result));
         } else {
+          // manual 模式：溢价指数基于 impact 买/卖价，同样遵循 bookMode（RPI 失败回退普通盘口并提示）。
           const result = market.kind === "perp"
-            ? await fetchSearchImpactSpreadDetail(market.source, controller.signal, notional, "max")
+            ? await fetchImpactDetailForMarket(market, notional, controller.signal, bookModeRef.current, (fallbackId, label) => {
+                if (!controller.signal.aborted) setRpiFallbackMarkets((current) => new Map(current).set(fallbackId, label));
+              })
             : null;
           if (!controller.signal.aborted) setPremiumIndexResults((current) => new Map(current).set(id, result));
         }
@@ -809,6 +889,14 @@ export default function SpotPerpArbitrageController() {
     setRefreshTick((tick) => tick + 1);
   };
 
+  /** 切换盘口数据源（普通 / RPI）：立即触发一次刷新，因为中间价与价差的计算来源整体改变。 */
+  const handleBookModeChange = (mode: BookMode) => {
+    if (mode === bookMode) return;
+    setBookMode(mode);
+    setRpiFallbackMarkets(new Map());
+    refreshSearch();
+  };
+
   const applyPremiumIndexCustomNotional = () => {
     const parsed = Number(premiumIndexCustomNotional);
     if (!Number.isFinite(parsed) || parsed <= 0) return;
@@ -913,6 +1001,20 @@ export default function SpotPerpArbitrageController() {
           {validSearch && searchResult.markets.length > 0 && (
             <>
               <span className="text-gray-400">{searchResult.markets.length} 个匹配市场</span>
+              <div className="inline-flex rounded-md border border-gray-600 bg-gray-900 p-0.5" role="group" aria-label="盘口数据源">
+                {(["normal", "rpi"] as BookMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={bookMode === mode}
+                    onClick={() => handleBookModeChange(mode)}
+                    className={`rounded px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${bookMode === mode ? (mode === "rpi" ? "bg-violet-600/40 text-violet-200" : "bg-gray-600 text-white") : "text-gray-500 hover:text-gray-300"}`}
+                    title={mode === "rpi" ? "使用含 RPI（零售价格改进）订单的盘口计算中间价、价差与策略成本；RPI 端点不可用时自动回退普通盘口" : "使用普通盘口（不含 RPI 订单）"}
+                  >
+                    {mode === "rpi" ? "RPI" : "普通"}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={refreshSearch}
@@ -925,6 +1027,14 @@ export default function SpotPerpArbitrageController() {
                 刷新
               </button>
             </>
+          )}
+          {bookMode === "rpi" && rpiFallbackMarkets.size > 0 && (
+            <span
+              className="text-amber-400"
+              title={`以下市场的 RPI 盘口不可用，已回退普通盘口：\n${[...rpiFallbackMarkets.values()].join("、")}`}
+            >
+              ⚠ RPI 盘口不可用，{rpiFallbackMarkets.size} 个市场已回退普通盘口
+            </span>
           )}
           {(perpUniverseState === "error" || spotUniverseState === "error") && <span className="text-amber-400">部分市场源不可用，仍可使用已加载结果。</span>}
         </div>

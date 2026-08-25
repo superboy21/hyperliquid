@@ -82,3 +82,26 @@ describe("Bitget Spot instrument requests", () => {
     expect(buildSpotUpstreamRequest("bitget", params("action=instrument&symbol=BTC USDT"))).toBe("Invalid symbol");
   });
 });
+
+describe("RPI spot book requests", () => {
+  test("routes rpi=1 to the dedicated RPI endpoints per exchange", () => {
+    const cases: Array<[string, string]> = [
+      ["gateio", "https://api.gateio.ws/api/v4/spot/rpi_order_book?currency_pair=BTC_USDT&limit=5"],
+      ["bybit", "https://api.bybit.com/v5/market/rpi_orderbook?category=spot&symbol=BTCUSDT&limit=5"],
+      ["okx", "https://www.okx.com/api/v5/market/books-rpi?instId=BTC-USDT&sz=5"],
+      ["bitget", "https://api.bitget.com/api/v3/market/rpi-orderbook?category=SPOT&symbol=BTCUSDT&limit=5"],
+    ];
+    for (const [exchange, expected] of cases) {
+      const symbol = exchange === "gateio" ? "BTC_USDT" : exchange === "okx" ? "BTC-USDT" : "BTCUSDT";
+      const built = buildSpotUpstreamRequest(exchange, params(`action=book&symbol=${symbol}&limit=5&rpi=1`));
+      expect(typeof built).not.toBe("string");
+      if (typeof built !== "string") expect(built.url).toBe(expected);
+    }
+  });
+
+  test("rejects rpi book requests for exchanges without an RPI endpoint", () => {
+    expect(buildSpotUpstreamRequest("hyperliquid", params("action=book&symbol=BTC&limit=5&rpi=1"))).toBe("RPI book not supported for this exchange");
+    expect(buildSpotUpstreamRequest("lighter", params("action=book&marketId=1&limit=5&rpi=1"))).toBe("RPI book not supported for this exchange");
+    expect(buildSpotUpstreamRequest("binance", params("action=book&symbol=BTCUSDT&limit=5&rpi=1"))).toBe("RPI book not supported for this exchange");
+  });
+});

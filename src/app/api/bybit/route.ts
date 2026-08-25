@@ -34,6 +34,7 @@ const ACTIONS: Record<string, ActionSpec> = {
   kline: { path: "/v5/market/kline", allowed: ["symbol", "interval", "start", "end", "limit"], required: ["symbol", "interval"] },
   "premium-index-price-kline": { path: "/v5/market/premium-index-price-kline", allowed: ["symbol", "interval", "start", "end", "limit"], required: ["symbol", "interval"] },
   orderbook: { path: "/v5/market/orderbook", allowed: ["symbol", "limit"], required: ["symbol"] },
+  "rpi-orderbook": { path: "/v5/market/rpi_orderbook", allowed: ["symbol", "limit"], required: ["symbol"] },
 };
 
 function badRequest(message: string) {
@@ -90,6 +91,7 @@ export async function GET(request: NextRequest) {
     kline: "1000",
     "premium-index-price-kline": "200",
     orderbook: "100",
+    "rpi-orderbook": "50",
   };
   const limitMax: Record<string, number> = {
     instruments: 1000,
@@ -97,6 +99,8 @@ export async function GET(request: NextRequest) {
     kline: 1000,
     "premium-index-price-kline": 1000,
     orderbook: 1000,
+    // V5 RPI 订单簿最多 50 档。
+    "rpi-orderbook": 50,
   };
   const limit = params.get("limit") ?? limitDefaults[actionName] ?? null;
   if (limit !== null && !integerInRange(limit, 1, limitMax[actionName] ?? 1000)) return badRequest("Invalid limit");

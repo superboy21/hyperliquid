@@ -1,9 +1,10 @@
 import type { CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
 import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
 import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
+import { clampRpiDepth, normalizeRpiSplitLevels, type BookMode } from "@/lib/rpi-book";
 
 export type BybitCandleInterval = "1m" | "5m" | "1h" | "4h" | "1d" | "1w";
-export type BybitAction = "instruments" | "tickers" | "funding-history" | "kline" | "premium-index-price-kline" | "orderbook";
+export type BybitAction = "instruments" | "tickers" | "funding-history" | "kline" | "premium-index-price-kline" | "orderbook" | "rpi-orderbook";
 
 export interface BybitInstrument {
   symbol?: string;
@@ -400,6 +401,7 @@ const BYBIT_ACTION_PATHS: Record<BybitAction, string> = {
   kline: "/v5/market/kline",
   "premium-index-price-kline": "/v5/market/premium-index-price-kline",
   orderbook: "/v5/market/orderbook",
+  "rpi-orderbook": "/v5/market/rpi_orderbook",
 };
 const BYBIT_ACTION_DEFAULTS: Partial<Record<BybitAction, Record<string, string>>> = {
   instruments: { status: "Trading", limit: "1000" },
@@ -407,6 +409,8 @@ const BYBIT_ACTION_DEFAULTS: Partial<Record<BybitAction, Record<string, string>>
   kline: { limit: "1000" },
   "premium-index-price-kline": { limit: "200" },
   orderbook: { limit: "100" },
+  // RPI 订单簿最多 50 档（limit ∈ [1, 50]）。
+  "rpi-orderbook": { limit: "50" },
 };
 
 export function buildBybitUrl(action: BybitAction, params: Record<string, string> = {}): string {
@@ -426,6 +430,7 @@ const BYBIT_PROXY_ALLOWED_PARAMS: Record<BybitAction, readonly string[]> = {
   kline: ["symbol", "interval", "start", "end", "limit"],
   "premium-index-price-kline": ["symbol", "interval", "start", "end", "limit"],
   orderbook: ["symbol", "limit"],
+  "rpi-orderbook": ["symbol", "limit"],
 };
 
 /** Builds the same-origin proxy URL with exactly the allowlisted params (never category/status). */
@@ -830,6 +835,20 @@ export function normalizeBybitOrderBook(payload: unknown): NormalizedBybitOrderB
 }
 
 /**
+ * Bybit RPI 订单簿（/v5/market/rpi_orderbook）：与普通盘口同为 result.{b,a} 结构，
+ * 但每档是 [price, 非RPI数量, RPI数量] 三列，含 RPI 的总数量 = 非RPI + RPI。
+ */
+export function normalizeBybitRpiOrderBook(payload: unknown): NormalizedBybitOrderBook {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new TypeError("Malformed Bybit RPI order book");
+  const object = payload as { a?: unknown; b?: unknown };
+  const toLevel = (level: { price: number; quantity: number }): NormalizedBybitBookLevel => ({ price: level.price, baseQty: level.quantity });
+  return {
+    asks: normalizeRpiSplitLevels(object.a, "ask").map(toLevel),
+    bids: normalizeRpiSplitLevels(object.b, "bid").map(toLevel),
+  };
+}
+
+/**
  * Bybit perpetual depth policy, delegated to the shared impact-depth registry
  * (STANDARD_PERP_IMPACT_DEPTH_LIMITS.Bybit = 100, MAX = 500), which documents
  * the V5 linear orderbook's accepted level set. Kept as thin compatibility
@@ -842,8 +861,10 @@ export function resolveBybitImpactDepth(mode: "standard" | "max" = "standard"): 
   return resolvePerpImpactDepth("Bybit", mode);
 }
 
-export async function fetchBybitOrderBook(rawSymbol: string, limit = resolveBybitImpactDepth(), signal?: AbortSignal, request: BybitRequest = requestBybit) {
-  return normalizeBybitOrderBook(await request("orderbook", { symbol: rawSymbol, limit: String(Math.max(1, Math.min(1000, Math.trunc(limit)))) }, signal));
+export async function fetchBybitOrderBook(rawSymbol: string, limit = resolveBybitImpactDepth(), signal?: AbortSignal, request: BybitRequest = requestBybit, bookMode: BookMode = "normal") {
+  const action = bookMode === "rpi" ? "rpi-orderbook" : "orderbook";
+  const payload = await request(action, { symbol: rawSymbol, limit: String(Math.max(1, Math.min(1000, Math.trunc(limit)))) }, signal);
+  return bookMode === "rpi" ? normalizeBybitRpiOrderBook(payload) : normalizeBybitOrderBook(payload);
 }
 
 export function computeBybitBboSpread(bestBid?: number | null, bestAsk?: number | null): number | null {
@@ -961,23 +982,30 @@ export function fetchBybitImpactSpreadDetail(
   signal?: AbortSignal,
   request?: BybitRequest,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<OrderBookImpactDetailResult>;
 export function fetchBybitImpactSpreadDetail(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<OrderBookImpactDetailResult>;
 export async function fetchBybitImpactSpreadDetail(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestOrLimit: BybitRequest | number = requestBybit,
-  requestedLimit: number = resolveBybitImpactDepth(),
+  requestedLimitOrBookMode: number | BookMode = resolveBybitImpactDepth(),
+  bookMode: BookMode = "normal",
 ): Promise<OrderBookImpactDetailResult> {
   const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBybit;
-  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
-  const book = await fetchBybitOrderBook(rawSymbol, limit, signal, request);
+  const limit = typeof requestOrLimit === "number"
+    ? requestOrLimit
+    : typeof requestedLimitOrBookMode === "number" ? requestedLimitOrBookMode : resolveBybitImpactDepth();
+  const mode = typeof requestedLimitOrBookMode === "string" ? requestedLimitOrBookMode : bookMode;
+  const depth = mode === "rpi" ? clampRpiDepth("Bybit", "perp", limit) : limit;
+  const book = await fetchBybitOrderBook(rawSymbol, depth, signal, request, mode);
   return computeBybitImpactSpreadDetail(book, notionalUsd);
 }
 
@@ -987,23 +1015,29 @@ export function fetchBybitImpactSpread(
   signal?: AbortSignal,
   request?: BybitRequest,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<BybitImpactSpreadResult>;
 export function fetchBybitImpactSpread(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestedLimit?: number,
+  bookMode?: BookMode,
 ): Promise<BybitImpactSpreadResult>;
 export async function fetchBybitImpactSpread(
   rawSymbol: string,
   notionalUsd: number,
   signal?: AbortSignal,
   requestOrLimit: BybitRequest | number = requestBybit,
-  requestedLimit: number = resolveBybitImpactDepth(),
+  requestedLimitOrBookMode: number | BookMode = resolveBybitImpactDepth(),
+  bookMode: BookMode = "normal",
 ): Promise<BybitImpactSpreadResult> {
   const request = typeof requestOrLimit === "function" ? requestOrLimit : requestBybit;
-  const limit = typeof requestOrLimit === "number" ? requestOrLimit : requestedLimit;
-  const detail = await fetchBybitImpactSpreadDetail(rawSymbol, notionalUsd, signal, request, limit);
+  const limit = typeof requestOrLimit === "number"
+    ? requestOrLimit
+    : typeof requestedLimitOrBookMode === "number" ? requestedLimitOrBookMode : resolveBybitImpactDepth();
+  const mode = typeof requestedLimitOrBookMode === "string" ? requestedLimitOrBookMode : bookMode;
+  const detail = await fetchBybitImpactSpreadDetail(rawSymbol, notionalUsd, signal, request, limit, mode);
   if (detail === null || detail === "insufficient") return detail;
   return detail.spread;
 }

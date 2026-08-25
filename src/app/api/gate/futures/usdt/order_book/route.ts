@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   const interval = searchParams.get("interval");
   const limit = searchParams.get("limit") || "20";
   const withBookParam = interval === "book" || searchParams.get("book") === "1";
+  const rpi = searchParams.get("rpi") === "1";
 
   if (!contract) {
     return NextResponse.json(
@@ -32,7 +33,9 @@ export async function GET(request: NextRequest) {
 
   for (const baseUrl of GATE_API_URLS) {
     try {
-      const url = `${baseUrl}/futures/usdt/order_book?${query}`;
+      // rpi=1 时读取含 RPI 订单的盘口（/futures/usdt/rpi_order_book）；否则普通盘口。
+      const bookPath = rpi ? "rpi_order_book" : "order_book";
+      const url = `${baseUrl}/futures/usdt/${bookPath}?${query}`;
 
       const response = await proxyFetch(url, {
         timeout: 10_000,
