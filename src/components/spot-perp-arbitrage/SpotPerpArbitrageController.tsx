@@ -259,7 +259,7 @@ export default function SpotPerpArbitrageController() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [spotQuote, setSpotQuote] = useState<SpotQuoteFilter>(DEFAULT_SPOT_QUOTE_FILTER);
   const [marketFilter, setMarketFilter] = useState<MarketKindFilter>("all");
-  const [excludedExchanges, setExcludedExchanges] = useState<ReadonlySet<ArbitrageExchange>>(new Set());
+  const [selectedExchanges, setSelectedExchanges] = useState<ReadonlySet<ArbitrageExchange>>(new Set());
   const [universe, setUniverse] = useState<ArbitrageMarket[]>([]);
   const [perpUniverseState, setPerpUniverseState] = useState<UniverseState>("loading");
   const [spotUniverseState, setSpotUniverseState] = useState<UniverseState>("loading");
@@ -381,11 +381,11 @@ export default function SpotPerpArbitrageController() {
     setChartError(null);
     setChartRange("1y");
     setExactTimeSelection(null);
-  }, [query, spotQuote, marketFilter, excludedExchanges]);
+  }, [query, spotQuote, marketFilter, selectedExchanges]);
 
   const searchResult = useMemo(
-    () => searchArbitrageMarkets(universe, debouncedQuery, spotQuote, marketFilter, excludedExchanges),
-    [debouncedQuery, spotQuote, marketFilter, excludedExchanges, universe],
+    () => searchArbitrageMarkets(universe, debouncedQuery, spotQuote, marketFilter, selectedExchanges),
+    [debouncedQuery, spotQuote, marketFilter, selectedExchanges, universe],
   );
   const querySettled = query === debouncedQuery;
   const validSearch = querySettled && (searchResult.query.kind === "normal" || searchResult.query.kind === "combo");
@@ -910,7 +910,7 @@ export default function SpotPerpArbitrageController() {
   };
 
   const toggleExchange = (exchange: ArbitrageExchange) => {
-    setExcludedExchanges((current) => {
+    setSelectedExchanges((current) => {
       const next = new Set(current);
       if (next.has(exchange)) next.delete(exchange);
       else next.add(exchange);
@@ -923,10 +923,9 @@ export default function SpotPerpArbitrageController() {
     if (!querySettled) return "正在筛选现货与永续市场…";
     if (searchResult.query.kind === "invalid") return "组合查询只能包含一个 “-” 或 “/”，且左右两侧都要有关键词，例如 BTC-ETH 或 BTC/USDT。";
     if (perpUniverseState === "loading" || spotUniverseState === "loading") return "市场列表仍在后台加载，结果会自动补充。";
-    if (excludedExchanges.size === ALL_EXCHANGES.length) return "已排除全部交易所，请重新勾选至少一个交易所。";
     if (searchResult.markets.length === 0) return marketFilter !== "all"
-      ? `没有找到与“${query.trim()}”匹配的${marketFilter === "spot" ? "现货" : "永续"}市场，请尝试其他关键词或切换只看模式。`
-      : `没有找到与“${query.trim()}”匹配的市场，请尝试币种简称或调整现货报价币。`;
+      ? `没有找到与“${query.trim()}”匹配的${marketFilter === "spot" ? "现货" : "永续"}市场，请尝试其他关键词、切换只看模式或调整交易所选择。`
+      : `没有找到与“${query.trim()}”匹配的市场，请尝试币种简称、调整现货报价币或交易所选择。`;
     return null;
   })();
 
@@ -985,18 +984,20 @@ export default function SpotPerpArbitrageController() {
           </div>
         </div>
         <div className="mt-2 flex min-h-5 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500" aria-live="polite">
-          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="按交易所筛选">
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="交易所筛选：可多选，未选择表示全部交易所">
+            <span className="mr-1 text-gray-500">交易所（可多选；未选择表示全部）</span>
             {ALL_EXCHANGES.map((exchange) => {
-              const excluded = excludedExchanges.has(exchange);
+              const selected = selectedExchanges.has(exchange);
               return (
                 <button
                   key={exchange}
                   type="button"
-                  aria-pressed={!excluded}
+                  aria-pressed={selected}
                   onClick={() => toggleExchange(exchange)}
-                  className={`rounded-md border px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${excluded ? "border-gray-800 bg-gray-900/60 text-gray-600 line-through" : "border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-500 hover:text-white"}`}
+                  className={`rounded-md border px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${selected ? "border-violet-500/70 bg-violet-600/20 text-violet-200" : "border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500 hover:text-white"}`}
+                  title={selected ? `已选择 ${exchange}；结果包含所有已选交易所；再次点击取消选择` : `选择 ${exchange}；结果将包含所有已选交易所；再次点击取消选择`}
                 >
-                  {exchange}
+                  {selected ? "✓ " : ""}{exchange}
                 </button>
               );
             })}
