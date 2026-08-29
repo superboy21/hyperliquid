@@ -271,6 +271,11 @@ Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券�
 
 ## 更新日志
 
+### v2026.08.30
+- 搜索页交易所筛选改为包含式多选：选中一个或多个交易所时仅显示其并集，未选中任何交易所则显示全部；再次点击已选项可取消选中，全部取消后恢复全量
+- 更新筛选文案与按钮状态：新增「交易所（可多选；未选择表示全部）」标签，选中状态使用高亮勾选与中英文提示，空结果文案同步提示交易所选择
+- 验证通过：454 项测试、TypeScript 类型检查、ESLint
+
 ### v2026.08.29
 - Bitget Reality rToken 周末定价修正：UTC 周六/周日的 Top 与 Impact 改用 Bitget 公共 V3 SPOT orderbook（`GET /api/v3/market/orderbook?category=SPOT`，解析 `data.b`/`data.a`，安全上限 150 档），通过严格的 Bitget 专用 `realityBook` 上游动作实现，保留 direct-first + 代理回退
 - 失败、空或缺少可用买卖两侧时严格不回退 ticker BBO、RPI 或旧 V2 订单簿；该公共 V3 盘口不是经认证的 Reality canonical depth
