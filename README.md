@@ -272,7 +272,10 @@ Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券�
 ## 更新日志
 
 ### v2026.08.29
-- Bitget Reality rToken 周末定价修正：UTC 周六/周日的 Top 与 Impact 改用公共 V3 SPOT orderbook（`data.b` / `data.a`，最大 150 档），失败或无完整盘口时不再回退 ticker BBO、RPI 或旧 V2；该数据不是认证的 Reality canonical depth
+- Bitget Reality rToken 周末定价修正：UTC 周六/周日的 Top 与 Impact 改用 Bitget 公共 V3 SPOT orderbook（`GET /api/v3/market/orderbook?category=SPOT`，解析 `data.b`/`data.a`，安全上限 150 档），通过严格的 Bitget 专用 `realityBook` 上游动作实现，保留 direct-first + 代理回退
+- 失败、空或缺少可用买卖两侧时严格不回退 ticker BBO、RPI 或旧 V2 订单簿；该公共 V3 盘口不是经认证的 Reality canonical depth
+- 工作日保留 ticker BBO 假想盘口（`$10000` 名义深度）及既有 fallback，非 Reality 市场与其他交易所行为不变；周末路径绕过 RPI 重试与回退提示
+- 验证通过：454 项测试、TypeScript 类型检查、ESLint、Next.js 生产构建及 RAAPLUSDT V3 实时盘口冒烟
 
 ### v2026.08.26
 - Impact 策略推荐新增组合资金费率列：支持 2 天均值（默认）、最新结算、预测、7 天与 30 天均值五种费率来源，并按各腿结算周期年化（现货腿按 0 处理）
