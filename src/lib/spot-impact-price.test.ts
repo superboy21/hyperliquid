@@ -7,6 +7,10 @@ const row: SpotMarketRow = {
   rawSymbol: "BTCUSDT", marketKey: "BTCUSDT", midPrice: 100, change24h: 0, quoteVolume: 0,
   baseVolume: 0, fetchedAt: 1,
 };
+const FRIDAY = Date.UTC(2026, 7, 28, 12);
+const SATURDAY = Date.UTC(2026, 7, 29, 12);
+const SUNDAY = Date.UTC(2026, 7, 30, 12);
+const MONDAY = Date.UTC(2026, 7, 31, 12);
 
 afterEach(() => {
   (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
@@ -95,7 +99,7 @@ describe("Bitget Reality token impact pricing", () => {
       urls.push(String(input));
       return Response.json({ data: [] });
     });
-    const detail = await fetchSpotImpactSpreadDetail(realityRow, 1000);
+    const detail = await fetchSpotImpactSpreadDetail(realityRow, 1000, undefined, "standard", "normal", FRIDAY);
     expect(detail !== null && typeof detail === "object").toBe(true);
     if (detail !== null && typeof detail === "object") {
       expect(detail.bidPrice).toBe(309.79);
@@ -103,12 +107,12 @@ describe("Bitget Reality token impact pricing", () => {
       expect(detail.spread).toBeCloseTo(((309.8 - 309.79) / ((309.79 + 309.8) / 2)) * 100, 6);
     }
     expect(urls).toHaveLength(0);
-    expect(await fetchSpotImpactSpread(realityRow, 1000)).toBeCloseTo(((309.8 - 309.79) / ((309.79 + 309.8) / 2)) * 100, 6);
+    expect(await fetchSpotImpactSpread(realityRow, 1000, undefined, "standard", "normal", FRIDAY)).toBeCloseTo(((309.8 - 309.79) / ((309.79 + 309.8) / 2)) * 100, 6);
   });
 
   test("returns insufficient when the notional exceeds the 10000 USD Reality BBO cap", async () => {
-    expect(await fetchSpotImpactSpreadDetail(realityRow, 20000)).toBe("insufficient");
-    expect(await fetchSpotImpactSpread(realityRow, 20000)).toBe("insufficient");
+    expect(await fetchSpotImpactSpreadDetail(realityRow, 20000, undefined, "standard", "normal", FRIDAY)).toBe("insufficient");
+    expect(await fetchSpotImpactSpread(realityRow, 20000, undefined, "standard", "normal", FRIDAY)).toBe("insufficient");
   });
 
   test("falls back to the order book when a Reality token has no ticker BBO", async () => {
@@ -119,12 +123,71 @@ describe("Bitget Reality token impact pricing", () => {
       return Response.json({ data: { bids: [["99", "20"]], asks: [["101", "20"]] } });
     });
     const noBboRow: SpotMarketRow = { ...realityRow, bestBid: undefined, bestAsk: undefined };
-    const detail = await fetchSpotImpactSpreadDetail(noBboRow, 1000);
+    const detail = await fetchSpotImpactSpreadDetail(noBboRow, 1000, undefined, "standard", "normal", FRIDAY);
     expect(detail !== null && typeof detail === "object").toBe(true);
     if (detail !== null && typeof detail === "object") {
       expect(detail.bidPrice).toBe(99);
       expect(detail.askPrice).toBe(101);
     }
     expect(urls.length).toBeGreaterThan(0);
+  });
+
+  test("uses Bitget public V3 b/a depth for weekend Reality Impact and overrides RPI mode", async () => {
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/api/v3/market/orderbook")) return Response.json({ data: { b: [["99", "20"]], a: [["101", "20"]] } });
+      return Response.json({ data: [] });
+    });
+    const detail = await fetchSpotImpactSpreadDetail(realityRow, 1000, undefined, "max", "rpi", SATURDAY);
+    expect(detail !== null && typeof detail === "object").toBe(true);
+    if (detail !== null && typeof detail === "object") {
+      expect(detail.bidPrice).toBe(99);
+      expect(detail.askPrice).toBe(101);
+    }
+    const bookUrl = urls.find((url) => url.includes("/api/v3/market/orderbook"));
+    expect(bookUrl).toBeDefined();
+    expect(new URL(bookUrl!).searchParams.get("category")).toBe("SPOT");
+    expect(new URL(bookUrl!).searchParams.get("limit")).toBe("150");
+    expect(bookUrl).not.toContain("rpi=1");
+    expect(urls.some((url) => url.includes("/api/v2/spot/market/orderbook") || url.includes("rpi-orderbook"))).toBe(false);
+  });
+
+  test("fails closed on weekend Reality V3 failure or empty depth without ticker/V2 fallback", async () => {
+    for (const makeResponse of [
+      () => Response.json({ data: { b: [], a: [] } }),
+      () => new Response(null, { status: 500 }),
+    ]) {
+      (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+      const urls: string[] = [];
+      spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        urls.push(url);
+        if (url.includes("/api/v3/market/orderbook")) return makeResponse();
+        return Response.json({ data: [] });
+      });
+      expect(await fetchSpotImpactSpread(realityRow, 1000, undefined, "max", "rpi", SUNDAY)).toBeNull();
+      expect(await fetchSpotImpactSpreadDetail(realityRow, 1000, undefined, "max", "rpi", SUNDAY)).toBeNull();
+      expect(urls.some((url) => url.includes("/api/v2/spot/market/orderbook") || url.includes("rpi-orderbook"))).toBe(false);
+    }
+  });
+
+  test("keeps Monday-Friday Reality ticker BBO and non-Reality Bitget V2 impact behavior", async () => {
+    expect(await fetchSpotImpactSpread(realityRow, 1000, undefined, "standard", "normal", MONDAY)).toBeCloseTo(
+      ((309.8 - 309.79) / ((309.79 + 309.8) / 2)) * 100, 6,
+    );
+    const urls: string[] = [];
+    (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/api/v2/spot/market/orderbook")) return Response.json({ data: { bids: [["99", "20"]], asks: [["101", "20"]] } });
+      return Response.json({ data: [] });
+    });
+    const normalRow = { ...realityRow, isRealityToken: false };
+    expect(await fetchSpotImpactSpread(normalRow, 1000, undefined, "standard", "normal", SATURDAY)).toBeCloseTo(2, 10);
+    expect(urls.some((url) => url.includes("/api/v2/spot/market/orderbook"))).toBe(true);
+    expect(urls.some((url) => url.includes("/api/v3/market/orderbook"))).toBe(false);
   });
 });

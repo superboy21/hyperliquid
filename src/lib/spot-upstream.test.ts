@@ -83,6 +83,26 @@ describe("Bitget Spot instrument requests", () => {
   });
 });
 
+describe("Bitget Reality weekend upstream requests", () => {
+  test("allowlists the public V3 SPOT orderbook action and clamps to the safe 150-level cap", () => {
+    const built = buildSpotUpstreamRequest("bitget", params("action=realityBook&symbol=RAAPLUSDT&limit=999"));
+    expect(typeof built).not.toBe("string");
+    if (typeof built !== "string") {
+      const url = new URL(built.url);
+      expect(url.pathname).toBe("/api/v3/market/orderbook");
+      expect(url.searchParams.get("category")).toBe("SPOT");
+      expect(url.searchParams.get("symbol")).toBe("RAAPLUSDT");
+      expect(url.searchParams.get("limit")).toBe("150");
+    }
+  });
+
+  test("keeps the action Bitget-only and rejects RPI/unknown parameters", () => {
+    expect(buildSpotUpstreamRequest("binance", params("action=realityBook&symbol=BTCUSDT"))).toBe("Unknown or missing action");
+    expect(buildSpotUpstreamRequest("bitget", params("action=realityBook&symbol=RAAPLUSDT&rpi=1"))).toBe("Unknown or repeated parameter");
+    expect(buildSpotUpstreamRequest("bitget", params("action=realityBook"))).toBe("Missing symbol");
+  });
+});
+
 describe("RPI spot book requests", () => {
   test("routes rpi=1 to the dedicated RPI endpoints per exchange", () => {
     const cases: Array<[string, string]> = [

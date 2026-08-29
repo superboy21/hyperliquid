@@ -29,9 +29,8 @@ export interface SpotMarketRow {
   baseVolume: number;
   fetchedAt: number;
   /**
-   * Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）。这类标的的真实可成交
-   * 报价在 ticker BBO（锚定美股盘口），公开 orderbook 仅是本地薄挂单簿、与成交脱节，
-   * 因此中间价/价差优先使用 ticker BBO，orderbook 仅作 fallback。
+   * Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）。工作日优先使用 ticker
+   * BBO；UTC 周末改用公共 V3 SPOT orderbook（不是认证的 Reality canonical depth）。
    */
   isRealityToken?: boolean;
 }
@@ -42,11 +41,11 @@ export interface SpotDetailResult {
   topSpreadSource: SpotTopSpreadSource | null;
   bestBid?: number;
   bestAsk?: number;
-  /** 实际使用的盘口数据源：RPI 端点失败回退普通端点时标记为 "normal"。 */
-  bookSource?: "rpi" | "normal";
+  /** 实际使用的盘口数据源：RPI 回退普通端点为 "normal"，Reality 周末公共 V3 为 "reality-v3"。 */
+  bookSource?: "rpi" | "normal" | "reality-v3";
 }
 
-export type SpotTopSpreadSource = "orderbook" | "ticker-bbo";
+export type SpotTopSpreadSource = "orderbook" | "ticker-bbo" | "reality-v3";
 
 const EXCHANGE_COLORS: Record<SpotExchangeName, string> = {
   Hyperliquid: "blue",
@@ -85,6 +84,17 @@ function number(value: unknown): number | undefined {
 function positive(value: unknown): number | undefined {
   const parsed = number(value);
   return parsed !== undefined && parsed > 0 ? parsed : undefined;
+}
+
+/** True only for UTC Saturday and Sunday. The argument keeps weekend behavior deterministic in tests. */
+export function isUtcWeekend(value: Date | number = new Date()): boolean {
+  const date = typeof value === "number" ? new Date(value) : value;
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+export function isBitgetRealityWeekend(row: Pick<SpotMarketRow, "exchange" | "isRealityToken">, value: Date | number = new Date()): boolean {
+  return row.exchange === "Bitget" && row.isRealityToken === true && isUtcWeekend(value);
 }
 
 function splitPair(symbol: string): [string, string] {
@@ -386,15 +396,15 @@ function spread(bestBid?: number, bestAsk?: number): number | null {
   return mid > 0 ? ((bestAsk - bestBid) / mid) * 100 : null;
 }
 
-function bookQuery(row: SpotMarketRow, limit: number, rpi = false): string {
-  const params = new URLSearchParams({ action: "book", limit: String(limit) });
+function bookQuery(row: SpotMarketRow, limit: number, rpi = false, action: "book" | "realityBook" = "book"): string {
+  const params = new URLSearchParams({ action, limit: String(limit) });
   if (rpi) params.set("rpi", "1");
   if (row.exchange === "Lighter" && row.marketId !== undefined) params.set("marketId", String(row.marketId));
   else params.set("symbol", row.rawSymbol);
   return params.toString();
 }
 
-function readBestPrices(exchange: SpotExchangeName, payload: unknown, rpi = false): { bestBid?: number; bestAsk?: number } {
+function readBestPrices(exchange: SpotExchangeName, payload: unknown, rpi = false, realityV3 = false): { bestBid?: number; bestAsk?: number } {
   const root = object(payload);
   let bids: unknown = root?.bids;
   let asks: unknown = root?.asks;
@@ -405,7 +415,7 @@ function readBestPrices(exchange: SpotExchangeName, payload: unknown, rpi = fals
   if (exchange === "Bitget" && root?.data) {
     const data = object(root.data);
     // RPI 端点（/api/v3/market/rpi-orderbook）使用 a/b 键名，与普通盘口的 bids/asks 不同。
-    if (rpi) { bids = data?.b; asks = data?.a; }
+    if (rpi || realityV3) { bids = data?.b; asks = data?.a; }
     else { bids = data?.bids; asks = data?.asks; }
   }
   if (exchange === "Bybit" && root?.result) {
@@ -413,8 +423,13 @@ function readBestPrices(exchange: SpotExchangeName, payload: unknown, rpi = fals
   }
   const priceAt = (levels: unknown): number | undefined => {
     if (!Array.isArray(levels) || levels.length === 0) return undefined;
-    const first = levels[0];
-    return positive(Array.isArray(first) ? first[0] : object(first)?.price ?? object(first)?.px);
+    for (const level of levels) {
+      const levelObject = object(level);
+      const price = positive(Array.isArray(level) ? level[0] : levelObject?.price ?? levelObject?.px);
+      const quantity = positive(Array.isArray(level) ? level[1] : levelObject?.quantity ?? levelObject?.qty ?? levelObject?.size ?? levelObject?.sz);
+      if (price !== undefined && (!realityV3 || quantity !== undefined)) return price;
+    }
+    return undefined;
   };
   return { bestBid: priceAt(bids), bestAsk: priceAt(asks) };
 }
@@ -447,11 +462,13 @@ async function fetchSpotBookTopOnce(
   row: SpotMarketRow,
   signal: AbortSignal | undefined,
   rpi: boolean,
+  action: "book" | "realityBook" = "book",
 ): Promise<{ bestBid?: number; bestAsk?: number } | null> {
+  if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
   try {
-    const response = await spotFetch(row.exchange, new URLSearchParams(bookQuery(row, 1, rpi)), { signal });
+    const response = await spotFetch(row.exchange, new URLSearchParams(bookQuery(row, 1, rpi, action)), { signal });
     if (!response.ok) return null;
-    return readBestPrices(row.exchange, await response.json(), rpi);
+    return readBestPrices(row.exchange, await response.json(), rpi, action === "realityBook");
   } catch (error) {
     if (signal?.aborted) throw error;
     return null;
@@ -467,7 +484,14 @@ async function fetchSpotBookTop(
   row: SpotMarketRow,
   signal: AbortSignal | undefined,
   bookMode: BookMode,
-): Promise<{ prices: { bestBid?: number; bestAsk?: number }; bookSource: "rpi" | "normal" }> {
+  now: Date | number = new Date(),
+): Promise<{ prices: { bestBid?: number; bestAsk?: number }; bookSource: "rpi" | "normal" | "reality-v3" }> {
+  if (isBitgetRealityWeekend(row, now)) {
+    // Weekend Reality pricing is exclusively public V3 depth. In particular,
+    // do not retry RPI or the legacy V2 book when this request is empty/fails.
+    const prices = await fetchSpotBookTopOnce(row, signal, false, "realityBook");
+    return { prices: prices ?? {}, bookSource: "reality-v3" };
+  }
   const rpiWanted = bookMode === "rpi" && hasRpiEndpoint(row.exchange, "spot");
   if (!rpiWanted) {
     const prices = await fetchSpotBookTopOnce(row, signal, false);
@@ -485,9 +509,23 @@ export async function fetchSpotDetail(
   row: SpotMarketRow,
   signal?: AbortSignal,
   bookMode: BookMode = "normal",
+  now: Date | number = new Date(),
 ): Promise<SpotDetailResult> {
   const candlesPromise = fetchSpotCandlesWithLimit(row, "1d", 30, signal);
   const tickerBbo = { bestBid: positive(row.bestBid), bestAsk: positive(row.bestAsk) };
+  if (isBitgetRealityWeekend(row, now)) {
+    const [candles, bookResult] = await Promise.all([candlesPromise, fetchSpotBookTop(row, signal, bookMode, now)]);
+    // A partial V3 BBO is not a usable quote; expose neither side so callers
+    // cannot accidentally interpret ticker data as a weekend fallback.
+    const prices = hasCompleteBbo(bookResult.prices) ? bookResult.prices : {};
+    return {
+      historicalVolatility: calculateSpotHistoricalVolatility(candles.candles),
+      topSpread: spread(prices.bestBid, prices.bestAsk),
+      topSpreadSource: hasCompleteBbo(prices) ? "reality-v3" : null,
+      bookSource: "reality-v3",
+      ...prices,
+    };
+  }
   // Bitget rToken 现货：真实可成交报价在 ticker BBO（锚定美股盘口），公开 orderbook
   // 只是本地薄挂单簿且与成交脱节，因此中间价与 Top 价差直接优先使用 ticker BBO。
   if (row.isRealityToken && hasCompleteBbo(tickerBbo)) {
@@ -499,7 +537,7 @@ export async function fetchSpotDetail(
       ...tickerBbo,
     };
   }
-  const [candles, bookResult] = await Promise.all([candlesPromise, fetchSpotBookTop(row, signal, bookMode)]);
+  const [candles, bookResult] = await Promise.all([candlesPromise, fetchSpotBookTop(row, signal, bookMode, now)]);
   let { prices, bookSource } = bookResult;
   let topSpreadSource: SpotTopSpreadSource | null = hasCompleteBbo(prices) ? "orderbook" : null;
   if (row.exchange === "Bitget" && topSpreadSource === null && await readBitgetReality(row, signal)) {

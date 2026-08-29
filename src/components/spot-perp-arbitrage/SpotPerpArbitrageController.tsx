@@ -12,6 +12,7 @@ import {
 import {
   fetchAllSpotMarkets,
   fetchSpotDetail,
+  isBitgetRealityWeekend,
   type SpotDetailResult,
   type SpotMarketRow,
 } from "@/lib/spot-search";
@@ -217,6 +218,10 @@ async function fetchImpactDetailForMarket(
   const fetchWith = (mode: BookMode) => market.kind === "perp"
     ? fetchSearchImpactSpreadDetail(market.source, signal, notional, "max", mode)
     : fetchSpotImpactSpreadDetail(market.source, notional, signal, "max", mode);
+  // Weekend Reality pricing has its own public V3 depth path. It must win over
+  // the UI's RPI mode so a failed V3 request cannot trigger RPI/V2 retries or a
+  // misleading RPI fallback warning.
+  if (market.kind === "spot" && isBitgetRealityWeekend(market.source)) return fetchWith("normal");
   if (bookMode !== "rpi" || !hasRpiEndpoint(market.source.exchange, kind)) {
     return fetchWith("normal");
   }

@@ -1,6 +1,7 @@
 import {
   computeOrderBookImpactDetail,
   computeOrderBookImpactSpread,
+  normalizeBookLevels,
   normalizeSpotOrderBook,
   resolveSpotImpactDepth,
   type ImpactDepthMode,
@@ -9,15 +10,14 @@ import {
 } from "./order-book-impact";
 import { clampRpiDepth, normalizeSpotRpiOrderBook, type BookMode } from "./rpi-book";
 import { spotFetch } from "./spot-fetch";
-import type { SpotExchangeName, SpotMarketRow } from "./spot-search";
+import { isBitgetRealityWeekend, type SpotExchangeName, type SpotMarketRow } from "./spot-search";
 
 export const SPOT_IMPACT_PRESETS = [200, 1000, 5000, 10000] as const;
 export type SpotImpactResult = number | "insufficient" | null;
 
 /**
- * Bitget rToken 现货的 BBO 假想流动性（USD）。
- * rToken 的真实可成交报价在 ticker BBO（锚定美股盘口），公开 orderbook 只是本地薄簿。
- * 策略计算中假设 BBO 的 bid/ask 各提供该名义金额的流动性。
+ * Bitget rToken 现货工作日的 BBO 假想流动性（USD）。
+ * UTC 周末改用公共 V3 SPOT orderbook；该假想盘口只保留工作日兼容行为。
  */
 export const REALITY_BBO_NOTIONAL_USD = 10000;
 
@@ -40,23 +40,41 @@ export function buildRealityTickerBboBook(row: Pick<SpotMarketRow, "bestBid" | "
   };
 }
 
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/** Bitget public V3 Reality weekend book: data.b/data.a, with both usable sides required. */
+export function normalizeBitgetRealityV3OrderBook(payload: unknown): NormalizedOrderBook | null {
+  const data = object(object(payload)?.data);
+  if (!data || !Array.isArray(data.b) || !Array.isArray(data.a)) return null;
+  const bids = normalizeBookLevels(data.b, "bid");
+  const asks = normalizeBookLevels(data.a, "ask");
+  return bids.length > 0 && asks.length > 0 ? { bids, asks } : null;
+}
+
 async function fetchSpotBook(
   row: SpotMarketRow,
   signal: AbortSignal | undefined,
   mode: ImpactDepthMode,
   bookMode: BookMode = "normal",
+  now: Date | number = new Date(),
 ): Promise<NormalizedOrderBook | null> {
+  if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
   const rawDepth = resolveSpotImpactDepth(row.exchange, mode);
-  const depth = bookMode === "rpi" ? clampRpiDepth(row.exchange, "spot", rawDepth) : rawDepth;
-  const params = new URLSearchParams({ action: "book", limit: String(depth) });
-  if (bookMode === "rpi") params.set("rpi", "1");
+  const realityWeekend = isBitgetRealityWeekend(row, now);
+  const depth = bookMode === "rpi" && !realityWeekend ? clampRpiDepth(row.exchange, "spot", rawDepth) : rawDepth;
+  const params = new URLSearchParams({ action: realityWeekend ? "realityBook" : "book", limit: String(depth) });
+  if (bookMode === "rpi" && !realityWeekend) params.set("rpi", "1");
   if (row.exchange === "Lighter" && row.marketId !== undefined) params.set("marketId", String(row.marketId));
   else params.set("symbol", row.rawSymbol);
   try {
     const response = await spotFetch(row.exchange, params, { signal });
     if (!response.ok) return null;
     const payload = await response.json();
-    return bookMode === "rpi"
+    return realityWeekend
+      ? normalizeBitgetRealityV3OrderBook(payload)
+      : bookMode === "rpi"
       ? normalizeSpotRpiOrderBook(row.exchange, payload)
       : normalizeSpotOrderBook(row.exchange, payload);
   } catch (error) {
@@ -71,6 +89,7 @@ export function fetchSpotImpactSpread(
   signal?: AbortSignal,
   mode?: ImpactDepthMode,
   bookMode?: BookMode,
+  now?: Date | number,
 ): Promise<SpotImpactResult>;
 /** Compatibility overload for existing consumers using the perp-style argument order. */
 export function fetchSpotImpactSpread(
@@ -79,6 +98,7 @@ export function fetchSpotImpactSpread(
   quoteNotional?: number,
   mode?: ImpactDepthMode,
   bookMode?: BookMode,
+  now?: Date | number,
 ): Promise<SpotImpactResult>;
 export async function fetchSpotImpactSpread(
   row: SpotMarketRow,
@@ -86,6 +106,7 @@ export async function fetchSpotImpactSpread(
   signalOrNotional?: AbortSignal | number,
   mode: ImpactDepthMode = "standard",
   bookMode: BookMode = "normal",
+  now: Date | number = new Date(),
 ): Promise<SpotImpactResult> {
   const quoteNotional = typeof quoteNotionalOrSignal === "number"
     ? quoteNotionalOrSignal
@@ -94,12 +115,13 @@ export async function fetchSpotImpactSpread(
     ? signalOrNotional as AbortSignal | undefined
     : quoteNotionalOrSignal;
   if (!Number.isFinite(quoteNotional) || quoteNotional <= 0) return null;
-  // rToken 现货：真实成本在 ticker BBO（假想 10000 USD 深度），orderbook 仅作 fallback。
-  if (row.isRealityToken) {
+  // Weekends use public V3 Reality depth exclusively. Weekdays retain the
+  // established ticker-BBO synthetic book and V2/RPI fallback behavior.
+  if (row.isRealityToken && !isBitgetRealityWeekend(row, now)) {
     const realityBook = buildRealityTickerBboBook(row);
     if (realityBook !== null) return computeOrderBookImpactSpread(realityBook, quoteNotional);
   }
-  const book = await fetchSpotBook(row, signal, mode, bookMode);
+  const book = await fetchSpotBook(row, signal, mode, bookMode, now);
   return book ? computeOrderBookImpactSpread(book, quoteNotional) : null;
 }
 
@@ -109,6 +131,7 @@ export function fetchSpotImpactSpreadDetail(
   signal?: AbortSignal,
   mode?: ImpactDepthMode,
   bookMode?: BookMode,
+  now?: Date | number,
 ): Promise<OrderBookImpactDetailResult>;
 /** Compatibility overload for existing consumers using the perp-style argument order. */
 export function fetchSpotImpactSpreadDetail(
@@ -117,6 +140,7 @@ export function fetchSpotImpactSpreadDetail(
   quoteNotional?: number,
   mode?: ImpactDepthMode,
   bookMode?: BookMode,
+  now?: Date | number,
 ): Promise<OrderBookImpactDetailResult>;
 export async function fetchSpotImpactSpreadDetail(
   row: SpotMarketRow,
@@ -124,6 +148,7 @@ export async function fetchSpotImpactSpreadDetail(
   signalOrNotional?: AbortSignal | number,
   mode: ImpactDepthMode = "standard",
   bookMode: BookMode = "normal",
+  now: Date | number = new Date(),
 ): Promise<OrderBookImpactDetailResult> {
   const quoteNotional = typeof quoteNotionalOrSignal === "number"
     ? quoteNotionalOrSignal
@@ -132,11 +157,11 @@ export async function fetchSpotImpactSpreadDetail(
     ? signalOrNotional as AbortSignal | undefined
     : quoteNotionalOrSignal;
   if (!Number.isFinite(quoteNotional) || quoteNotional <= 0) return null;
-  // rToken 现货：真实成本在 ticker BBO（假想 10000 USD 深度），orderbook 仅作 fallback。
-  if (row.isRealityToken) {
+  // See fetchSpotImpactSpread: Reality ticker-BBO pricing is weekday-only.
+  if (row.isRealityToken && !isBitgetRealityWeekend(row, now)) {
     const realityBook = buildRealityTickerBboBook(row);
     if (realityBook !== null) return computeOrderBookImpactDetail(realityBook, quoteNotional);
   }
-  const book = await fetchSpotBook(row, signal, mode, bookMode);
+  const book = await fetchSpotBook(row, signal, mode, bookMode, now);
   return book ? computeOrderBookImpactDetail(book, quoteNotional) : null;
 }

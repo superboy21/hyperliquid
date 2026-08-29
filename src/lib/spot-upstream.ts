@@ -3,7 +3,7 @@
 // direct-first fetcher (`spot-fetch.ts`). Pure URL/init construction with no
 // Next.js or server dependencies so it can run in the browser bundle.
 
-export type SpotAction = "list" | "candles" | "book" | "instrument" | "instruments";
+export type SpotAction = "list" | "candles" | "book" | "realityBook" | "instrument" | "instruments";
 export type SpotUpstreamRequest = { url: string; init: RequestInit & { timeout?: number } };
 export type ExchangeSlug = "hyperliquid" | "gateio" | "binance" | "lighter" | "okx" | "bitget" | "bybit";
 
@@ -21,6 +21,8 @@ const ACTION_PARAMS: Record<SpotAction, readonly string[]> = {
   list: [],
   candles: ["symbol", "marketId", "interval", "limit", "startTime", "endTime"],
   book: ["symbol", "marketId", "limit", "rpi"],
+  // Bitget Reality weekend path: public V3 SPOT depth, never the legacy V2 book.
+  realityBook: ["symbol", "limit"],
   instrument: ["symbol"],
   // Bitget SPOT 全量 instruments（一次返回全部币对，含 isReality 标记，用于识别 rToken）。
   instruments: [],
@@ -49,9 +51,10 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
   if (!EXCHANGES.has(exchangeValue)) return "Unknown exchange";
   const exchange = exchangeValue as ExchangeSlug;
   const actionValue = params.get("action");
-  if (actionValue !== "list" && actionValue !== "candles" && actionValue !== "book" && actionValue !== "instrument" && actionValue !== "instruments") return "Unknown or missing action";
+  if (actionValue !== "list" && actionValue !== "candles" && actionValue !== "book" && actionValue !== "realityBook" && actionValue !== "instrument" && actionValue !== "instruments") return "Unknown or missing action";
   const action = actionValue as SpotAction;
   if ((action === "instrument" || action === "instruments") && exchange !== "bitget") return "Unknown or missing action";
+  if (action === "realityBook" && exchange !== "bitget") return "Unknown or missing action";
   const allowed = new Set(["action", ...ACTION_PARAMS[action]]);
   for (const key of params.keys()) if (!allowed.has(key) || params.getAll(key).length !== 1) return "Unknown or repeated parameter";
   const symbol = params.get("symbol");
@@ -67,8 +70,9 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
   if (action === "candles" && (!interval || !INTERVALS.has(interval))) return "Invalid or missing interval";
   const rawLimit = params.get("limit");
   if (rawLimit !== null && integer(rawLimit) === null) return "Invalid limit";
-  const max = action === "book" ? BOOK_MAX[exchange] : CANDLE_MAX[exchange];
-  const limit = Math.min(integer(rawLimit) ?? (action === "book" ? max : Math.min(500, max)), max);
+  const isBookAction = action === "book" || action === "realityBook";
+  const max = isBookAction ? BOOK_MAX[exchange] : CANDLE_MAX[exchange];
+  const limit = Math.min(integer(rawLimit) ?? (isBookAction ? max : Math.min(500, max)), max);
   const start = params.get("startTime");
   const end = params.get("endTime");
   if ((start !== null && integer(start) === null) || (end !== null && integer(end) === null)) return "Invalid timestamp";
@@ -111,6 +115,11 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
     if (exchange === "binance" || exchange === "bitget") { if (start) query.set("startTime", start); if (end) query.set("endTime", end); }
     if (exchange === "okx") { if (start) query.set("after", start); if (end) query.set("before", end); }
     if (exchange === "bybit") { if (start) query.set("start", start); if (end) query.set("end", end); }
+  } else if (action === "realityBook") {
+    path = "/api/v3/market/orderbook";
+    query.set("category", "SPOT");
+    query.set("symbol", symbol!);
+    query.set("limit", String(limit));
   } else {
     const rpi = params.get("rpi") === "1";
     if (rpi) {

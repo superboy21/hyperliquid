@@ -214,13 +214,13 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 - Binance：前端通过 `/api/binance`、`/api/binance/klines` 和 `/api/binance/ccxt` 服务端路由访问公开市场数据
 - OKX：前端通过 `/api/okx` 和 `/api/okx/ccxt` 服务端路由访问公开市场数据
 - Lighter：公开 API 采用限速直连，并在失败时回退到 `/api/lighter`；指数价格使用 `/api/lighter/index-prices`
-- Bitget：前端统一请求 `/api/bitget`，由白名单服务端代理访问 V3 UTA 公开市场端点
+- Bitget：前端统一请求 `/api/bitget`，由白名单服务端代理访问 V3 UTA 公开市场端点；现货严格代理另允许 Bitget Reality 周末公共 V3 SPOT orderbook action
 
 这些公开市场数据无需交易所认证，但并非所有浏览器请求都直接发往交易所；服务端代理用于处理 CORS、参数白名单、超时和上游错误映射。
 
 ### 现货严格代理
 
-`/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX、Bitget 和 Bybit 七家交易所的严格现货门面，允许 `list`、`candles`、`book` 三类操作，以及仅 Bitget 可用的 `instrument` 元数据操作（用于核验 Reality instruments）；所有参数仍严格白名单校验，并校验交易所、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
+`/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX、Bitget 和 Bybit 七家交易所的严格现货门面，允许 `list`、`candles`、`book` 三类操作，以及仅 Bitget 可用的 `instrument` 元数据操作（用于核验 Reality instruments）和 `realityBook` 公共 V3 SPOT 订单簿操作；所有参数仍严格白名单校验，并校验交易所、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
 
 ### RPI 盘口模式
 
@@ -228,7 +228,7 @@ RPI（Retail Price Improvement）订单是改进散户成交价的特殊挂单�
 
 ### Bitget Reality rToken 现货
 
-Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券商路由至美股撮合，真实可成交报价在 ticker BBO（锚定美股盘口），公开 orderbook 只是本地薄挂单簿、与成交脱节。现货列表通过全量 instruments 的 `isReality` 标记识别 rToken（1 小时缓存），其中间价/价差与 Impact 计算优先使用 ticker BBO 构造的假想盘口（bid/ask 各 `$10000` 名义深度），orderbook 仅作 fallback。
+Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券商路由至美股撮合。现货列表通过全量 instruments 的 `isReality` 标记识别 rToken（1 小时缓存）。UTC 周一至周五仍优先使用 ticker BBO（锚定美股盘口），缺少 ticker BBO 时保留既有 orderbook fallback；UTC 周六、周日则 Top 与 Impact 专用 Bitget 公共 V3 `GET /api/v3/market/orderbook?category=SPOT&symbol=...&limit=...`，解析 `data.b` / `data.a`，失败、空或缺少可用两侧时严格不回退 ticker BBO、RPI 或旧 V2 orderbook。该 V3 公共盘口不是经过认证的 Reality canonical depth，不能据此宣称券商路由的真实可成交深度；安全最大请求深度为 150 档。
 
 ### Bitget V3 UTA
 
@@ -270,6 +270,9 @@ Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券�
 - 所有贡献者
 
 ## 更新日志
+
+### v2026.08.29
+- Bitget Reality rToken 周末定价修正：UTC 周六/周日的 Top 与 Impact 改用公共 V3 SPOT orderbook（`data.b` / `data.a`，最大 150 档），失败或无完整盘口时不再回退 ticker BBO、RPI 或旧 V2；该数据不是认证的 Reality canonical depth
 
 ### v2026.08.26
 - Impact 策略推荐新增组合资金费率列：支持 2 天均值（默认）、最新结算、预测、7 天与 30 天均值五种费率来源，并按各腿结算周期年化（现货腿按 0 处理）

@@ -6,6 +6,7 @@ import {
   fetchSpotDetail,
   filterSpotMarkets,
   getBitgetRealitySymbols,
+  isUtcWeekend,
   normalizeSpotMarkets,
   spotMarketIdentity,
   type SpotMarketRow,
@@ -22,8 +23,18 @@ const bitgetRow: SpotMarketRow = {
   rawSymbol: "BTCUSDT", marketKey: "BTCUSDT", midPrice: 100, bestBid: 99, bestAsk: 101,
   change24h: 1, quoteVolume: 10, baseVolume: 1, fetchedAt: 1,
 };
+const FRIDAY = Date.UTC(2026, 7, 28, 12);
+const SATURDAY = Date.UTC(2026, 7, 29, 12);
+const SUNDAY = Date.UTC(2026, 7, 30, 12);
+const MONDAY = Date.UTC(2026, 7, 31, 12);
 
 describe("spot search contracts", () => {
+  test("detects UTC weekend boundaries without local-time dependence", () => {
+    expect(isUtcWeekend(FRIDAY)).toBe(false);
+    expect(isUtcWeekend(SATURDAY)).toBe(true);
+    expect(isUtcWeekend(SUNDAY)).toBe(true);
+    expect(isUtcWeekend(MONDAY)).toBe(false);
+  });
   test("identity is exchange plus transport market key; filtering covers published market fields but never the exchange name", () => {
     const rows = [row, { ...row, exchange: "OKX" as const, exchangeColor: "emerald", rawSymbol: "ETH-USDC", marketKey: "ETH-USDC", pair: "ETH/USDC", baseAsset: "ETH", quoteAsset: "USDC" }];
     expect(spotMarketIdentity(row)).toBe("Binance:BTCUSDT");
@@ -243,7 +254,7 @@ describe("Bitget Reality token pricing", () => {
     });
     const detail = await fetchSpotDetail({
       ...bitgetRow, isRealityToken: true, bestBid: 309.79, bestAsk: 309.8,
-    });
+    }, undefined, "normal", FRIDAY);
     expect(detail).toMatchObject({ topSpreadSource: "ticker-bbo", bestBid: 309.79, bestAsk: 309.8 });
     expect(detail.topSpread).toBeCloseTo(((309.8 - 309.79) / ((309.79 + 309.8) / 2)) * 100, 6);
     expect(urls.some((url) => url.includes("orderbook"))).toBe(false);
@@ -256,7 +267,61 @@ describe("Bitget Reality token pricing", () => {
       if (url.includes("orderbook")) return Response.json({ data: { bids: [["99", "1"]], asks: [["101", "1"]] } });
       return Response.json({ data: [] });
     });
-    const detail = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true, bestBid: undefined, bestAsk: undefined });
+    const detail = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true, bestBid: undefined, bestAsk: undefined }, undefined, "normal", FRIDAY);
     expect(detail).toMatchObject({ topSpreadSource: "orderbook", bestBid: 99, bestAsk: 101 });
+  });
+
+  test("uses Bitget public V3 b/a depth for Reality Top on UTC weekends, regardless of RPI mode", async () => {
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/api/v3/market/orderbook")) return Response.json({ data: { b: [["99", "1"]], a: [["101", "1"]] } });
+      return Response.json({ data: [] });
+    });
+    const detail = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true }, undefined, "rpi", SATURDAY);
+    expect(detail).toMatchObject({ topSpreadSource: "reality-v3", bookSource: "reality-v3", bestBid: 99, bestAsk: 101 });
+    expect(urls.some((url) => url.includes("/api/v3/market/orderbook") && url.includes("category=SPOT") && url.includes("limit=1"))).toBe(true);
+    expect(urls.some((url) => url.includes("/api/v2/spot/market/orderbook") || url.includes("rpi-orderbook"))).toBe(false);
+  });
+
+  test("does not expose ticker BBO or legacy V2 depth when weekend Reality V3 depth is empty or fails", async () => {
+    for (const response of [
+      Response.json({ data: { b: [], a: [] } }),
+      new Response(null, { status: 503 }),
+    ]) {
+      (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+      const urls: string[] = [];
+      spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        urls.push(url);
+        if (url.includes("/api/v3/market/orderbook")) return response;
+        return Response.json({ data: [] });
+      });
+      const detail = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true }, undefined, "rpi", SUNDAY);
+      expect(detail.topSpread).toBeNull();
+      expect(detail.topSpreadSource).toBeNull();
+      expect(detail.bestBid).toBeUndefined();
+      expect(detail.bestAsk).toBeUndefined();
+      expect(urls.some((url) => url.includes("/api/v2/spot/market/orderbook") || url.includes("rpi-orderbook"))).toBe(false);
+    }
+  });
+
+  test("keeps weekday ticker BBO and non-Reality Bitget V2 behavior unchanged", async () => {
+    const ticker = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true }, undefined, "rpi", FRIDAY);
+    expect(ticker.topSpreadSource).toBe("ticker-bbo");
+
+    (globalThis.fetch as { mockRestore?: () => void }).mockRestore?.();
+    const urls: string[] = [];
+    spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/api/v2/spot/market/orderbook")) return Response.json({ data: { bids: [["99", "1"]], asks: [["101", "1"]] } });
+      return Response.json({ data: [] });
+    });
+    const normal = await fetchSpotDetail({ ...bitgetRow, isRealityToken: false }, undefined, "normal", SATURDAY);
+    expect(normal.topSpreadSource).toBe("orderbook");
+    expect(urls.some((url) => url.includes("/api/v2/spot/market/orderbook"))).toBe(true);
+    expect(urls.some((url) => url.includes("/api/v3/market/orderbook"))).toBe(false);
   });
 });
