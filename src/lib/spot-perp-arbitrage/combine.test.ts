@@ -62,7 +62,7 @@ describe("spot-containing combination", () => {
     const combined = spotResult(combineLoadedLegs(first, second, "spread"));
     expect(combined.composition).toBe("spot-spot");
     expect(combined.points).toHaveLength(1);
-    expect(combined.points[0]).toMatchObject({ openTime: 10, closeTime: 20, open: 6, close: 7 });
+    expect(combined.points[0]).toMatchObject({ openTime: 10, closeTime: 20, open: 6, close: 7, leg1Point: { close: 12 }, leg2Point: { close: 5 } });
     expect(combined.legProvenance).toHaveLength(2);
     expect(spotResult(combineLoadedLegs(spotLeg([rawCandle(1, 1, 1)]), spotLeg([rawCandle(2, 1, 1)]), "spread")).points).toEqual([]);
   });
@@ -128,6 +128,9 @@ describe("perp legacy delegation", () => {
       secondSource,
     );
     expect(combineLoadedLegs(first, second, "spread")).toEqual(alignComboData(first.original, second.original, "spread"));
+    const legacy = combineLoadedLegs(first, second, "spread");
+    expect("candles" in legacy ? legacy.leg1Points?.[0].close : null).toBe(12);
+    expect("candles" in legacy ? legacy.leg2Points?.[0].close : null).toBe(6);
   });
 
   test("retains finite sampleCount:0 funding for legacy parity", () => {

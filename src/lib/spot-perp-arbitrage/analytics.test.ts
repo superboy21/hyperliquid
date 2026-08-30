@@ -8,6 +8,7 @@ import {
 import { asPerpMarket, asSpotMarket } from "./model";
 import type { SearchExchangeRate } from "../search";
 import type { SpotMarketRow } from "../spot-search";
+import { calculateVolatilityParity } from "../combo-weighting";
 
 const perp = asPerpMarket({
   exchange: "Binance", exchangeColor: "yellow", symbol: "BTC", fundingRate: 0, markPrice: 1,
@@ -196,6 +197,34 @@ describe("legacy combo range", () => {
     expect(visible.secondQuoteTurnover?.map((point) => point.value)).toEqual([60]);
     expect(filterAlignedRange(legacy, "1d")).toEqual(visible);
     expect(filterLegacyComboRange(legacy, "all").fundingRates).toEqual(legacy.fundingRates);
+  });
+
+  test("trims retained raw legs with the finite preset used by the legacy chart", () => {
+    const hour = 3_600_000;
+    const day = 86_400_000;
+    const start = Date.UTC(2026, 0, 10);
+    const make = (openTime: number, close: number) => ({
+      openTime, closeTime: openTime + hour, open: String(close), high: String(close), low: String(close), close: String(close), volume: "1",
+    });
+    const rawFirst = [make(start - 2 * day, 20), make(start, 100), make(start + hour, 101), make(start + 2 * hour, 140)];
+    const rawSecond = [make(start - 2 * day, 20), make(start, 100), make(start + hour, 101), make(start + 2 * hour, 102)];
+    const legacy: ComboCandleResult = {
+      candles: rawFirst.map((point, index) => ({ ...point, open: String(Number(point.open) - Number(rawSecond[index].open)), close: String(Number(point.close) - Number(rawSecond[index].close)) })),
+      fundingRates: [],
+      leg1Points: rawFirst.map((point) => ({ ...point, open: Number(point.open), high: Number(point.high), low: Number(point.low), close: Number(point.close) })),
+      leg2Points: rawSecond.map((point) => ({ ...point, open: Number(point.open), high: Number(point.high), low: Number(point.low), close: Number(point.close) })),
+      interval: "1h", exchange: "Binance", symbol: "BTC-ETH", mode: "spread",
+      firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+      legProvenance: [] as never,
+    };
+    const visible = filterLegacyComboRange(legacy, "1d");
+    expect(visible.leg1Points?.map((point) => point.openTime)).toEqual([start, start + hour, start + 2 * hour]);
+    expect(visible.leg2Points?.map((point) => point.openTime)).toEqual([start, start + hour, start + 2 * hour]);
+    const parity = calculateVolatilityParity(visible.leg1Points ?? [], visible.leg2Points ?? []);
+    const all = calculateVolatilityParity(legacy.leg1Points ?? [], legacy.leg2Points ?? []);
+    expect(parity.ok).toBe(true);
+    expect(all.ok).toBe(true);
+    expect(parity.first.percent).not.toBe(all.first.percent);
   });
 });
 

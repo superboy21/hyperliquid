@@ -15,6 +15,11 @@ export interface CombinedPoint {
   leg1Turnover: LegTurnover | null;
   leg2Turnover: LegTurnover | null;
   minimumTurnover: number | null;
+  /** Raw aligned prices retained so chart-side weighting never reuses a combo. */
+  leg1Point?: LegCandlePoint;
+  leg2Point?: LegCandlePoint;
+  high?: number;
+  low?: number;
 }
 
 export interface SignedFundingObservation extends ActualFundingObservation {
@@ -131,6 +136,8 @@ function combineSpotContaining(
       minimumTurnover: firstTurnover && secondTurnover
         ? Math.min(firstTurnover.value, secondTurnover.value)
         : null,
+      leg1Point: firstPoint,
+      leg2Point: secondPoint,
     });
     alignedTimes.add(firstPoint.openTime);
   }

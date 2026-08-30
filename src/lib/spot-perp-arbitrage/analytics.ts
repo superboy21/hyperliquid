@@ -202,24 +202,61 @@ export function filterLegacyComboRange(
   result: ComboCandleResult,
   range: ArbitrageChartRange,
 ): ComboCandleResult {
+  const cloneAlignedLegPoints = (candles: typeof result.candles) => {
+    const candleTimes = new Set(candles.map((point) => point.openTime));
+    const first = result.leg1Points?.filter((point) => candleTimes.has(point.openTime));
+    const second = result.leg2Points?.filter((point) => candleTimes.has(point.openTime));
+    // Aligned results normally contain both arrays. If a hand-built legacy
+    // result has only one, preserve that optional field without inventing the
+    // other leg. When both exist, use their intersection to keep parity's
+    // visible point set exactly aligned with the displayed candles.
+    if (first && second) {
+      const secondTimes = new Set(second.map((point) => point.openTime));
+      const exactTimes = new Set(first.flatMap((point) => secondTimes.has(point.openTime) ? [point.openTime] : []));
+      return {
+        candles: candles.filter((point) => exactTimes.has(point.openTime)),
+        leg1Points: first.filter((point) => exactTimes.has(point.openTime)),
+        leg2Points: second.filter((point) => exactTimes.has(point.openTime)),
+      };
+    }
+    return {
+      candles,
+      ...(first ? { leg1Points: first } : {}),
+      ...(second ? { leg2Points: second } : {}),
+    };
+  };
+
   if (range === "all" || result.candles.length === 0) {
+    const aligned = cloneAlignedLegPoints([...result.candles]);
     return {
       ...result,
-      candles: [...result.candles],
+      candles: aligned.candles,
       fundingRates: [...result.fundingRates],
       ...(result.firstQuoteTurnover ? { firstQuoteTurnover: [...result.firstQuoteTurnover] } : {}),
       ...(result.secondQuoteTurnover ? { secondQuoteTurnover: [...result.secondQuoteTurnover] } : {}),
       ...(result.dashboardFundingRates ? { dashboardFundingRates: [...result.dashboardFundingRates] } : {}),
+      ...(aligned.leg1Points ? { leg1Points: aligned.leg1Points } : result.leg1Points ? { leg1Points: [] } : {}),
+      ...(aligned.leg2Points ? { leg2Points: aligned.leg2Points } : result.leg2Points ? { leg2Points: [] } : {}),
     };
   }
   const duration = RANGE_MS[range];
-  if (duration === null) return result;
+  if (duration === null) return filterLegacyComboRange(result, "all");
   const dataEnd = Math.max(...result.candles.map((point) => point.closeTime).filter(Number.isFinite));
-  if (!Number.isFinite(dataEnd)) return { ...result, candles: [], fundingRates: [] };
+  if (!Number.isFinite(dataEnd)) {
+    return {
+      ...result,
+      candles: [],
+      fundingRates: [],
+      ...(result.leg1Points ? { leg1Points: [] } : {}),
+      ...(result.leg2Points ? { leg2Points: [] } : {}),
+    };
+  }
   const cutoff = dataEnd - duration;
+  const rangedCandles = result.candles.filter((point) => point.openTime >= cutoff && point.openTime <= dataEnd);
+  const aligned = cloneAlignedLegPoints(rangedCandles);
   return {
     ...result,
-    candles: result.candles.filter((point) => point.openTime >= cutoff && point.openTime <= dataEnd),
+    candles: aligned.candles,
     fundingRates: result.fundingRates.filter((point) => point.time >= cutoff && point.time <= dataEnd),
     ...(result.firstQuoteTurnover
       ? { firstQuoteTurnover: result.firstQuoteTurnover.filter((point) => point.time >= cutoff && point.time <= dataEnd) }
@@ -230,6 +267,8 @@ export function filterLegacyComboRange(
     ...(result.dashboardFundingRates
       ? { dashboardFundingRates: result.dashboardFundingRates.filter((point) => point.time >= cutoff && point.time <= dataEnd) }
       : {}),
+    ...(aligned.leg1Points ? { leg1Points: aligned.leg1Points } : result.leg1Points ? { leg1Points: [] } : {}),
+    ...(aligned.leg2Points ? { leg2Points: aligned.leg2Points } : result.leg2Points ? { leg2Points: [] } : {}),
   };
 }
 

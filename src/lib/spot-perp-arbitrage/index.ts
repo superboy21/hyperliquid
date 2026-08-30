@@ -10,3 +10,4 @@ export * from "./selection";
 export * from "./series";
 export * from "./single-market-analytics";
 export * from "./strategy";
+export * from "../combo-weighting";

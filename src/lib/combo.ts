@@ -21,6 +21,18 @@ export interface ComboCandleResult extends SearchCandleResult {
   secondQuoteTurnover?: ComboAnalysisValuePoint[];
   dashboardFundingRates?: FundingRatePoint[];
   legProvenance: [CandleSourceProvenance, CandleSourceProvenance];
+  /** Aligned raw leg prices retained for mathematically correct reweighting. */
+  leg1Points?: ComboLegPricePoint[];
+  leg2Points?: ComboLegPricePoint[];
+}
+
+export interface ComboLegPricePoint {
+  openTime: number;
+  closeTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
 }
 
 export interface ComboAnalysisValuePoint {
@@ -103,6 +115,8 @@ export function alignComboData(
   }
 
   const alignedCandles: SearchCandlePoint[] = [];
+  const leg1Points: ComboLegPricePoint[] = [];
+  const leg2Points: ComboLegPricePoint[] = [];
   const firstQuoteTurnover: ComboAnalysisValuePoint[] = [];
   const secondQuoteTurnover: ComboAnalysisValuePoint[] = [];
   for (const { first: firstCandle, second: secondCandle } of candleMap.values()) {
@@ -135,6 +149,19 @@ export function alignComboData(
         volume: firstCandle.volume,
         ...(quoteVolume === undefined ? {} : { quoteVolume }),
       });
+    }
+
+    const firstOpen = Number(firstCandle.open);
+    const firstHigh = Number(firstCandle.high);
+    const firstLow = Number(firstCandle.low);
+    const firstClose = Number(firstCandle.close);
+    const secondOpen = Number(secondCandle.open);
+    const secondHigh = Number(secondCandle.high);
+    const secondLow = Number(secondCandle.low);
+    const secondClose = Number(secondCandle.close);
+    if ([firstOpen, firstClose, secondOpen, secondClose].every(Number.isFinite)) {
+      leg1Points.push({ openTime: firstCandle.openTime, closeTime: firstCandle.closeTime, open: firstOpen, high: Number.isFinite(firstHigh) ? firstHigh : Math.max(firstOpen, firstClose), low: Number.isFinite(firstLow) ? firstLow : Math.min(firstOpen, firstClose), close: firstClose });
+      leg2Points.push({ openTime: secondCandle.openTime, closeTime: secondCandle.closeTime, open: secondOpen, high: Number.isFinite(secondHigh) ? secondHigh : Math.max(secondOpen, secondClose), low: Number.isFinite(secondLow) ? secondLow : Math.min(secondOpen, secondClose), close: secondClose });
     }
 
     const firstTurnover = officialQuoteTurnover(firstCandle);
@@ -259,6 +286,8 @@ export function alignComboData(
     dashboardFundingRates,
     provenance: first.provenance,
     legProvenance: [sourceProvenance(first), sourceProvenance(second)],
+    leg1Points,
+    leg2Points,
   };
 }
 

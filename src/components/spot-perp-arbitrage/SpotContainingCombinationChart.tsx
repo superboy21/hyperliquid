@@ -8,6 +8,8 @@ import {
 } from "@/lib/spot-perp-arbitrage";
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
+import { combineWeightedOhlc } from "@/lib/combo-weighting";
+import { CombinationWeightControls, useCombinationWeighting } from "./CombinationWeightControls";
 
 interface Props {
   result: SpotContainingCombinationResult;
@@ -111,15 +113,39 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-export default function SpotContainingCombinationChart({ result, timeSelection = null, onTimeSelectionChange }: Props) {
+export default function SpotContainingCombinationChart({ result: sourceResult, timeSelection = null, onTimeSelectionChange }: Props) {
+  const firstLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg1Point ? [point.leg1Point] : []), [sourceResult.points]);
+  const secondLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg2Point ? [point.leg2Point] : []), [sourceResult.points]);
+  const weighting = useCombinationWeighting(firstLegPoints, secondLegPoints);
+  const weightedResult = useMemo(() => {
+    if (weighting.mode === "none") return sourceResult;
+    return {
+      ...sourceResult,
+      points: sourceResult.points.map((point) => {
+        const combined = point.leg1Point && point.leg2Point
+          ? combineWeightedOhlc(point.leg1Point, point.leg2Point, sourceResult.mode, weighting.weights)
+          : null;
+        return combined ? { ...point, open: combined.open, high: combined.high, low: combined.low, close: combined.close } : point;
+      }),
+    };
+  }, [sourceResult, weighting.mode, weighting.weights]);
+  const result = weightedResult;
   const chartRef = useRef<HTMLDivElement | null>(null);
   const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
   const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
   const pointerRef = useRef<{ pointerId: number; clientX: number; clientY: number; dragged: boolean } | null>(null);
   const selectionRef = useRef(timeSelection);
   const selectionChangeRef = useRef(onTimeSelectionChange);
+  const zoomRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
+  const weightingModeRef = useRef(weighting.mode);
+  const recomputeParityRef = useRef(weighting.recomputeParity);
+  useEffect(() => {
+    weightingModeRef.current = weighting.mode;
+    recomputeParityRef.current = weighting.recomputeParity;
+  }, [weighting.mode, weighting.recomputeParity]);
   useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
   useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
+  useEffect(() => { zoomRangeRef.current = null; }, [sourceResult]);
   const leg1Label = `${result.leg1.source.exchange} ${marketDisplaySymbol(result.leg1)}`;
   const leg2Label = `${result.leg2.source.exchange} ${marketDisplaySymbol(result.leg2)}`;
   const showAllSymbol =
@@ -139,7 +165,7 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
     const categories = result.points.map((point) => dateLabel(point.openTime, result.interval));
     const axisInterval = Math.max(0, Math.floor(result.points.length / 8));
     const candleData: CandleDatum[] = result.points.map((point) => ({
-      value: [point.open, point.close, Math.min(point.open, point.close), Math.max(point.open, point.close)],
+      value: [point.open, point.close, point.low ?? Math.min(point.open, point.close), point.high ?? Math.max(point.open, point.close)],
       raw: { open: point.open, close: point.close },
     }));
     const risingColors = result.points.map((point) => point.close >= point.open ? "rgba(139,92,246,.58)" : "rgba(239,68,68,.52)");
@@ -223,6 +249,8 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
       return lines.join("<br />");
     };
 
+    const openTimes = result.points.map((point) => point.openTime);
+    const preservedZoom = zoomRangeRef.current;
     chart.setOption({
       animation: false,
       backgroundColor: "transparent",
@@ -255,8 +283,8 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
         formatter: tooltipFormatter,
       },
       dataZoom: [
-        { type: "inside", xAxisIndex: [0, 1, 2], moveOnMouseMove: false },
-        { type: "slider", xAxisIndex: [0, 1, 2], bottom: 2, height: 15, borderColor: "#374151", fillerColor: "rgba(139,92,246,.14)" },
+        { type: "inside", xAxisIndex: [0, 1, 2], moveOnMouseMove: false, ...(preservedZoom ? { startValue: preservedZoom.startIndex, endValue: preservedZoom.endIndex } : {}) },
+        { type: "slider", xAxisIndex: [0, 1, 2], bottom: 2, height: 15, borderColor: "#374151", fillerColor: "rgba(139,92,246,.14)", ...(preservedZoom ? { startValue: preservedZoom.startIndex, endValue: preservedZoom.endIndex } : {}) },
       ],
       ...(typeof onTimeSelectionChange === "function" ? { brush: { brushType: "lineX", brushMode: "single", removeOnClick: false, xAxisIndex: [0, 1, 2], brushLink: "all" } } : {}),
       xAxis: [0, 1, 2].map((gridIndex) => ({
@@ -329,7 +357,6 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
             },
       ],
     });
-    const openTimes = result.points.map((point) => point.openTime);
     const focus = (selection: ChartTimeSelection | null, showTip = false, zoomRange = false) => {
       if (!selection) { chart.setOption({ series: [{ id: "exact-selection-candles", markArea: { data: [] } }] }); if (openTimes.length > 0) chart.dispatchAction({ type: "dataZoom", startValue: 0, endValue: openTimes.length - 1 }); return; }
       const indices = chartSelectionIndices(openTimes, selection);
@@ -345,21 +372,58 @@ export default function SpotContainingCombinationChart({ result, timeSelection =
     selectAtPixelRef.current = (point) => { if (!chart.containPixel({ gridIndex: 0 }, point) || openTimes.length === 0) return; const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point); const value = Array.isArray(converted) ? converted[0] : converted; const resolved = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value)); const start = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(openTimes.length - 1, resolved)) : 0; const nearest = openTimes.reduce((best, _candle, candidate) => { const px = Number(chart.convertToPixel({ xAxisIndex: 0 }, candidate)); const bestPx = Number(chart.convertToPixel({ xAxisIndex: 0 }, best)); return Number.isFinite(px) && Math.abs(px - point[0]) < Math.abs(bestPx - point[0]) ? candidate : best; }, start); commit(nearest, nearest, true); };
     if (typeof onTimeSelectionChange === "function") { chart.on("brushEnd", brushEnd); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); }
 
+    const onDataZoom = (event: any) => {
+      const zoom = event?.batch?.[0] ?? event;
+      const optionZoom = (chart.getOption().dataZoom as any[] | undefined)?.[0] ?? {};
+      const startValue = Number(zoom?.startValue ?? optionZoom.startValue);
+      const endValue = Number(zoom?.endValue ?? optionZoom.endValue);
+      const startPercent = Number(zoom?.start ?? optionZoom.start);
+      const endPercent = Number(zoom?.end ?? optionZoom.end);
+      const start = Number.isFinite(startValue) ? Math.max(0, Math.min(openTimes.length - 1, Math.round(startValue))) : Number.isFinite(startPercent) ? Math.round((startPercent / 100) * (openTimes.length - 1)) : 0;
+      const end = Number.isFinite(endValue) ? Math.max(start, Math.min(openTimes.length - 1, Math.round(endValue))) : Number.isFinite(endPercent) ? Math.max(start, Math.round((endPercent / 100) * (openTimes.length - 1))) : openTimes.length - 1;
+      const previous = zoomRangeRef.current;
+      if (previous?.startIndex === start && previous?.endIndex === end) return;
+      zoomRangeRef.current = { startIndex: start, endIndex: end };
+      if (weightingModeRef.current === "parity" && openTimes[start] !== undefined && openTimes[end] !== undefined) {
+        recomputeParityRef.current(openTimes[start], openTimes[end]);
+      }
+    };
+    chart.on("dataZoom", onDataZoom);
     const resizeObserver = new ResizeObserver(() => chart.resize());
     resizeObserver.observe(chartRef.current);
     return () => {
       resizeObserver.disconnect();
       if (typeof onTimeSelectionChange === "function") chart.off("brushEnd", brushEnd);
+      chart.off("dataZoom", onDataZoom);
       if (applySelectionRef.current === focus) applySelectionRef.current = null;
       selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [leg1Label, leg2Label, result, onTimeSelectionChange]);
+  }, [leg1Label, leg2Label, weightedResult, result.composition, result.funding, result.interval, result.mode, result.points, onTimeSelectionChange]);
 
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
   return (
     <div>
+      <CombinationWeightControls
+        firstLabel={leg1Label}
+        secondLabel={leg2Label}
+        mode={weighting.mode}
+        weights={weighting.weights}
+        parity={weighting.parity}
+        error={weighting.error}
+        customOpen={weighting.customOpen}
+        firstDraft={weighting.firstDraft}
+        secondDraft={weighting.secondDraft}
+        onToggleParity={() => {
+          const zoom = zoomRangeRef.current;
+          weighting.toggleParity(zoom ? result.points[zoom.startIndex]?.openTime : undefined, zoom ? result.points[zoom.endIndex]?.openTime : undefined);
+        }}
+        onToggleCustom={weighting.toggleCustom}
+        onFirstDraftChange={weighting.setFirstDraft}
+        onSecondDraftChange={weighting.setSecondDraft}
+        onApplyCustom={weighting.applyCustom}
+      />
       <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": `${leg1Label} and ${leg2Label} combination candlestick chart`, "aria-describedby": "spot-combo-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         const times = result.points.map((point) => point.openTime);

@@ -784,6 +784,8 @@ export default function SpotPerpArbitrageController() {
     return {
       ...visiblePerpCombo,
       candles: filterInChartTimeSelection(visiblePerpCombo.candles, exactTimeSelection),
+      ...(visiblePerpCombo.leg1Points ? { leg1Points: filterInChartTimeSelection(visiblePerpCombo.leg1Points, exactTimeSelection) } : {}),
+      ...(visiblePerpCombo.leg2Points ? { leg2Points: filterInChartTimeSelection(visiblePerpCombo.leg2Points, exactTimeSelection) } : {}),
       fundingRates: filterTimedInChartTimeSelection(visiblePerpCombo.fundingRates, exactTimeSelection),
       ...(visiblePerpCombo.firstQuoteTurnover ? { firstQuoteTurnover: filterTimedInChartTimeSelection(visiblePerpCombo.firstQuoteTurnover, exactTimeSelection) } : {}),
       ...(visiblePerpCombo.secondQuoteTurnover ? { secondQuoteTurnover: filterTimedInChartTimeSelection(visiblePerpCombo.secondQuoteTurnover, exactTimeSelection) } : {}),

@@ -48,6 +48,12 @@ export interface AnnualizedVolatilityMetric {
   averageIntervalMs: number | null;
 }
 
+export interface VolatilityCandleLike {
+  openTime: NumericField;
+  closeTime: NumericField;
+  close: NumericField;
+}
+
 export interface SingleMarketAnalytics {
   latestClose: number | null;
   baseVolume: AverageMetric;
@@ -147,7 +153,7 @@ export function filterFundingInTimeRange<T extends { time: unknown }>(
   });
 }
 
-function annualizedVolatility(candles: readonly SingleMarketCandleLike[]): AnnualizedVolatilityMetric {
+export function annualizedVolatilityForCandles(candles: readonly VolatilityCandleLike[]): AnnualizedVolatilityMetric {
   const closes = candles.flatMap((candle) => {
     const closeTime = finiteNumber(candle.closeTime);
     const close = finiteNumber(candle.close);
@@ -181,6 +187,22 @@ function annualizedVolatility(candles: readonly SingleMarketCandleLike[]): Annua
     returnCount: returns.length,
     averageIntervalMs,
   };
+}
+
+/**
+ * Annualized close-to-close volatility for the candles currently visible in a
+ * chart. The range is inclusive and is deliberately applied before returns are
+ * built, so a return never crosses a hidden candle.
+ */
+export function annualizedVolatilityForVisibleRange(
+  candles: readonly VolatilityCandleLike[],
+  startTime?: number,
+  endTime?: number,
+): AnnualizedVolatilityMetric {
+  const visible = startTime === undefined || endTime === undefined
+    ? [...candles]
+    : filterCandlesInTimeRange(candles, startTime, endTime);
+  return annualizedVolatilityForCandles(visible);
 }
 
 /**
@@ -259,7 +281,7 @@ export function singleMarketAnalytics(
     quoteTurnover: { ...quoteAverage, officialCount, estimatedCount },
     candleCloseVwap: weightedDistribution(vwapSamples),
     candleCloseTwap: weightedDistribution(twapSamples),
-    annualizedVolatility: annualizedVolatility(candles),
+    annualizedVolatility: annualizedVolatilityForCandles(candles),
     fundingRate,
     fundingAnnualized,
   };
