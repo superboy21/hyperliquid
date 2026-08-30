@@ -39,8 +39,6 @@ export interface WeightedOhlc {
 interface PriceCandleLike {
   open: unknown;
   close: unknown;
-  high?: unknown;
-  low?: unknown;
 }
 
 export interface VolatilityParityResult {
@@ -76,9 +74,9 @@ export function combineWeightedPrice(
 }
 
 /**
- * Builds OHLC bounds from the two underlying legs. The legacy chart only had
- * endpoint OHLC, so callers may still fall back to min/max(open, close) when
- * source bounds are unavailable.
+ * Keeps combination candles endpoint-only. Leg highs/lows may occur at
+ * different moments, so combining them would create a theoretical wick rather
+ * than an observed synchronized high/low.
  */
 export function combineWeightedOhlc(
   first: PriceCandleLike,
@@ -95,31 +93,11 @@ export function combineWeightedOhlc(
   const close = combineWeightedPrice(firstClose, secondClose, mode, weights);
   if (open === null || close === null) return null;
 
-  const firstHigh = finite(first.high);
-  const firstLow = finite(first.low);
-  const secondHigh = finite(second.high);
-  const secondLow = finite(second.low);
-  const candidates = mode === "spread"
-    ? firstHigh !== null && firstLow !== null && secondHigh !== null && secondLow !== null
-      ? [
-          combineWeightedPrice(firstHigh, secondLow, mode, weights),
-          combineWeightedPrice(firstLow, secondHigh, mode, weights),
-        ]
-      : []
-    : firstHigh !== null && firstLow !== null && secondHigh !== null && secondLow !== null
-      ? [
-          combineWeightedPrice(firstHigh, secondLow, mode, weights),
-          combineWeightedPrice(firstHigh, secondHigh, mode, weights),
-          combineWeightedPrice(firstLow, secondLow, mode, weights),
-          combineWeightedPrice(firstLow, secondHigh, mode, weights),
-        ]
-      : [];
-  const validBounds = candidates.filter((value): value is number => value !== null && Number.isFinite(value));
   return {
     open,
     close,
-    high: validBounds.length > 0 ? Math.max(open, close, ...validBounds) : Math.max(open, close),
-    low: validBounds.length > 0 ? Math.min(open, close, ...validBounds) : Math.min(open, close),
+    high: Math.max(open, close),
+    low: Math.min(open, close),
   };
 }
 

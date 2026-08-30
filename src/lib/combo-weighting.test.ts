@@ -10,15 +10,15 @@ function candle(time: number, close: number, high = close + 2, low = close - 2) 
 }
 
 describe("combo weighting", () => {
-  test("uses weights consistently for spread, ratio, and display bounds", () => {
+  test("uses weights consistently and keeps display bounds endpoint-only", () => {
     const first = candle(0, 10, 12, 8);
     const second = candle(0, 4, 6, 2);
     expect(combineWeightedOhlc(first, second, "spread", { first: 2, second: 1 })).toEqual({
-      open: 15, high: 22, low: 10, close: 16,
+      open: 15, high: 16, low: 15, close: 16,
     });
     expect(combineWeightedOhlc(first, second, "ratio", { first: 2, second: 1 })).toMatchObject({
       open: 6, close: 5,
-      high: 12, low: 8 / 3,
+      high: 6, low: 5,
     });
   });
 
