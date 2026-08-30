@@ -1,5 +1,6 @@
 import type { ComboFundingLegObservation, ComboFundingRatePoint, ComboCandleResult } from "../combo";
 import type { MixedCombinationResult, SpotContainingCombinationResult, SpotSpotCombinationResult } from "./combine";
+import { combineWeightedPrice, type CombinationWeights } from "../combo-weighting";
 
 export type ArbitrageChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
 export type TailTrimPercent = 0 | 1 | 2.5 | 5 | 10;
@@ -97,23 +98,93 @@ function distributionBands(
   };
 }
 
-function latestVisibleClose(visible: SpotContainingCombinationResult): number | null {
-  let latestCloseTime = Number.NEGATIVE_INFINITY;
-  let latestValue: number | null = null;
-  for (const point of visible.points) {
-    if (!Number.isFinite(point.closeTime) || point.closeTime <= latestCloseTime) continue;
-    latestCloseTime = point.closeTime;
-    latestValue = Number.isFinite(point.close) ? point.close : null;
-  }
-  return latestValue;
-}
-
 function average(values: readonly number[]): AverageAnalytics {
   const finite = values.filter(Number.isFinite);
   return {
     mean: finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null,
     count: finite.length,
   };
+}
+
+const ONE_TO_ONE: CombinationWeights = { first: 1, second: 1 };
+
+function isOneToOne(weights: CombinationWeights): boolean {
+  return weights.first === 1 && weights.second === 1;
+}
+
+interface DerivedCloseRows {
+  values: number[];
+  latest: number | null;
+}
+
+/**
+ * Rebuilds dashboard prices from the retained raw legs.  In particular, a
+ * weighted dashboard never reverse-engineers a weight from an already
+ * combined spread/ratio. Missing raw legs therefore fail closed for a
+ * non-1:1 request instead of producing plausible but incorrect statistics.
+ */
+function derivedCloseRows(
+  visible: MixedCombinationResult | SpotSpotCombinationResult | ComboCandleResult,
+  weights: CombinationWeights,
+): DerivedCloseRows | null {
+  if (isOneToOne(weights)) {
+    const rows = "candles" in visible
+      ? visible.candles.map((point) => ({ closeTime: point.closeTime, value: Number(point.close) }))
+      : visible.points.map((point) => ({ closeTime: point.closeTime, value: point.close }));
+    let latestTime = Number.NEGATIVE_INFINITY;
+    let latest: number | null = null;
+    for (const row of rows) {
+      if (!Number.isFinite(row.closeTime) || row.closeTime <= latestTime) continue;
+      latestTime = row.closeTime;
+      latest = Number.isFinite(row.value) ? row.value : null;
+    }
+    return { values: rows.map((row) => row.value), latest };
+  }
+
+  if (!Number.isFinite(weights.first) || !Number.isFinite(weights.second) || weights.first <= 0 || weights.second <= 0) {
+    return null;
+  }
+
+  if ("candles" in visible) {
+    if (!visible.leg1Points || !visible.leg2Points) return null;
+    const firstByTime = new Map(visible.leg1Points.map((point) => [point.openTime, point]));
+    const secondByTime = new Map(visible.leg2Points.map((point) => [point.openTime, point]));
+    const rows: Array<{ closeTime: number; value: number }> = [];
+    for (const candle of visible.candles) {
+      const first = firstByTime.get(candle.openTime);
+      const second = secondByTime.get(candle.openTime);
+      if (!first || !second) return null;
+      const value = combineWeightedPrice(first.close, second.close, visible.mode === "ratio" ? "ratio" : "spread", weights);
+      if (value === null) return null;
+      rows.push({ closeTime: candle.closeTime, value });
+    }
+    let latestTime = Number.NEGATIVE_INFINITY;
+    let latest: number | null = null;
+    for (const row of rows) {
+      if (Number.isFinite(row.closeTime) && row.closeTime > latestTime) {
+        latestTime = row.closeTime;
+        latest = row.value;
+      }
+    }
+    return { values: rows.map((row) => row.value), latest };
+  }
+
+  const rows: Array<{ closeTime: number; value: number }> = [];
+  for (const point of visible.points) {
+    if (!point.leg1Point || !point.leg2Point) return null;
+    const value = combineWeightedPrice(point.leg1Point.close, point.leg2Point.close, visible.mode, weights);
+    if (value === null) return null;
+    rows.push({ closeTime: point.closeTime, value });
+  }
+  let latestTime = Number.NEGATIVE_INFINITY;
+  let latest: number | null = null;
+  for (const row of rows) {
+    if (Number.isFinite(row.closeTime) && row.closeTime > latestTime) {
+      latestTime = row.closeTime;
+      latest = row.value;
+    }
+  }
+  return { values: rows.map((row) => row.value), latest };
 }
 
 function actualLegFunding(
@@ -132,7 +203,7 @@ function actualLegFunding(
   return observation;
 }
 
-function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
+function perpPairFundingAnalytics(visible: ComboCandleResult, weights: CombinationWeights): Pick<
   PairDashboardAnalytics,
   "fundingAnnualized" | "fundingLeg1" | "fundingLeg2" | "fundingAlignedCount"
 > {
@@ -140,6 +211,14 @@ function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
   // Legacy hand-built results may not carry per-leg metadata. Preserve their
   // established aligned dashboard metric; production combo results always do.
   if (points.length === 0 || points.every((point) => point.firstFunding === undefined && point.secondFunding === undefined)) {
+    if (!isOneToOne(weights)) {
+      return {
+        fundingAnnualized: { mean: null, count: 0 },
+        fundingLeg1: null,
+        fundingLeg2: null,
+        fundingAlignedCount: 0,
+      };
+    }
     const funding = average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate));
     return { fundingAnnualized: funding, fundingLeg1: null, fundingLeg2: null, fundingAlignedCount: funding.count };
   }
@@ -149,11 +228,11 @@ function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
       actualLegFunding(point, point.firstFunding)
       && actualLegFunding(point, point.secondFunding)
     ));
-    const fundingLeg1 = average(alignedPoints.map((point) => point.firstFunding!.annualizedRate));
-    const fundingLeg2 = average(alignedPoints.map((point) => point.secondFunding!.annualizedRate));
+    const fundingLeg1 = average(alignedPoints.map((point) => weights.first * point.firstFunding!.annualizedRate));
+    const fundingLeg2 = average(alignedPoints.map((point) => weights.second * point.secondFunding!.annualizedRate));
     return {
       fundingAnnualized: {
-        mean: fundingLeg1.mean === null || fundingLeg2.mean === null ? null : fundingLeg1.mean - fundingLeg2.mean,
+        mean: average(alignedPoints.map((point) => weights.first * point.firstFunding!.annualizedRate - weights.second * point.secondFunding!.annualizedRate)).mean,
         count: alignedPoints.length,
       },
       fundingLeg1,
@@ -181,8 +260,8 @@ function perpPairFundingAnalytics(visible: ComboCandleResult): Pick<
   for (const point of points.slice(startIndex)) {
     const leg1 = actualLegFunding(point, point.firstFunding);
     const leg2 = actualLegFunding(point, point.secondFunding);
-    if (leg1) leg1Values.push(leg1.annualizedRate);
-    if (leg2) leg2Values.push(leg2.annualizedRate);
+    if (leg1) leg1Values.push(weights.first * leg1.annualizedRate);
+    if (leg2) leg2Values.push(weights.second * leg2.annualizedRate);
     if (leg1 && leg2) alignedCount += 1;
   }
   const fundingLeg1 = average(leg1Values);
@@ -350,8 +429,10 @@ export function distributionAnalytics(
 export function dashboardAnalytics(
   visible: MixedCombinationResult,
   trimPercent: TailTrimPercent,
+  weights: CombinationWeights = ONE_TO_ONE,
 ): MixedDashboardAnalytics {
-  const derivedClose = distributionAnalytics(visible.points.map((point) => point.close), trimPercent);
+  const derived = derivedCloseRows(visible, weights);
+  const derivedClose = distributionAnalytics(derived?.values ?? [], trimPercent);
   const spotTurnovers: number[] = [];
   const perpTurnovers: number[] = [];
   for (const point of visible.points) {
@@ -366,8 +447,13 @@ export function dashboardAnalytics(
   }
   return {
     derivedClose,
-    currentDerivedClose: valueWithRelativeGap(latestVisibleClose(visible), derivedClose.mean),
-    fundingAnnualized: average(visible.funding.map((point) => point.annualizedRate)),
+    currentDerivedClose: valueWithRelativeGap(derived?.latest ?? null, derivedClose.mean),
+    fundingAnnualized: average(visible.funding
+      .filter((point) => point.sampleCount === null || point.sampleCount === undefined || point.sampleCount > 0)
+      // combineSpotContaining stores leg-2 observations with the already
+      // applied negative combination sign. Scale that signed observation once;
+      // do not negate it a second time here.
+      .map((point) => (point.perpLeg === 1 ? weights.first : weights.second) * point.annualizedRate)),
     spotTurnover: average(spotTurnovers),
     perpTurnover: average(perpTurnovers),
   };
@@ -376,30 +462,25 @@ export function dashboardAnalytics(
 export function pairDashboardAnalytics(
   visible: PairDashboardResult,
   trimPercent: TailTrimPercent,
+  weights: CombinationWeights = ONE_TO_ONE,
 ): PairDashboardAnalytics {
   if ("candles" in visible) {
-    const derivedClose = distributionAnalytics(visible.candles.map((point) => Number(point.close)), trimPercent);
-    let latestCloseTime = Number.NEGATIVE_INFINITY;
-    let latestClose: number | null = null;
-    for (const point of visible.candles) {
-      if (!Number.isFinite(point.closeTime) || point.closeTime <= latestCloseTime) continue;
-      latestCloseTime = point.closeTime;
-      const close = Number(point.close);
-      latestClose = Number.isFinite(close) ? close : null;
-    }
+    const derived = derivedCloseRows(visible, weights);
+    const derivedClose = distributionAnalytics(derived?.values ?? [], trimPercent);
     return {
       derivedClose,
-      currentDerivedClose: valueWithRelativeGap(latestClose, derivedClose.mean),
-      ...perpPairFundingAnalytics(visible),
+      currentDerivedClose: valueWithRelativeGap(derived?.latest ?? null, derivedClose.mean),
+      ...perpPairFundingAnalytics(visible, weights),
       leg1Turnover: average((visible.firstQuoteTurnover ?? []).map((point) => point.value)),
       leg2Turnover: average((visible.secondQuoteTurnover ?? []).map((point) => point.value)),
     };
   }
 
-  const derivedClose = distributionAnalytics(visible.points.map((point) => point.close), trimPercent);
+  const derived = derivedCloseRows(visible, weights);
+  const derivedClose = distributionAnalytics(derived?.values ?? [], trimPercent);
   return {
     derivedClose,
-    currentDerivedClose: valueWithRelativeGap(latestVisibleClose(visible), derivedClose.mean),
+    currentDerivedClose: valueWithRelativeGap(derived?.latest ?? null, derivedClose.mean),
     fundingAnnualized: null,
     fundingLeg1: null,
     fundingLeg2: null,
@@ -413,18 +494,20 @@ export function visiblePairDashboardAnalytics(
   result: PairDashboardResult,
   range: ArbitrageChartRange,
   trimPercent: TailTrimPercent,
+  weights: CombinationWeights = ONE_TO_ONE,
 ): { visible: PairDashboardResult; dashboard: PairDashboardAnalytics } {
   const visible: PairDashboardResult = "candles" in result
     ? filterLegacyComboRange(result, range)
     : filterAlignedRange(result, range);
-  return { visible, dashboard: pairDashboardAnalytics(visible, trimPercent) };
+  return { visible, dashboard: pairDashboardAnalytics(visible, trimPercent, weights) };
 }
 
 export function visibleDashboardAnalytics(
   result: MixedCombinationResult,
   range: ArbitrageChartRange,
   trimPercent: TailTrimPercent,
+  weights: CombinationWeights = ONE_TO_ONE,
 ): { visible: MixedCombinationResult; dashboard: MixedDashboardAnalytics } {
   const visible = filterAlignedRange(result, range);
-  return { visible, dashboard: dashboardAnalytics(visible, trimPercent) };
+  return { visible, dashboard: dashboardAnalytics(visible, trimPercent, weights) };
 }

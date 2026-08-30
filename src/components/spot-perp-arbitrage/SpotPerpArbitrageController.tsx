@@ -34,6 +34,11 @@ import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candl
 import type { SpotCandleResult } from "@/lib/spot-search-candles";
 import type { ComboCandleResult } from "@/lib/combo";
 import {
+  isCurrentCombinationWeightSnapshot,
+  type AppliedCombinationWeightSnapshot,
+  type CombinationWeights,
+} from "@/lib/combo-weighting";
+import {
   DEFAULT_SPOT_QUOTE_FILTER,
   EMPTY_SELECTION,
   SPOT_QUOTE_FILTERS,
@@ -333,6 +338,8 @@ export default function SpotPerpArbitrageController() {
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartRetry, setChartRetry] = useState(0);
   const [exactTimeSelection, setExactTimeSelection] = useState<ChartTimeSelection | null>(null);
+  const [appliedWeightSnapshot, setAppliedWeightSnapshot] = useState<AppliedCombinationWeightSnapshot | null>(null);
+  const currentWeightSnapshotKeyRef = useRef<string | null>(null);
   const chartAbortRef = useRef<AbortController | null>(null);
   const chartGenerationRef = useRef(0);
 
@@ -694,6 +701,7 @@ export default function SpotPerpArbitrageController() {
     chartAbortRef.current?.abort();
     const generation = ++chartGenerationRef.current;
     const plan = effectiveChartPlan;
+    setAppliedWeightSnapshot(null);
     if (!plan) {
       setChartPayload(null);
       setChartLoading(false);
@@ -796,6 +804,53 @@ export default function SpotPerpArbitrageController() {
     if (!visibleSpotCombo || !exactTimeSelection) return visibleSpotCombo;
     return { ...visibleSpotCombo, points: filterInChartTimeSelection(visibleSpotCombo.points, exactTimeSelection), funding: filterTimedInChartTimeSelection(visibleSpotCombo.funding, exactTimeSelection) };
   }, [exactTimeSelection, visibleSpotCombo]);
+
+  // Keep this revision compact: chartGenerationRef changes for every chart
+  // load/replacement, while the remaining fields identify the active payload
+  // without allocating a string for every candle or raw OHLC value. Exact
+  // selections and weight changes deliberately do not change the key.
+  const comboWeightSnapshotKey = useMemo(() => {
+    if (visiblePerpCombo) {
+      return [
+        chartGenerationRef.current,
+        "perp",
+        visiblePerpCombo.firstExchange,
+        visiblePerpCombo.firstSymbol,
+        visiblePerpCombo.secondExchange,
+        visiblePerpCombo.secondSymbol,
+        visiblePerpCombo.interval,
+        visiblePerpCombo.mode,
+        activeChartRange,
+      ].join("|");
+    }
+    if (visibleSpotCombo) {
+      return [
+        chartGenerationRef.current,
+        "spot",
+        String(marketId(visibleSpotCombo.leg1)),
+        String(marketId(visibleSpotCombo.leg2)),
+        visibleSpotCombo.interval,
+        visibleSpotCombo.mode,
+        activeChartRange,
+      ].join("|");
+    }
+    return null;
+  }, [activeChartRange, visiblePerpCombo, visibleSpotCombo]);
+  currentWeightSnapshotKeyRef.current = comboWeightSnapshotKey;
+  const dashboardWeights: CombinationWeights = appliedWeightSnapshot && isCurrentCombinationWeightSnapshot(appliedWeightSnapshot, comboWeightSnapshotKey)
+    ? appliedWeightSnapshot.weights
+    : { first: 1, second: 1 };
+  const onAppliedWeightsChange = useCallback((snapshot: AppliedCombinationWeightSnapshot) => {
+    if (!isCurrentCombinationWeightSnapshot(snapshot, currentWeightSnapshotKeyRef.current)) return;
+    setAppliedWeightSnapshot((current) => (
+      current?.key === snapshot.key
+      && current.mode === snapshot.mode
+      && current.weights.first === snapshot.weights.first
+      && current.weights.second === snapshot.weights.second
+        ? current
+        : snapshot
+    ));
+  }, []);
 
   const selectMarket = (market: ArbitrageMarket) => {
     setStrategyChartOverride(null);
@@ -1134,19 +1189,19 @@ export default function SpotPerpArbitrageController() {
               ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "spot" && visibleSingleSpot && visibleSingleSpot.candles.length > 0 ? (
                 <><SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} provenance={chartPayload.leg.original.provenance} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} /><SingleMarketAnalyticsDashboard candles={visibleSingleSpot.candles} selection={exactTimeSelection} marketLabel={`${visibleSingleSpot.exchange} ${visibleSingleSpot.symbol} Spot`} marketKind="spot" /></>
               ) : chartPayload?.kind === "perp-combo" && visiblePerpCombo && visiblePerpCombo.candles.length > 1 ? (
-                <ComboSearchCandlesChart data={visiblePerpCombo} interval={chartInterval} timeRange={activeChartRange} onTimeRangeChange={(range) => { setExactTimeSelection(null); setChartRange(normalizeChartRange(chartInterval, range, singleSpotChart)); }} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} />
+                <ComboSearchCandlesChart data={visiblePerpCombo} interval={chartInterval} timeRange={activeChartRange} onTimeRangeChange={(range) => { setExactTimeSelection(null); setChartRange(normalizeChartRange(chartInterval, range, singleSpotChart)); }} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} weightSnapshotKey={comboWeightSnapshotKey ?? undefined} onAppliedWeightsChange={onAppliedWeightsChange} />
               ) : chartPayload?.kind === "spot-combo" && visibleSpotCombo && visibleSpotCombo.points.length > 1 ? (
-                <SpotContainingCombinationChart result={visibleSpotCombo} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} />
+                <SpotContainingCombinationChart result={visibleSpotCombo} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} weightSnapshotKey={comboWeightSnapshotKey ?? undefined} onAppliedWeightsChange={onAppliedWeightsChange} />
               ) : (
                 <div className="flex h-[520px] items-center justify-center" role="status"><div className="text-center"><p className="text-gray-400">当前区间没有足够的重叠数据</p><p className="mt-1 text-sm text-gray-600">可尝试更长历史范围或其他K线周期。</p></div></div>
               )}
             </section>
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "spot-combo" && exactSpotCombo && (
-            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={exactSpotCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} />
+            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={exactSpotCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} />
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "perp-combo" && exactPerpCombo && (
-            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={exactPerpCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} />
+            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={exactPerpCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} />
           )}
           {comboMode && (
             <div className="flex flex-col gap-2 rounded-lg border border-violet-500/25 bg-violet-950/15 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">

@@ -8,13 +8,15 @@ import {
 } from "@/lib/spot-perp-arbitrage";
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
-import { combineWeightedOhlc } from "@/lib/combo-weighting";
+import { combineWeightedOhlc, type AppliedCombinationWeightSnapshot } from "@/lib/combo-weighting";
 import { CombinationWeightControls, useCombinationWeighting } from "./CombinationWeightControls";
 
 interface Props {
   result: SpotContainingCombinationResult;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
+  weightSnapshotKey?: string;
+  onAppliedWeightsChange?: (snapshot: AppliedCombinationWeightSnapshot) => void;
 }
 
 interface TooltipItem {
@@ -113,7 +115,7 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-export default function SpotContainingCombinationChart({ result: sourceResult, timeSelection = null, onTimeSelectionChange }: Props) {
+export default function SpotContainingCombinationChart({ result: sourceResult, timeSelection = null, onTimeSelectionChange, weightSnapshotKey, onAppliedWeightsChange }: Props) {
   const firstLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg1Point ? [point.leg1Point] : []), [sourceResult.points]);
   const secondLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg2Point ? [point.leg2Point] : []), [sourceResult.points]);
   const weighting = useCombinationWeighting(firstLegPoints, secondLegPoints);
@@ -139,6 +141,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
   const zoomRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
   const weightingModeRef = useRef(weighting.mode);
   const recomputeParityRef = useRef(weighting.recomputeParity);
+  const weightingInputKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     weightingModeRef.current = weighting.mode;
     recomputeParityRef.current = weighting.recomputeParity;
@@ -146,6 +149,18 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
   useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
   useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
   useEffect(() => { zoomRangeRef.current = null; }, [sourceResult]);
+  useEffect(() => {
+    if (!weightSnapshotKey || !onAppliedWeightsChange) return;
+    // The weighting hook resets after its raw input changes. Do not publish
+    // the previous pair/range's mode during that one render.
+    const inputChanged = weightingInputKeyRef.current !== weightSnapshotKey;
+    weightingInputKeyRef.current = weightSnapshotKey;
+    onAppliedWeightsChange({
+      key: weightSnapshotKey,
+      mode: inputChanged ? "none" : weighting.mode,
+      weights: inputChanged || weighting.mode === "none" ? { first: 1, second: 1 } : weighting.weights,
+    });
+  }, [onAppliedWeightsChange, weightSnapshotKey, weighting.mode, weighting.weights]);
   const leg1Label = `${result.leg1.source.exchange} ${marketDisplaySymbol(result.leg1)}`;
   const leg2Label = `${result.leg2.source.exchange} ${marketDisplaySymbol(result.leg2)}`;
   const showAllSymbol =

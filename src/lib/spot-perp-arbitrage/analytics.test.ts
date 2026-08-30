@@ -8,7 +8,7 @@ import {
 import { asPerpMarket, asSpotMarket } from "./model";
 import type { SearchExchangeRate } from "../search";
 import type { SpotMarketRow } from "../spot-search";
-import { calculateVolatilityParity } from "../combo-weighting";
+import { calculateVolatilityParity, isCurrentCombinationWeightSnapshot, type CombinationWeights } from "../combo-weighting";
 
 const perp = asPerpMarket({
   exchange: "Binance", exchangeColor: "yellow", symbol: "BTC", fundingRate: 0, markPrice: 1,
@@ -350,5 +350,178 @@ describe("two-leg dashboard analytics", () => {
     expect(dashboard.fundingAnnualized).toBeNull();
     expect(dashboard.leg1Turnover).toEqual({ mean: 50, count: 2 });
     expect(dashboard.leg2Turnover).toEqual({ mean: 40, count: 1 });
+  });
+
+  function weightedLegacy(mode: "spread" | "ratio"): ComboCandleResult {
+    const first = [10, 20, 30];
+    const second = [2, 4, 10];
+    return {
+      candles: first.map((close, index) => ({
+        openTime: index * 10,
+        closeTime: index * 10 + 5,
+        open: "0", high: "", low: "", close: "0", volume: "1",
+      })),
+      leg1Points: first.map((close, index) => ({ openTime: index * 10, closeTime: index * 10 + 5, open: close, high: close, low: close, close })),
+      leg2Points: second.map((close, index) => ({ openTime: index * 10, closeTime: index * 10 + 5, open: close, high: close, low: close, close })),
+      fundingRates: [], firstQuoteTurnover: [{ time: 0, value: 10 }, { time: 10, value: 20 }, { time: 20, value: 30 }],
+      secondQuoteTurnover: [{ time: 0, value: 40 }],
+      interval: "1h", exchange: "Binance", symbol: "BTC-ETH", mode,
+      firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+      legProvenance: [] as never,
+    };
+  }
+
+  function rawLegPoint(time: number, close: number, turnover: number | null) {
+    return {
+      openTime: time,
+      closeTime: time + 5,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      baseVolume: 1,
+      turnover: turnover === null ? null : { value: turnover, provenance: "official-quote" as const },
+    };
+  }
+
+  test("weights Perp/Perp ratio close distribution, current value, population sigma, and all bands", () => {
+    const weights: CombinationWeights = { first: 1, second: 2 };
+    const dashboard = pairDashboardAnalytics(weightedLegacy("ratio"), 0, weights);
+    expect(dashboard.derivedClose.mean).toBeCloseTo(13 / 6);
+    expect(dashboard.derivedClose.populationSigma).toBeCloseTo(Math.sqrt(2 / 9));
+    expect(dashboard.derivedClose.minus2Sigma).toBeCloseTo(13 / 6 - 2 * Math.sqrt(2 / 9));
+    expect(dashboard.derivedClose.minus1Sigma).toBeCloseTo(13 / 6 - Math.sqrt(2 / 9));
+    expect(dashboard.derivedClose.plus1Sigma).toBeCloseTo(13 / 6 + Math.sqrt(2 / 9));
+    expect(dashboard.derivedClose.plus2Sigma).toBeCloseTo(13 / 6 + 2 * Math.sqrt(2 / 9));
+    expect(dashboard.currentDerivedClose.value).toBeCloseTo(1.5);
+  });
+
+  test("weights Perp/Perp spread from raw leg closes, never the stored combined close", () => {
+    const dashboard = pairDashboardAnalytics(weightedLegacy("spread"), 0, { first: 2, second: 0.5 });
+    expect(dashboard.derivedClose.mean).toBeCloseTo((19 + 38 + 55) / 3);
+    expect(dashboard.currentDerivedClose.value).toBe(55);
+    expect(dashboard.leg1Turnover).toEqual({ mean: 20, count: 3 });
+    expect(dashboard.leg2Turnover).toEqual({ mean: 40, count: 1 });
+  });
+
+  test("weights Perp/Perp funding difference while retaining actual-sample semantics", () => {
+    const combo = weightedLegacy("spread");
+    combo.fundingRates = [
+      { time: 0, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 1 }, secondFunding: { rate: 0, annualizedRate: 0.25 } },
+      { time: 10, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 3 }, secondFunding: { rate: 0, annualizedRate: 1 } },
+      { time: 20, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 4 }, secondFunding: null },
+    ];
+    combo.interval = "1d";
+    const dashboard = pairDashboardAnalytics(combo, 0, { first: 2, second: 0.5 });
+    expect(dashboard.fundingAnnualized).toEqual({ mean: (2 - 0.125 + 6 - 0.5) / 2, count: 2 });
+    expect(dashboard.fundingLeg1).toEqual({ mean: 4, count: 2 });
+    expect(dashboard.fundingLeg2).toEqual({ mean: 0.3125, count: 2 });
+  });
+
+  test("weights mixed funding with the correct leg sign and keeps Spot/Spot funding unavailable", () => {
+    const mixedA = result([10, 20]);
+    mixedA.funding = [
+      { time: 10, rate: 0, annualizedRate: 1, sampleCount: 1, perpLeg: 1 },
+      { time: 20, rate: 0, annualizedRate: 2, sampleCount: 1, perpLeg: 1 },
+    ];
+    expect(dashboardAnalytics(mixedA, 0, { first: 2, second: 7 }).fundingAnnualized).toEqual({ mean: 3, count: 2 });
+
+    const mixedB = { ...result([10, 20]), leg1: spot, leg2: perp } as MixedCombinationResult;
+    mixedB.funding = [
+      { time: 10, rate: 0, annualizedRate: -1, sampleCount: 1, perpLeg: 2 },
+      { time: 20, rate: 0, annualizedRate: -2, sampleCount: 1, perpLeg: 2 },
+    ];
+    expect(dashboardAnalytics(mixedB, 0, { first: 7, second: 2 }).fundingAnnualized).toEqual({ mean: -3, count: 2 });
+
+    const spotPair = pairDashboardAnalytics({
+      kind: "spot-containing", composition: "spot-spot", mode: "ratio", interval: "1h", leg1: spot, leg2: secondSpot,
+      points: [], funding: [],
+    }, 0, { first: 2, second: 3 });
+    expect(spotPair.fundingAnnualized).toBeNull();
+  });
+
+  test("weights Spot/Spot ratio price statistics from raw leg points", () => {
+    const times = [10, 20, 30];
+    const firstCloses = [10, 20, 30];
+    const secondCloses = [2, 4, 5];
+    const spotPair: SpotSpotCombinationResult = {
+      kind: "spot-containing", composition: "spot-spot", mode: "ratio", interval: "1h", leg1: spot, leg2: secondSpot,
+      points: times.map((time, index) => ({
+        openTime: time, closeTime: time + 5, open: 0, close: 0,
+        leg1Turnover: { value: index === 0 ? 0 : index * 10, provenance: "official-quote" as const },
+        leg2Turnover: index === 1 ? null : { value: (index + 1) * 5, provenance: "official-quote" as const },
+        minimumTurnover: null,
+        leg1Point: rawLegPoint(time, firstCloses[index], index === 0 ? 0 : index * 10),
+        leg2Point: rawLegPoint(time, secondCloses[index], index === 1 ? null : (index + 1) * 5),
+      })),
+      funding: [],
+    };
+    const weights = { first: 1, second: 2 };
+    const dashboard = pairDashboardAnalytics(spotPair, 0, weights);
+    const sigma = Math.sqrt(1 / 18);
+    expect(dashboard.derivedClose.mean).toBeCloseTo(8 / 3);
+    expect(dashboard.derivedClose.populationSigma).toBeCloseTo(sigma);
+    expect(dashboard.derivedClose.minus1Sigma).toBeCloseTo(8 / 3 - sigma);
+    expect(dashboard.derivedClose.plus2Sigma).toBeCloseTo(8 / 3 + 2 * sigma);
+    expect(dashboard.currentDerivedClose.value).toBe(3);
+    expect(dashboard.leg1Turnover).toEqual({ mean: 10, count: 3 });
+    expect(dashboard.leg2Turnover).toEqual({ mean: 10, count: 2 });
+    expect(dashboard.leg1Turnover).toEqual(pairDashboardAnalytics(spotPair, 0).leg1Turnover);
+    expect(dashboard.leg2Turnover).toEqual(pairDashboardAnalytics(spotPair, 0).leg2Turnover);
+  });
+
+  test("weights mixed spread price statistics from raw Spot/Perp leg points", () => {
+    const mixed: MixedCombinationResult = {
+      kind: "spot-containing", composition: "mixed", mode: "spread", interval: "1h", leg1: perp, leg2: spot,
+      points: [10, 20, 30].map((time, index) => ({
+        openTime: time, closeTime: time + 5, open: 0, close: 0,
+        leg1Turnover: { value: 7 + index, provenance: "official-quote" as const },
+        leg2Turnover: { value: 4 + index, provenance: "estimated-base-close" as const },
+        minimumTurnover: 4 + index,
+        leg1Point: rawLegPoint(time, [10, 20, 30][index], 7 + index),
+        leg2Point: rawLegPoint(time, [1, 2, 3][index], 4 + index),
+      })),
+      funding: [],
+    };
+    const weights = { first: 2, second: 1 };
+    const dashboard = dashboardAnalytics(mixed, 0, weights);
+    const sigma = Math.sqrt(722 / 3);
+    expect(dashboard.derivedClose.mean).toBe(38);
+    expect(dashboard.derivedClose.populationSigma).toBeCloseTo(sigma);
+    expect(dashboard.derivedClose.minus2Sigma).toBeCloseTo(38 - 2 * sigma);
+    expect(dashboard.derivedClose.plus1Sigma).toBeCloseTo(38 + sigma);
+    expect(dashboard.currentDerivedClose.value).toBe(57);
+    expect(dashboard.perpTurnover).toEqual({ mean: 8, count: 3 });
+    expect(dashboard.spotTurnover).toEqual({ mean: 5, count: 3 });
+  });
+
+  test("range filtering and tail trimming happen before weighted distribution statistics", () => {
+    const day = 86_400_000;
+    const combo = weightedLegacy("spread");
+    combo.candles = Array.from({ length: 10 }, (_, index) => ({ openTime: index * day, closeTime: index * day, open: "0", high: "", low: "", close: "0", volume: "1" }));
+    combo.leg1Points = combo.candles.map((point, index) => ({ ...point, open: index + 1, high: index + 1, low: index + 1, close: index + 1 }));
+    combo.leg2Points = combo.candles.map((point) => ({ ...point, open: 0, high: 0, low: 0, close: 0 }));
+    const { visible, dashboard } = visiblePairDashboardAnalytics(combo, "1d", 10, { first: 2, second: 1 });
+    expect(visible.candles).toHaveLength(2);
+    expect(dashboard.derivedClose.mean).toBe(19);
+    expect(dashboard.derivedClose.retainedCount).toBe(2);
+  });
+
+  test("non-1:1 weights fail closed without raw legs, while turnover stays unchanged", () => {
+    const legacy = weightedLegacy("spread");
+    delete legacy.leg1Points;
+    delete legacy.leg2Points;
+    const dashboard = pairDashboardAnalytics(legacy, 0, { first: 2, second: 1 });
+    expect(dashboard.derivedClose.mean).toBeNull();
+    expect(dashboard.currentDerivedClose.value).toBeNull();
+    expect(dashboard.leg1Turnover).toEqual({ mean: 20, count: 3 });
+    expect(dashboard.leg2Turnover).toEqual({ mean: 40, count: 1 });
+  });
+
+  test("applied snapshots are accepted only for the current chart payload key", () => {
+    const snapshot = { key: "pair-a", mode: "none" as const, weights: { first: 1, second: 1 } };
+    expect(isCurrentCombinationWeightSnapshot(snapshot, "pair-a")).toBeTrue();
+    expect(isCurrentCombinationWeightSnapshot(snapshot, "pair-b")).toBeFalse();
+    expect(isCurrentCombinationWeightSnapshot(snapshot, null)).toBeFalse();
   });
 });

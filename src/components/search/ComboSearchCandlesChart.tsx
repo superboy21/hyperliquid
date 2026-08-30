@@ -10,7 +10,7 @@ import {
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { type ComboCandleResult, type ComboFundingLegObservation } from "@/lib/combo";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
-import { combineWeightedOhlc } from "@/lib/combo-weighting";
+import { combineWeightedOhlc, type AppliedCombinationWeightSnapshot } from "@/lib/combo-weighting";
 import { CombinationWeightControls, useCombinationWeighting } from "@/components/spot-perp-arbitrage/CombinationWeightControls";
 
 // ==================== Types ====================
@@ -26,6 +26,8 @@ interface Props {
   onToggleVolume: () => void;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
+  weightSnapshotKey?: string;
+  onAppliedWeightsChange?: (snapshot: AppliedCombinationWeightSnapshot) => void;
 }
 
 interface CandleDatum {
@@ -183,6 +185,8 @@ export default function ComboSearchCandlesChart({
   onToggleVolume,
   timeSelection = null,
   onTimeSelectionChange,
+  weightSnapshotKey,
+  onAppliedWeightsChange,
 }: Props) {
   const weighting = useCombinationWeighting(data.leg1Points, data.leg2Points);
   const weightedData = useMemo(() => {
@@ -209,6 +213,7 @@ export default function ComboSearchCandlesChart({
   const zoomRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
   const weightingModeRef = useRef(weighting.mode);
   const recomputeParityRef = useRef(weighting.recomputeParity);
+  const weightingInputKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     weightingModeRef.current = weighting.mode;
     recomputeParityRef.current = weighting.recomputeParity;
@@ -216,6 +221,18 @@ export default function ComboSearchCandlesChart({
   useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
   useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
   useEffect(() => { zoomRangeRef.current = null; }, [data]);
+  useEffect(() => {
+    if (!weightSnapshotKey || !onAppliedWeightsChange) return;
+    // The weighting hook resets after its raw input changes. Do not publish
+    // the previous pair/range's mode during that one render.
+    const inputChanged = weightingInputKeyRef.current !== weightSnapshotKey;
+    weightingInputKeyRef.current = weightSnapshotKey;
+    onAppliedWeightsChange({
+      key: weightSnapshotKey,
+      mode: inputChanged ? "none" : weighting.mode,
+      weights: inputChanged || weighting.mode === "none" ? { first: 1, second: 1 } : weighting.weights,
+    });
+  }, [onAppliedWeightsChange, weightSnapshotKey, weighting.mode, weighting.weights]);
 
   useEffect(() => {
     if (!chartRef.current) return;

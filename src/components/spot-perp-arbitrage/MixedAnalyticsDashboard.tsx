@@ -11,6 +11,7 @@ import {
   type TailTrimPercent,
 } from "@/lib/spot-perp-arbitrage";
 import type { ComboCandleResult } from "@/lib/combo";
+import type { CombinationWeights } from "@/lib/combo-weighting";
 import { formatChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 
 interface Props {
@@ -18,9 +19,11 @@ interface Props {
   range: ArbitrageChartRange;
   initialTailTrim?: TailTrimPercent;
   exactSelection?: ChartTimeSelection | null;
+  weights?: CombinationWeights;
 }
 
 const TAIL_OPTIONS: TailTrimPercent[] = [0, 1, 2.5, 5, 10];
+const DEFAULT_WEIGHTS: CombinationWeights = { first: 1, second: 1 };
 
 function derivedLabel(value: number | null, mode: "spread" | "ratio"): string {
   if (value === null) return "--";
@@ -80,15 +83,15 @@ function legIdentity(result: Props["result"], leg: 1 | 2): string {
   return `${market.source.exchange} ${marketDisplaySymbol(market)}`;
 }
 
-export default function MixedAnalyticsDashboard({ result, range, initialTailTrim = 1, exactSelection = null }: Props) {
+export default function MixedAnalyticsDashboard({ result, range, initialTailTrim = 1, exactSelection = null, weights = DEFAULT_WEIGHTS }: Props) {
   const [tailTrim, setTailTrim] = useState<TailTrimPercent>(initialTailTrim);
   const mixedResult = isMixedResult(result) ? result : null;
   const analysis = useMemo(() => {
     if (isMixedResult(result)) {
-      return { kind: "mixed" as const, dashboard: visibleDashboardAnalytics(result, range, tailTrim).dashboard };
+      return { kind: "mixed" as const, dashboard: visibleDashboardAnalytics(result, range, tailTrim, weights).dashboard };
     }
-    return { kind: "pair" as const, dashboard: visiblePairDashboardAnalytics(result, range, tailTrim).dashboard };
-  }, [range, result, tailTrim]);
+    return { kind: "pair" as const, dashboard: visiblePairDashboardAnalytics(result, range, tailTrim, weights).dashboard };
+  }, [range, result, tailTrim, weights]);
   const { dashboard } = analysis;
   const distribution = dashboard.derivedClose;
   const totalDerived = distribution.retainedCount + distribution.removedCount;
@@ -148,13 +151,13 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
         value: annualizedFundingLabel(funding.mean),
         note: (
           <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-            <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿1 {leg1}</span>
+            <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿1加权 {leg1}</span>
             <span className={`rounded-sm px-1 font-mono font-medium ${fundingMeanTone(analysis.dashboard.fundingLeg1?.mean ?? null)}`}>
               {annualizedFundingLabel(analysis.dashboard.fundingLeg1?.mean ?? null)}
             </span>
             <span className="text-gray-600">（{analysis.dashboard.fundingLeg1?.count ?? 0}个）</span>
             <span aria-hidden="true" className="text-gray-700">·</span>
-            <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿2 {leg2}</span>
+            <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿2加权 {leg2}</span>
             <span className={`rounded-sm px-1 font-mono font-medium ${fundingMeanTone(analysis.dashboard.fundingLeg2?.mean ?? null)}`}>
               {annualizedFundingLabel(analysis.dashboard.fundingLeg2?.mean ?? null)}
             </span>
@@ -252,14 +255,14 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
         <h4 id="analytics-methodology-title" className="mb-1 font-medium text-gray-400">🧾 数据口径：</h4>
         <ul className="grid gap-x-5 gap-y-0.5 leading-5 md:grid-cols-2" role="list">
           <li><span aria-hidden="true">🗓️</span> <span className="font-medium text-gray-400">{exactSelection ? "精确区间：" : "可见区间："}</span>{exactSelection ? "只使用图表精确选择的 UTC 时间桶，双腿保留对齐后的共同 K 线。" : "只使用图表当前选择的可见区间；有限区间以数据末端为锚点，双腿只保留时间戳对齐后的共同 K 线。"}</li>
-          <li><span aria-hidden="true">📍</span> <span className="font-medium text-gray-400">当前值：</span>取最新一根可见共同 K 线的组合收盘值；价差＝腿1−腿2，比值＝腿1÷腿2。</li>
+          <li><span aria-hidden="true">📍</span> <span className="font-medium text-gray-400">当前值：</span>取最新一根可见共同 K 线的组合收盘值；价差＝A权重×腿1−B权重×腿2，比值＝（A权重×腿1）÷（B权重×腿2），未启用配比时为 1:1。</li>
           <li><span aria-hidden="true">📊</span> <span className="font-medium text-gray-400">均值与 σ：</span>将可见组合收盘值排序，按“每侧剔除”比例从两端各剔除后计算算术均值和总体标准差。当前值始终取最新值，只有分布样本参与剔尾；±1σ、±2σ 均由剔尾后的均值与总体标准差得到。</li>
           <li><span aria-hidden="true">🧮</span> <span className="font-medium text-gray-400">较均值百分比：</span>（指标值 − 均值）÷ |均值| × 100%；均值为 0 或不可用时显示“--”。</li>
           {composition === "mixed" && (
-            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>只统计真实观测样本；Perp 在腿1时保持正号，在腿2时取负号，再对年化值做算术平均，不参与剔尾。</li>
+            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>只统计真实观测样本；Perp 在腿1时按 A 权重保持正号，在腿2时按 B 权重取负号，再对年化值做算术平均，不参与剔尾。</li>
           )}
           {composition === "perp-perp" && (
-            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>{result.interval === "4h" || result.interval === "1h" || result.interval === "5m" ? "从首个双腿真实结算桶起，腿1与腿2分别纳入之后各自真实结算桶，年化均值为腿1均值 − 腿2均值；卡片显示各腿样本数与双腿起始后对齐样本数。" : "仅在两腿同一时间桶都有真实样本时，计算“腿1年化资金费率 − 腿2年化资金费率”，再做算术平均；方向与价差或比值操作符无关。"}</li>
+            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>{result.interval === "4h" || result.interval === "1h" || result.interval === "5m" ? "从首个双腿真实结算桶起，腿1与腿2分别纳入之后各自真实结算桶，按 A/B 权重缩放后计算年化均值差；卡片显示各腿样本数与双腿起始后对齐样本数。" : "仅在两腿同一时间桶都有真实样本时，计算“A 权重 × 腿1年化资金费率 − B 权重 × 腿2年化资金费率”，再做算术平均；方向与价差或比值操作符无关。"}</li>
           )}
           <li className="md:col-span-2"><span aria-hidden="true">💹</span> <span className="font-medium text-gray-400">平均成交额：</span>每条腿分别对可见、对齐 K 线中的 quote turnover 做算术平均；缺失值不按 0，真实 0 参与。这是当前 K 线周期下平均每根 K 线成交额，不是统一折算的日均成交额。{turnoverSourceNote}</li>
           <li><span aria-hidden="true">🔢</span> <span className="font-medium text-gray-400">样本数：</span>卡片显示该指标实际参与计算的有效样本数；不同指标因缺失值或真实样本条件不同，样本数可能不一致。</li>

@@ -11,6 +11,24 @@ export interface CombinationWeights {
   second: number;
 }
 
+/**
+ * The applied (not merely edited) weighting state owned by a combination
+ * chart.  The key makes the child-to-controller hand-off reject a callback
+ * from a chart that has already been replaced.
+ */
+export interface AppliedCombinationWeightSnapshot {
+  key: string;
+  mode: CombinationWeightMode;
+  weights: CombinationWeights;
+}
+
+export function isCurrentCombinationWeightSnapshot(
+  snapshot: AppliedCombinationWeightSnapshot,
+  currentKey: string | null,
+): boolean {
+  return currentKey !== null && snapshot.key === currentKey;
+}
+
 export interface WeightedOhlc {
   open: number;
   high: number;
