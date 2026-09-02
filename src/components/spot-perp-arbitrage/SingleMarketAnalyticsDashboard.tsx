@@ -10,6 +10,7 @@ import {
 } from "@/lib/spot-perp-arbitrage";
 import type { ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import { formatChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
+import type { ChartTimeZone } from "@/lib/chart-timezone";
 
 interface Props {
   candles: readonly SingleMarketCandleLike[];
@@ -17,6 +18,7 @@ interface Props {
   selection: ChartTimeSelection | null;
   marketLabel: string;
   marketKind: "spot" | "perp";
+  timeZone: ChartTimeZone;
 }
 
 function number(value: number | null, digits = 4): string {
@@ -31,7 +33,7 @@ function bands(title: string, metric: ReturnType<typeof singleMarketAnalytics>["
   return <div className="rounded-md border border-gray-700/80 bg-gray-900/40 p-3"><p className="text-[11px] font-medium text-gray-400">{title}</p><p className="mt-1 font-mono text-sm text-violet-200">{number(metric.mean)}</p><p className="mt-1 text-[10px] text-gray-500">n={metric.count} · σ {number(metric.populationSigma)}</p><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-gray-400"><span>−2σ {number(metric.minus2Sigma)}</span><span>+2σ {number(metric.plus2Sigma)}</span><span>−1σ {number(metric.minus1Sigma)}</span><span>+1σ {number(metric.plus1Sigma)}</span></div></div>;
 }
 
-export default function SingleMarketAnalyticsDashboard({ candles, funding, selection, marketLabel, marketKind }: Props) {
+export default function SingleMarketAnalyticsDashboard({ candles, funding, selection, marketLabel, marketKind, timeZone }: Props) {
   const analytics = useMemo(() => {
     const selectedCandles = selection ? filterCandlesInTimeRange(candles, selection.startTime, selection.endTime) : candles;
     const selectedFunding = funding === undefined ? undefined : selection
@@ -52,7 +54,7 @@ export default function SingleMarketAnalyticsDashboard({ candles, funding, selec
     ...(fundingRateMetric ? [["平均资金费率", signedPercent(fundingRateMetric.mean, 4), `${fundingRateMetric.count} 个有效时间桶 · 年化均值 ${signedPercent(fundingMetric?.mean ?? null, 2)}`]] : []),
   ];
   return <section className="mt-3 rounded-lg border border-cyan-500/25 bg-gray-800 p-4" aria-labelledby="single-analytics-title">
-    <div><h3 id="single-analytics-title" className="text-sm font-semibold text-white">{marketLabel} · {selection ? "精确区间统计" : "预设可见区间统计"}</h3>{selection && <p className="mt-1 font-mono text-xs text-cyan-200">UTC：{formatChartTimeSelection(selection)}</p>}<p className="mt-1 text-xs text-gray-500">未剔尾。VWAP 以每根收盘价按基础币成交量加权；TWAP 以 K 线时长加权。{marketKind === "spot" ? "报价币成交额优先采用官方值，缺失时以基础币成交量 × 收盘价估算；官方 0 保留。" : "Perp 缺少官方报价币成交额时不估算并不计入均值；官方 0 保留。"}</p></div>
+    <div><h3 id="single-analytics-title" className="text-sm font-semibold text-white">{marketLabel} · {selection ? "精确区间统计" : "预设可见区间统计"}</h3>{selection && <p className="mt-1 font-mono text-xs text-cyan-200">{timeZone}：{formatChartTimeSelection(selection, timeZone)}</p>}<p className="mt-1 text-xs text-gray-500">未剔尾。VWAP 以每根收盘价按基础币成交量加权；TWAP 以 K 线时长加权。{marketKind === "spot" ? "报价币成交额优先采用官方值，缺失时以基础币成交量 × 收盘价估算；官方 0 保留。" : "Perp 缺少官方报价币成交额时不估算并不计入均值；官方 0 保留。"}</p></div>
     <div className={`mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 ${fundingRateMetric ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>{cards.map(([label, value, note]) => <div key={label} className="rounded-md border border-gray-700 bg-gray-900/65 p-3"><p className="text-[11px] text-gray-500">{label}</p><p className="mt-1 font-mono text-base font-semibold text-cyan-200">{value}</p><p className="mt-1 text-[10px] text-gray-600">{note}</p></div>)}</div>
     <div className="mt-2 grid gap-2 md:grid-cols-2">{bands("收盘价 VWAP 与标准差带", analytics.candleCloseVwap)}{bands("收盘价 TWAP 与标准差带", analytics.candleCloseTwap)}</div>
   </section>;

@@ -10,6 +10,7 @@ import {
 import type { CandleSourceProvenance } from "@/lib/candle-provenance";
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
+import { chartIntlTimeZone, chartWeekday, chartYear, type ChartTimeZone } from "@/lib/chart-timezone";
 
 // ==================== Types ====================
 
@@ -24,6 +25,7 @@ interface SearchCandlesChartProps {
   provenance?: CandleSourceProvenance;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
+  timeZone: ChartTimeZone;
 }
 
 interface CandleDatum {
@@ -105,12 +107,12 @@ function formatVolume(value: number): string {
   return value.toFixed(2);
 }
 
-function formatLabel(timestamp: number, interval: SearchChartInterval): string {
+function formatLabel(timestamp: number, interval: SearchChartInterval, timeZone: ChartTimeZone): string {
   if (interval === "1w" || interval === "1d") {
     return new Date(timestamp).toLocaleDateString("zh-CN", {
       month: "2-digit",
       day: "2-digit",
-      timeZone: "UTC",
+      timeZone: chartIntlTimeZone(timeZone),
     });
   }
   if (interval === "4h") {
@@ -119,7 +121,7 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
       day: "2-digit",
       hour: "2-digit",
       hour12: false,
-      timeZone: "UTC",
+      timeZone: chartIntlTimeZone(timeZone),
     });
   }
   // 1h, 5m, 1m
@@ -129,7 +131,7 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: "UTC",
+    timeZone: chartIntlTimeZone(timeZone),
   });
 }
 
@@ -139,10 +141,10 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
  * - 4h: year shown only at year boundaries → "26/04-20 08" at Jan, else "04-20 08"
  * - 1h, 5m: no year, just time split across lines
  */
-function buildYearAwareCategories(candles: SearchCandlePoint[], interval: SearchChartInterval) {
+function buildYearAwareCategories(candles: SearchCandlePoint[], interval: SearchChartInterval, timeZone: ChartTimeZone) {
   return candles.map((c, i) => {
-    const base = formatLabel(c.openTime, interval); // "MM-DD" or "MM-DD HH"
-    const yy = String(new Date(c.openTime).getUTCFullYear()).slice(2);
+    const base = formatLabel(c.openTime, interval, timeZone); // "MM-DD" or "MM-DD HH"
+    const yy = String(chartYear(c.openTime, timeZone)).slice(2);
 
     if (interval === "1w" || interval === "1d") {
       // Always show year on 1w/1d so user can continuously read it
@@ -150,8 +152,8 @@ function buildYearAwareCategories(candles: SearchCandlePoint[], interval: Search
     }
     if (interval === "4h") {
       // Year only at boundary — concise for dense charts
-      const prevYear = i > 0 ? new Date(candles[i - 1].openTime).getUTCFullYear() : null;
-      const currYear = new Date(c.openTime).getUTCFullYear();
+      const prevYear = i > 0 ? chartYear(candles[i - 1].openTime, timeZone) : null;
+      const currYear = chartYear(c.openTime, timeZone);
       return prevYear !== currYear ? `${yy}/${base}` : base;
     }
     // 1h, 5m, 1m: split date and time onto two lines
@@ -172,6 +174,7 @@ export default function SearchCandlesChart({
   provenance,
   timeSelection = null,
   onTimeSelectionChange,
+  timeZone,
 }: SearchCandlesChartProps) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const chartInstanceRef = useRef<echarts.ECharts | null>(null);
@@ -195,8 +198,8 @@ export default function SearchCandlesChart({
       && isGenuinelySparseFunding(fundingRates);
     const fundingName = showAllSymbol ? "资金费率(结算点)" : "资金费率";
 
-    const categories = candles.map((c) => formatLabel(c.openTime, interval));
-    const axisCategories = buildYearAwareCategories(candles, interval);
+    const categories = candles.map((c) => formatLabel(c.openTime, interval, timeZone));
+    const axisCategories = buildYearAwareCategories(candles, interval, timeZone);
 
     const candleSeries: CandleDatum[] = candles.map((candle) => {
       const open = Number(candle.open);
@@ -275,10 +278,11 @@ export default function SearchCandlesChart({
 
       const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
       const hoveredIndex = items[0]?.dataIndex ?? 0;
-      const dayOfWeek = candles[hoveredIndex] ? dayNames[new Date(candles[hoveredIndex].openTime).getUTCDay()] : "";
+      const dayIndex = candles[hoveredIndex] ? chartWeekday(candles[hoveredIndex].openTime, timeZone) : -1;
+      const dayOfWeek = dayIndex >= 0 ? dayNames[dayIndex] : "";
 
       const lines = [
-        `<div style="font-weight:600;margin-bottom:6px;">${exchange} ${symbol} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek}</div>`,
+        `<div style="font-weight:600;margin-bottom:6px;">${exchange} ${symbol} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek} · ${timeZone}</div>`,
       ];
 
       const cd = candleItem?.data as CandleDatum | undefined;
@@ -609,7 +613,7 @@ export default function SearchCandlesChart({
       if (chartInstanceRef.current === chart) chartInstanceRef.current = null;
       chart.dispose();
     };
-  }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, showVolume, onTimeSelectionChange]);
+  }, [symbol, exchange, exchangeColor, interval, candles, fundingRates, showVolume, onTimeSelectionChange, timeZone]);
 
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
@@ -629,7 +633,7 @@ export default function SearchCandlesChart({
     <div className="relative">
       <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": `${exchange} ${symbol} perpetual candlestick chart`, "aria-describedby": "perp-chart-instructions", onKeyDown, onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
       <ChartSourceCaption provenance={provenance} />
-      {typeof onTimeSelectionChange === "function" && <><p id="perp-chart-instructions" className="sr-only">Drag across the chart to select an exact UTC range. Click a candle to select it. Use left and right arrows to move, or Shift plus arrows to extend a range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>}
+      {typeof onTimeSelectionChange === "function" && <><p id="perp-chart-instructions" className="sr-only">Drag across the chart to select an exact {timeZone} range. Click a candle to select it. Use left and right arrows to move, or Shift plus arrows to extend a range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>}
       {/* 图表说明注释 */}
       <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
         <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>

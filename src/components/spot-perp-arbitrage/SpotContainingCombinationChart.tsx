@@ -10,6 +10,7 @@ import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import { combineWeightedOhlc, type AppliedCombinationWeightSnapshot } from "@/lib/combo-weighting";
 import { CombinationWeightControls, useCombinationWeighting } from "./CombinationWeightControls";
+import { chartIntlTimeZone, type ChartTimeZone } from "@/lib/chart-timezone";
 
 interface Props {
   result: SpotContainingCombinationResult;
@@ -17,6 +18,7 @@ interface Props {
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
   weightSnapshotKey?: string;
   onAppliedWeightsChange?: (snapshot: AppliedCombinationWeightSnapshot) => void;
+  timeZone: ChartTimeZone;
 }
 
 interface TooltipItem {
@@ -86,14 +88,14 @@ function formatChangePercent(open: number, close: number): string {
   return `${percent >= 0 ? "+" : ""}${percent.toFixed(2)}%`;
 }
 
-function dateLabel(timestamp: number, interval: string): string {
+function dateLabel(timestamp: number, interval: string, timeZone: ChartTimeZone): string {
   const detailed = interval === "4h" || interval === "1h" || interval === "5m" || interval === "1m";
   return new Date(timestamp).toLocaleString("zh-CN", {
     month: "2-digit",
     day: "2-digit",
     ...(detailed ? { hour: "2-digit", minute: "2-digit" } : {}),
     hour12: false,
-    timeZone: "UTC",
+    timeZone: chartIntlTimeZone(timeZone),
   });
 }
 
@@ -115,7 +117,7 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-export default function SpotContainingCombinationChart({ result: sourceResult, timeSelection = null, onTimeSelectionChange, weightSnapshotKey, onAppliedWeightsChange }: Props) {
+export default function SpotContainingCombinationChart({ result: sourceResult, timeSelection = null, onTimeSelectionChange, weightSnapshotKey, onAppliedWeightsChange, timeZone }: Props) {
   const firstLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg1Point ? [point.leg1Point] : []), [sourceResult.points]);
   const secondLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg2Point ? [point.leg2Point] : []), [sourceResult.points]);
   const weighting = useCombinationWeighting(firstLegPoints, secondLegPoints);
@@ -177,7 +179,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
   useEffect(() => {
     if (!chartRef.current || result.points.length === 0) return;
     const chart = echarts.init(chartRef.current);
-    const categories = result.points.map((point) => dateLabel(point.openTime, result.interval));
+    const categories = result.points.map((point) => dateLabel(point.openTime, result.interval, timeZone));
     const axisInterval = Math.max(0, Math.floor(result.points.length / 8));
     const candleData: CandleDatum[] = result.points.map((point) => ({
       value: [point.open, point.close, point.low ?? Math.min(point.open, point.close), point.high ?? Math.max(point.open, point.close)],
@@ -230,7 +232,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
       const secondSub = items.find((item) => item.seriesName === secondSubLabel);
       const lines = [
         `<strong>${escapeHtml(title)}</strong>`,
-        escapeHtml(items[0]?.axisValueLabel ?? ""),
+        `${escapeHtml(items[0]?.axisValueLabel ?? "")} · ${escapeHtml(timeZone)}`,
       ];
       if (candle?.raw) {
         lines.push(`开盘：${derivedValue(candle.raw.open, result.mode)}`);
@@ -414,7 +416,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
       selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [leg1Label, leg2Label, weightedResult, result.composition, result.funding, result.interval, result.mode, result.points, onTimeSelectionChange]);
+  }, [leg1Label, leg2Label, weightedResult, result.composition, result.funding, result.interval, result.mode, result.points, onTimeSelectionChange, timeZone]);
 
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
@@ -447,9 +449,9 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
       } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
       <ChartSourceCaption legProvenance={result.legProvenance} />
-      <p id="spot-combo-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p>
+      <p id="spot-combo-chart-instructions" className="sr-only">Drag to select an exact {timeZone} range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p>
       <p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p>
-      <p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p>
+      <p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p>
       <div className="mt-2 rounded bg-gray-900/60 px-4 py-2 text-xs leading-5 text-gray-500">
         <p>主图：{result.mode === "spread" ? "腿1 − 腿2 的价差" : "腿1 ÷ 腿2 的比值"}，仅使用共同时间点。</p>
         {result.composition === "spot-spot" ? (

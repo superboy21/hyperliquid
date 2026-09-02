@@ -6,6 +6,7 @@ import type { SpotCandlePoint, SpotChartInterval } from "@/lib/spot-search-candl
 import type { CandleSourceProvenance } from "@/lib/candle-provenance";
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
+import { chartIntlTimeZone, type ChartTimeZone } from "@/lib/chart-timezone";
 
 interface SpotSearchCandlesChartProps {
   exchange: string;
@@ -16,6 +17,7 @@ interface SpotSearchCandlesChartProps {
   provenance?: CandleSourceProvenance;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
+  timeZone: ChartTimeZone;
 }
 
 interface CandleDatum {
@@ -63,14 +65,14 @@ function formatCompact(value: number): string {
   return value.toFixed(4);
 }
 
-function formatTime(timestamp: number, interval: SpotChartInterval): string {
+function formatTime(timestamp: number, interval: SpotChartInterval, timeZone: ChartTimeZone): string {
   const detailed = String(interval) === "1m" || String(interval) === "5m" || String(interval) === "1h" || String(interval) === "4h";
   return new Date(timestamp).toLocaleString("zh-CN", {
     month: "2-digit",
     day: "2-digit",
     ...(detailed ? { hour: "2-digit", minute: "2-digit" } : {}),
     hour12: false,
-    timeZone: "UTC",
+    timeZone: chartIntlTimeZone(timeZone),
   });
 }
 
@@ -93,6 +95,7 @@ export default function SpotSearchCandlesChart({
   provenance,
   timeSelection = null,
   onTimeSelectionChange,
+  timeZone,
 }: SpotSearchCandlesChartProps) {
   const chartRef = useRef<HTMLDivElement | null>(null);
   const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
@@ -107,7 +110,7 @@ export default function SpotSearchCandlesChart({
     if (!chartRef.current) return;
 
     const chart = echarts.init(chartRef.current);
-    const categories = candles.map((candle) => formatTime(candleTime(candle), interval));
+    const categories = candles.map((candle) => formatTime(candleTime(candle), interval, timeZone));
     const candleSeries: CandleDatum[] = candles.map((candle) => {
       const open = candleNumber(candle, "open");
       const close = candleNumber(candle, "close");
@@ -242,7 +245,7 @@ export default function SpotSearchCandlesChart({
       selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [candles, exchange, interval, showBaseVolume, symbol, onTimeSelectionChange]);
+  }, [candles, exchange, interval, showBaseVolume, symbol, onTimeSelectionChange, timeZone]);
 
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
@@ -252,5 +255,5 @@ export default function SpotSearchCandlesChart({
     event.preventDefault();
     const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
     if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
-  } } : {})} className="h-[440px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 sm:h-[520px]" /><ChartSourceCaption provenance={provenance} /><p id="spot-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>;
+  } } : {})} className="h-[440px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 sm:h-[520px]" /><ChartSourceCaption provenance={provenance} /><p id="spot-chart-instructions" className="sr-only">Drag to select an exact {timeZone} range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-cyan-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5 text-xs text-cyan-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>;
 }

@@ -12,6 +12,7 @@ import { type ComboCandleResult, type ComboFundingLegObservation } from "@/lib/c
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import { combineWeightedOhlc, type AppliedCombinationWeightSnapshot } from "@/lib/combo-weighting";
 import { CombinationWeightControls, useCombinationWeighting } from "@/components/spot-perp-arbitrage/CombinationWeightControls";
+import { chartIntlTimeZone, chartWeekday, chartYear, type ChartTimeZone } from "@/lib/chart-timezone";
 
 // ==================== Types ====================
 
@@ -28,6 +29,7 @@ interface Props {
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
   weightSnapshotKey?: string;
   onAppliedWeightsChange?: (snapshot: AppliedCombinationWeightSnapshot) => void;
+  timeZone: ChartTimeZone;
 }
 
 interface CandleDatum {
@@ -131,12 +133,12 @@ function formatVolume(value: number): string {
   return value.toFixed(2);
 }
 
-function formatLabel(timestamp: number, interval: SearchChartInterval): string {
+function formatLabel(timestamp: number, interval: SearchChartInterval, timeZone: ChartTimeZone): string {
   if (interval === "1w" || interval === "1d") {
     return new Date(timestamp).toLocaleDateString("zh-CN", {
       month: "2-digit",
       day: "2-digit",
-      timeZone: "UTC",
+      timeZone: chartIntlTimeZone(timeZone),
     });
   }
   if (interval === "4h") {
@@ -145,7 +147,7 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
       day: "2-digit",
       hour: "2-digit",
       hour12: false,
-      timeZone: "UTC",
+      timeZone: chartIntlTimeZone(timeZone),
     });
   }
   // 1h, 5m, 1m
@@ -155,21 +157,21 @@ function formatLabel(timestamp: number, interval: SearchChartInterval): string {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: "UTC",
+    timeZone: chartIntlTimeZone(timeZone),
   });
 }
 
-function buildYearAwareCategories(candles: SearchCandlePoint[], interval: SearchChartInterval) {
+function buildYearAwareCategories(candles: SearchCandlePoint[], interval: SearchChartInterval, timeZone: ChartTimeZone) {
   return candles.map((c, i) => {
-    const base = formatLabel(c.openTime, interval);
-    const yy = String(new Date(c.openTime).getUTCFullYear()).slice(2);
+    const base = formatLabel(c.openTime, interval, timeZone);
+    const yy = String(chartYear(c.openTime, timeZone)).slice(2);
 
     if (interval === "1w" || interval === "1d") {
       return `${yy}/${base}`;
     }
     if (interval === "4h") {
-      const prevYear = i > 0 ? new Date(candles[i - 1].openTime).getUTCFullYear() : null;
-      const currYear = new Date(c.openTime).getUTCFullYear();
+      const prevYear = i > 0 ? chartYear(candles[i - 1].openTime, timeZone) : null;
+      const currYear = chartYear(c.openTime, timeZone);
       return prevYear !== currYear ? `${yy}/${base}` : base;
     }
     return base.replace(" ", "\n");
@@ -187,6 +189,7 @@ export default function ComboSearchCandlesChart({
   onTimeSelectionChange,
   weightSnapshotKey,
   onAppliedWeightsChange,
+  timeZone,
 }: Props) {
   const weighting = useCombinationWeighting(data.leg1Points, data.leg2Points);
   const weightedData = useMemo(() => {
@@ -250,8 +253,8 @@ export default function ComboSearchCandlesChart({
     const modeLabel = mode === "spread" ? "Spread" : "Ratio";
     const title = `${firstSymbol} (${firstExchange}) ${separator} ${secondSymbol} (${secondExchange}) [${modeLabel}]`;
 
-    const categories = candles.map((c) => formatLabel(c.openTime, interval));
-    const axisCategories = buildYearAwareCategories(candles, interval);
+    const categories = candles.map((c) => formatLabel(c.openTime, interval, timeZone));
+    const axisCategories = buildYearAwareCategories(candles, interval, timeZone);
 
     const candleSeries: CandleDatum[] = candles.map((candle) => {
       const open = parseFloat(candle.open);
@@ -336,12 +339,11 @@ export default function ComboSearchCandlesChart({
 
       const dayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
       const hoveredIndex = items[0]?.dataIndex ?? 0;
-      const dayOfWeek = candles[hoveredIndex]
-        ? dayNames[new Date(candles[hoveredIndex].openTime).getUTCDay()]
-        : "";
+      const dayIndex = candles[hoveredIndex] ? chartWeekday(candles[hoveredIndex].openTime, timeZone) : -1;
+      const dayOfWeek = dayIndex >= 0 ? dayNames[dayIndex] : "";
 
       const lines = [
-        `<div style="font-weight:600;margin-bottom:6px;">${title} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek}</div>`,
+        `<div style="font-weight:600;margin-bottom:6px;">${title} ${items[0]?.axisValueLabel ?? ""} ${dayOfWeek} · ${timeZone}</div>`,
       ];
 
       const cd = candleItem?.data as CandleDatum | undefined;
@@ -686,7 +688,7 @@ export default function ComboSearchCandlesChart({
       selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [weightedData, interval, showVolume, onTimeSelectionChange]);
+  }, [weightedData, interval, showVolume, onTimeSelectionChange, timeZone]);
 
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
@@ -724,7 +726,7 @@ export default function ComboSearchCandlesChart({
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
       } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
       <ChartSourceCaption legProvenance={data.legProvenance} />
-      {typeof onTimeSelectionChange === "function" && <><p id="combo-chart-instructions" className="sr-only">Drag to select an exact UTC range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 UTC 区间：${formatChartTimeSelection(timeSelection)}` : "精确 UTC 区间：预设可见范围"}</p></>}
+      {typeof onTimeSelectionChange === "function" && <><p id="combo-chart-instructions" className="sr-only">Drag to select an exact {timeZone} range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>}
       {/* 图表说明注释 */}
       <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
         <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   chartSelectionIndices, chartTimeSelectionFromIndices, filterInChartTimeSelection, filterTimedInChartTimeSelection,
-  moveChartTimeSelection,
+  formatChartTimeSelection, moveChartTimeSelection,
 } from "./chart-time-selection";
 
 const times = [10, 20, 30, 40];
@@ -61,5 +61,11 @@ describe("chart time selection", () => {
     expect(filterTimedInChartTimeSelection(funding, selection)).toEqual([{ time: 20 }, { time: 30 }]);
     expect(filterInChartTimeSelection(candles, null)).not.toBe(candles);
     expect(filterInChartTimeSelection(candles, { startTime: 30, endTime: 20 })).toEqual([]);
+  });
+
+  test("formats exact ranges in UTC+8 without changing the stored timestamps", () => {
+    const selection = chartTimeSelectionFromIndices([Date.UTC(2026, 0, 1, 16, 30), Date.UTC(2026, 0, 1, 17, 0)], 0, 1)!;
+    expect(formatChartTimeSelection(selection, "UTC+8")).toBe("2026/01/02 00:30:00 UTC+8 — 2026/01/02 01:00:00 UTC+8");
+    expect(selection.startTime).toBe(Date.UTC(2026, 0, 1, 16, 30));
   });
 });

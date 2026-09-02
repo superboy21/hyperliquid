@@ -1,4 +1,6 @@
 /** An exact, inclusive candle-open-time range selected from a chart. */
+import { formatChartDateTime, type ChartTimeZone } from "../chart-timezone";
+
 export interface ChartTimeSelection {
   startTime: number;
   endTime: number;
@@ -116,11 +118,6 @@ export function filterTimedInChartTimeSelection<T extends { time: number }>(
   return values.filter((value) => value.time >= selection.startTime && value.time <= selection.endTime);
 }
 
-export function formatChartTimeSelection(selection: ChartTimeSelection): string {
-  const format = (time: number) => {
-    const date = new Date(time);
-    const pad = (value: number) => String(value).padStart(2, "0");
-    return `${date.getUTCFullYear()}/${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
-  };
-  return `${format(selection.startTime)} UTC — ${format(selection.endTime)} UTC`;
+export function formatChartTimeSelection(selection: ChartTimeSelection, timeZone: ChartTimeZone = "UTC"): string {
+  return `${formatChartDateTime(selection.startTime, timeZone)} ${timeZone} — ${formatChartDateTime(selection.endTime, timeZone)} ${timeZone}`;
 }
