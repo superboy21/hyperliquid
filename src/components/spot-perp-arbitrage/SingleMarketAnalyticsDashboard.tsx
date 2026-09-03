@@ -29,8 +29,16 @@ function number(value: number | null, digits = 4): string {
   return value.toFixed(digits);
 }
 
+function price(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "--";
+  const absolute = Math.abs(value);
+  if (absolute >= 1_000) return value.toFixed(2);
+  if (absolute >= 1) return value.toFixed(4);
+  return value.toFixed(6);
+}
+
 function bands(title: string, metric: ReturnType<typeof singleMarketAnalytics>["candleCloseVwap"]) {
-  return <div className="rounded-md border border-gray-700/80 bg-gray-900/40 p-3"><p className="text-[11px] font-medium text-gray-400">{title}</p><p className="mt-1 font-mono text-sm text-violet-200">{number(metric.mean)}</p><p className="mt-1 text-[10px] text-gray-500">n={metric.count} · σ {number(metric.populationSigma)}</p><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-gray-400"><span>−2σ {number(metric.minus2Sigma)}</span><span>+2σ {number(metric.plus2Sigma)}</span><span>−1σ {number(metric.minus1Sigma)}</span><span>+1σ {number(metric.plus1Sigma)}</span></div></div>;
+  return <div className="rounded-md border border-gray-700/80 bg-gray-900/40 p-3"><p className="text-[11px] font-medium text-gray-400">{title}</p><p className="mt-1 font-mono text-sm text-violet-200">{price(metric.mean)}</p><p className="mt-1 text-[10px] text-gray-500">n={metric.count} · σ {price(metric.populationSigma)}</p><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-gray-400"><span>−2σ {price(metric.minus2Sigma)}</span><span>+2σ {price(metric.plus2Sigma)}</span><span>−1σ {price(metric.minus1Sigma)}</span><span>+1σ {price(metric.plus1Sigma)}</span></div></div>;
 }
 
 export default function SingleMarketAnalyticsDashboard({ candles, funding, selection, marketLabel, marketKind, timeZone }: Props) {
@@ -47,7 +55,7 @@ export default function SingleMarketAnalyticsDashboard({ candles, funding, selec
     ? "--"
     : `${value > 0 ? "+" : ""}${(value * 100).toFixed(digits)}%`;
   const cards = [
-    ["当前价格", number(analytics.latestClose), "所选区间最后一根有效收盘"],
+    ["当前价格", price(analytics.latestClose), "所选区间最后一根有效收盘"],
     ["平均基础币成交量", number(analytics.baseVolume.mean), `${analytics.baseVolume.count} 个有效样本 / 每根 K 线`],
     ["平均报价币成交额", number(analytics.quoteTurnover.mean), `${analytics.quoteTurnover.count} 个样本：官方 ${analytics.quoteTurnover.officialCount}，估算 ${analytics.quoteTurnover.estimatedCount}`],
     ["年化波动率", analytics.annualizedVolatility.percent === null ? "--" : `${analytics.annualizedVolatility.percent.toFixed(2)}%`, `${analytics.annualizedVolatility.returnCount} 个对数收益样本`],
