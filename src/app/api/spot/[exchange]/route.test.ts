@@ -1,10 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
-import { buildSpotUpstreamRequest, handleSpotRequest } from "./route";
+
+mock.module("server-only", () => ({}));
+
+const { buildSpotUpstreamRequest, handleSpotRequest, clearSpotCaches } = await import("./route");
 
 const params = (query: string) => new URLSearchParams(query);
 
 describe("strict spot facade", () => {
+  beforeEach(() => clearSpotCaches());
+
   test("uses fixed hosts and clamps depth to exchange limits", () => {
     const request = buildSpotUpstreamRequest("binance", params("action=book&symbol=BTCUSDT&limit=999999"));
     expect(typeof request).not.toBe("string");
@@ -56,5 +61,104 @@ describe("strict spot facade", () => {
     ));
     expect(invalidSuccess.status).toBe(502);
     expect(await invalidSuccess.json()).toEqual({ error: "Invalid upstream response" });
+  });
+
+  test.each([
+    ["abort", new DOMException("aborted", "AbortError"), 499, "Request cancelled"],
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    const controller = new AbortController();
+    if (status === 499) controller.abort();
+    const request = new NextRequest("http://localhost/api/spot/binance?action=list", { signal: controller.signal });
+    const response = await handleSpotRequest(request, "binance", async () => { throw error; });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: message });
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const request = new NextRequest("http://localhost/api/spot/binance?action=list");
+    const response = await handleSpotRequest(request, "binance", async () => new Response("not json", { status: 200 }));
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "Invalid upstream response" });
+  });
+
+  test("coalesces non-Gate list requests without passing a caller signal", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fetcher = async (_url: string | URL, init?: RequestInit) => {
+      calls += 1;
+      expect(init?.signal).toBeUndefined();
+      await gate;
+      return Response.json([{ symbol: "BTCUSDT" }]);
+    };
+    const first = handleSpotRequest(new NextRequest("http://localhost/api/spot/binance?action=list"), "binance", fetcher);
+    await Promise.resolve();
+    const controller = new AbortController();
+    const second = handleSpotRequest(new NextRequest("http://localhost/api/spot/binance?action=list", { signal: controller.signal }), "binance", fetcher);
+    controller.abort();
+    release();
+    expect((await first).status).toBe(200);
+    expect((await second).status).toBe(499);
+    expect(calls).toBe(1);
+  });
+
+  test("caches Bitget Spot bulk instruments for five minutes but not malformed JSON", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(4_000_000);
+    let calls = 0;
+    let malformed = true;
+    const fetcher = async () => {
+      calls += 1;
+      return malformed ? new Response("not json", { status: 200 }) : Response.json({ code: "00000", msg: "success", data: [] });
+    };
+    try {
+      expect((await handleSpotRequest(new NextRequest("http://localhost/api/spot/bitget?action=instruments"), "bitget", fetcher)).status).toBe(502);
+      malformed = false;
+      expect((await handleSpotRequest(new NextRequest("http://localhost/api/spot/bitget?action=instruments"), "bitget", fetcher)).status).toBe(200);
+      expect((await handleSpotRequest(new NextRequest("http://localhost/api/spot/bitget?action=instruments"), "bitget", fetcher)).status).toBe(200);
+      expect(calls).toBe(2);
+      clock.mockReturnValue(4_000_000 + 5 * 60 * 1000);
+      await handleSpotRequest(new NextRequest("http://localhost/api/spot/bitget?action=instruments"), "bitget", fetcher);
+      expect(calls).toBe(3);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("returns 499 when cancellation wins before a coalesced success resolves", async () => {
+    let resolvePending!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolvePending = resolve; });
+    const controller = new AbortController();
+    const request = new NextRequest("http://localhost/api/spot/binance?action=list", { signal: controller.signal });
+    const result = handleSpotRequest(request, "binance", async () => pending);
+    await Promise.resolve();
+    controller.abort(new Error("caller cancelled"));
+    resolvePending(Response.json([]));
+    expect((await result).status).toBe(499);
+  });
+
+  test("returns 499 when cancellation wins before a coalesced non-OK response resolves", async () => {
+    let resolvePending!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolvePending = resolve; });
+    const controller = new AbortController();
+    const request = new NextRequest("http://localhost/api/spot/binance?action=list", { signal: controller.signal });
+    const result = handleSpotRequest(request, "binance", async () => pending);
+    await Promise.resolve();
+    controller.abort(new Error("caller cancelled"));
+    resolvePending(new Response("busy", { status: 503 }));
+    expect((await result).status).toBe(499);
+  });
+
+  test("returns 499 when cancellation wins before a coalesced business-error response resolves", async () => {
+    let resolvePending!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolvePending = resolve; });
+    const controller = new AbortController();
+    const request = new NextRequest("http://localhost/api/spot/binance?action=list", { signal: controller.signal });
+    const result = handleSpotRequest(request, "binance", async () => pending);
+    await Promise.resolve();
+    controller.abort(new Error("caller cancelled"));
+    resolvePending(Response.json({ code: "1", msg: "business failure", data: null }));
+    expect((await result).status).toBe(499);
   });
 });

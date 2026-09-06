@@ -1,15 +1,24 @@
 import { describe, expect, mock, test } from "bun:test";
 
+mock.module("server-only", () => ({}));
+
 const calls: URL[] = [];
+let lastInit: RequestInit | undefined;
+let failure: unknown;
+let upstreamResponse = Response.json([]);
+let pendingResponse: Promise<Response> | undefined;
 mock.module("@/lib/utils/proxy", () => ({
-  proxyFetch: async (url: URL) => {
+  proxyFetch: async (url: URL, init?: RequestInit) => {
+    lastInit = init;
+    if (failure) throw failure;
     calls.push(new URL(url));
-    return Response.json([]);
+    if (pendingResponse) return (await pendingResponse).clone();
+    return upstreamResponse.clone();
   },
 }));
 
 import { NextRequest } from "next/server";
-import { binanceEndpointPath, buildBinanceUrl, GET } from "./route";
+const { binanceEndpointPath, buildBinanceUrl, GET } = await import("./route");
 
 const request = (query: string) => new NextRequest(`http://localhost/api/binance?${query}`);
 
@@ -64,5 +73,87 @@ describe("Binance fixed endpoint proxy", () => {
       "endpoint=fundingRate&startTime=bad",
     ]) expect((await GET(request(query))).status).toBe(400);
     expect(calls).toHaveLength(0);
+  });
+
+  test.each([
+    ["abort", new DOMException("aborted", "AbortError"), 499, "Request cancelled"],
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    failure = error;
+    const controller = new AbortController();
+    if (status === 499) controller.abort();
+    try {
+      const response = await GET(new NextRequest("http://localhost/api/binance?endpoint=depth&symbol=BTCUSDT", { signal: controller.signal }));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error: message });
+    } finally {
+      failure = undefined;
+    }
+  });
+
+  test("passes caller cancellation to a non-cacheable upstream request", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    const response = await GET(new NextRequest("http://localhost/api/binance?endpoint=depth&symbol=BTCUSDT", {
+      signal: controller.signal,
+    }));
+    expect(lastInit?.signal?.aborted).toBe(true);
+    expect(response.status).toBe(499);
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const previous = upstreamResponse;
+    upstreamResponse = new Response("not json", { status: 200 });
+    try {
+      const response = await GET(request("endpoint=depth&symbol=BTCUSDT"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "Failed to fetch upstream" });
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("does not cache malformed bulk JSON", async () => {
+    const previous = upstreamResponse;
+    const before = calls.length;
+    upstreamResponse = new Response("not json", { status: 200 });
+    try {
+      await expect(GET(request("endpoint=fundingInfo"))).resolves.toMatchObject({ status: 502 });
+      await expect(GET(request("endpoint=fundingInfo"))).resolves.toMatchObject({ status: 502 });
+      expect(calls.length - before).toBe(2);
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("coalesces concurrent bulk requests and isolates an aborted waiter", async () => {
+    let resolvePending!: (response: Response) => void;
+    pendingResponse = new Promise((resolve) => { resolvePending = resolve; });
+    const cancelled = new AbortController();
+    const before = calls.filter((url) => url.pathname.endsWith("/ticker/bookTicker")).length;
+    const first = GET(new NextRequest("http://localhost/api/binance?endpoint=ticker%2FbookTicker", {
+      signal: cancelled.signal,
+    }));
+    const second = GET(request("endpoint=ticker%2FbookTicker"));
+    await Promise.resolve();
+    expect(calls.filter((url) => url.pathname.endsWith("/ticker/bookTicker")).length - before).toBe(1);
+
+    cancelled.abort(new Error("caller cancelled"));
+    await expect(first).resolves.toMatchObject({ status: 499 });
+    resolvePending(Response.json([{ symbol: "BTCUSDT" }]));
+    const response = await second;
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    pendingResponse = undefined;
+  });
+
+  test("does not coalesce parameterized or kline requests", async () => {
+    const before = calls.length;
+    await GET(request("endpoint=premiumIndex&symbol=BTCUSDT"));
+    await GET(request("endpoint=premiumIndex&symbol=BTCUSDT"));
+    await GET(request("endpoint=premiumIndexKlines&symbol=BTCUSDT&interval=1m"));
+    await GET(request("endpoint=premiumIndexKlines&symbol=BTCUSDT&interval=1m"));
+    expect(calls.length - before).toBe(4);
   });
 });

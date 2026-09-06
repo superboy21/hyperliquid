@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAbortLikeError } from "@/lib/utils/abort";
+import { createInflightJsonCache } from "@/lib/utils/inflight-json-cache";
 import { proxyFetch } from "@/lib/utils/proxy";
+import { proxyFailureResponse, retryAfterHeaders } from "@/lib/utils/proxy-error";
 
 const OKX_API_BASE = "https://www.okx.com";
 const ID_RE = /^[A-Z0-9]+(?:-[A-Z0-9]+){0,7}$/;
@@ -9,6 +10,8 @@ const BARS = new Set([
   "1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H", "6H", "12H", "1D",
   "1W", "1M", "3M", "6M", "1Y", "1Dutc",
 ]);
+const OKX_CACHE = createInflightJsonCache();
+const OKX_TTL_MS = 5 * 60 * 1000;
 
 type EndpointSpec = {
   path: string;
@@ -77,7 +80,74 @@ const ENDPOINTS: Record<string, EndpointSpec> = {
 };
 
 function badRequest(error: string) {
-  return NextResponse.json({ error }, { status: 400 });
+  return NextResponse.json({ error }, { status: 400, headers: { "Cache-Control": "no-store" } });
+}
+
+class UpstreamHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly message: string,
+    readonly headers: Headers,
+  ) {
+    super(message);
+  }
+}
+
+class InvalidOkxResponseError extends Error {
+  constructor() {
+    super("Invalid OKX upstream response");
+    this.name = "InvalidOkxResponseError";
+  }
+}
+
+function proxyErrorResponse(signal: AbortSignal, error?: unknown): NextResponse {
+  const response = proxyFailureResponse(signal, error);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
+function cacheTtl(endpoint: string, params: URLSearchParams): number | null {
+  if (
+    endpoint === "public/instruments"
+    && params.get("instType") === "SWAP"
+    && params.get("instId") === null
+  ) {
+    return OKX_TTL_MS;
+  }
+  if (endpoint === "public/funding-rate" && params.get("instId") === "ANY") return 0;
+  if (endpoint === "market/tickers") return 0;
+  if (endpoint === "market/index-tickers" && params.get("instId") === null) return 0;
+  if (endpoint === "public/open-interest" && params.get("instId") === null) return 0;
+  return null;
+}
+
+function isOkxSuccessEnvelope(payload: unknown): boolean {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const object = payload as Record<string, unknown>;
+  return (object.code === "0" || object.code === 0) && Object.prototype.hasOwnProperty.call(object, "data");
+}
+
+async function loadJson(upstream: URL, signal?: AbortSignal): Promise<unknown> {
+  const response = await proxyFetch(upstream, {
+    timeout: 10_000,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!response.ok) {
+    let body: unknown = null;
+    try { body = await response.json(); } catch { /* Error bodies need not be JSON. */ }
+    const message = body && typeof body === "object"
+      ? String(
+          (body as { error?: unknown; message?: unknown; msg?: unknown }).error
+            ?? (body as { message?: unknown }).message
+            ?? (body as { msg?: unknown }).msg
+            ?? `HTTP ${response.status}`,
+        )
+      : `HTTP ${response.status}`;
+    throw new UpstreamHttpError(response.status, message, retryAfterHeaders(response));
+  }
+  const payload = await response.json();
+  if (!isOkxSuccessEnvelope(payload)) throw new InvalidOkxResponseError();
+  return payload;
 }
 
 function validPositiveInteger(value: string): boolean {
@@ -86,13 +156,6 @@ function validPositiveInteger(value: string): boolean {
 
 function validId(value: string | null): boolean {
   return value === null || ID_RE.test(value);
-}
-
-function retryHeaders(response: Response): Headers {
-  const headers = new Headers();
-  const retryAfter = response.headers.get("Retry-After");
-  if (retryAfter) headers.set("Retry-After", retryAfter);
-  return headers;
 }
 
 export function okxEndpointPath(endpoint: string): string | null {
@@ -158,34 +221,32 @@ export async function GET(request: NextRequest) {
   const upstream = buildOkxUrl(endpoint as string, params);
   if (!upstream) return badRequest("Unknown or missing endpoint");
 
+  const ttl = cacheTtl(endpoint as string, params);
+  const load = (signal?: AbortSignal) => loadJson(upstream, signal);
+
   try {
-    const response = await proxyFetch(upstream, {
-      timeout: 10_000,
-      signal: request.signal,
-    });
-    if (!response.ok) {
-      let body: unknown = null;
-      try { body = await response.json(); } catch { /* Error bodies need not be JSON. */ }
-      const message = body && typeof body === "object"
-        ? String(
-            (body as { error?: unknown; message?: unknown; msg?: unknown }).error
-              ?? (body as { message?: unknown }).message
-              ?? (body as { msg?: unknown }).msg
-              ?? `HTTP ${response.status}`,
-          )
-        : `HTTP ${response.status}`;
-      return NextResponse.json(
-        { error: message, upstreamStatus: response.status },
-        { status: response.status, headers: retryHeaders(response) },
-      );
-    }
-    return NextResponse.json(await response.json());
+    const value = ttl === null
+      ? await load(request.signal)
+      : await OKX_CACHE.getOrLoad(upstream.toString(), ttl, () => load(), request.signal);
+    if (request.signal.aborted) return proxyErrorResponse(request.signal);
+    return NextResponse.json(value, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    if (request.signal.aborted || isAbortLikeError(error)) {
-      return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
+    console.error("[OKX API] Error:", error);
+    if (request.signal.aborted) return proxyErrorResponse(request.signal, error);
+    if (error instanceof UpstreamHttpError) {
+      return NextResponse.json(
+        { error: error.message, upstreamStatus: error.status },
+        { status: error.status, headers: noStoreHeaders(error.headers) },
+      );
     }
     const message = error instanceof Error ? error.message : "Failed to fetch OKX data";
     console.error("[OKX API] Error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return proxyErrorResponse(request.signal, error);
   }
+}
+
+function noStoreHeaders(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  result.set("Cache-Control", "no-store");
+  return result;
 }

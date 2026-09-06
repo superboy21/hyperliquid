@@ -82,13 +82,15 @@ export async function lighterFetch(endpoint: string, params: string = "", init?:
   return runDirectFirst({
     signal,
     directTimeoutMs,
-    direct: async (directSignal) => {
+    direct: async (directSignal, reportResponse) => {
       const directInit = { ...init, signal: directSignal };
       let response = await throttleLighterFetch(() => fetch(directUrl, directInit), directSignal);
+      reportResponse?.(response);
       if (response.status === 429) {
         await sleep(retryAfterMs(response) ?? 1_000, directSignal);
         throwIfAborted(directSignal);
         response = await throttleLighterFetch(() => fetch(directUrl, directInit), directSignal);
+        reportResponse?.(response);
       }
       return response;
     },

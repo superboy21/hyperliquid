@@ -42,4 +42,40 @@ describe("Gate contracts route", () => {
     expect(response.status).toBe(499);
     expect(proxyFetchMock).toHaveBeenCalledTimes(1);
   });
+
+  test("does not retry rate limits or ordinary client errors", async () => {
+    for (const status of [429, 404]) {
+      proxyFetchMock.mockReset();
+      proxyFetchMock.mockResolvedValue(Response.json({ error: "no" }, {
+        status,
+        headers: { "Retry-After": "9999" },
+      }));
+
+      const response = await GET(new NextRequest("http://localhost/api/gate/futures/usdt/contracts"));
+
+      expect(response.status).toBe(status);
+      expect(proxyFetchMock).toHaveBeenCalledTimes(1);
+      expect(response.headers.get("Retry-After")).toBe(status === 429 ? "60" : "60");
+    }
+  });
+
+  test("fails over malformed successful responses", async () => {
+    proxyFetchMock
+      .mockResolvedValueOnce(Response.json({ contracts: "not-an-array" }))
+      .mockResolvedValueOnce(Response.json([{ name: "BTC_USDT" }]));
+
+    const response = await GET(new NextRequest("http://localhost/api/gate/futures/usdt/contracts"));
+
+    expect(response.status).toBe(200);
+    expect(proxyFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("classifies an exhausted own timeout as 504", async () => {
+    proxyFetchMock.mockRejectedValue(new DOMException("The operation timed out.", "TimeoutError"));
+
+    const response = await GET(new NextRequest("http://localhost/api/gate/futures/usdt/contracts"));
+
+    expect(response.status).toBe(504);
+    expect(proxyFetchMock).toHaveBeenCalledTimes(3);
+  });
 });

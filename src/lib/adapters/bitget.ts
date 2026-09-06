@@ -1,5 +1,5 @@
 import type { AssetCategory, CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
-import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
+import { isAbortLikeError } from "@/lib/utils/abort";
 import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
 import { clampRpiDepth, normalizeRpiSplitLevels, type BookMode } from "@/lib/rpi-book";
 
@@ -63,13 +63,16 @@ type SchedulerOptions = {
 };
 
 const abortError = () => new DOMException("The operation was aborted.", "AbortError");
-function throwIfAborted(signal?: AbortSignal) { if (signal?.aborted) throw abortError(); }
+function callerAbortReason(signal?: AbortSignal | null): unknown {
+  return signal?.aborted ? signal.reason : abortError();
+}
+function throwIfAborted(signal?: AbortSignal) { if (signal?.aborted) throw callerAbortReason(signal); }
 
 const defaultSleep: Sleep = (ms, signal) => new Promise((resolve, reject) => {
   throwIfAborted(signal);
   const timer = setTimeout(done, ms);
   function done() { signal?.removeEventListener("abort", aborted); resolve(); }
-  function aborted() { clearTimeout(timer); signal?.removeEventListener("abort", aborted); reject(abortError()); }
+  function aborted() { clearTimeout(timer); signal?.removeEventListener("abort", aborted); reject(callerAbortReason(signal)); }
   signal?.addEventListener("abort", aborted, { once: true });
 });
 
@@ -77,7 +80,7 @@ function waitForTurn(turn: Promise<void>, signal?: AbortSignal): Promise<void> {
   if (!signal) return turn;
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    const aborted = () => { signal.removeEventListener("abort", aborted); reject(abortError()); };
+    const aborted = () => { signal.removeEventListener("abort", aborted); reject(callerAbortReason(signal)); };
     signal.addEventListener("abort", aborted, { once: true });
     turn.then(() => { signal.removeEventListener("abort", aborted); resolve(); }, reject);
   });
@@ -161,6 +164,7 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
     resolve: (value: unknown) => void;
     reject: (error: unknown) => void;
     aborted: () => void;
+    lastDirect429Error?: BitgetHttpError;
   };
   const queues: Record<BitgetRequestPriority, Job[]> = { interactive: [], normal: [], background: [] };
   const currentTime = () => Math.max(now(), releasedAt);
@@ -184,8 +188,17 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
       }
       return unwrapBitgetEnvelope(payload, retryAfter);
     } catch (error) {
-      if (callerSignal?.aborted) throw abortError();
-      throw timedOut ? new BitgetTimeoutError() : error;
+      if (callerSignal?.aborted) throw callerAbortReason(callerSignal);
+      const failure = timedOut ? new BitgetTimeoutError() : error;
+      if (
+        !job.url.startsWith(BITGET_PROXY_PATH)
+        && failure instanceof BitgetHttpError
+        && failure.source === "http"
+        && failure.status === 429
+      ) {
+        job.lastDirect429Error = failure;
+      }
+      throw failure;
     } finally {
       clearTimeout(timer);
       callerSignal?.removeEventListener("abort", callerAbort);
@@ -232,12 +245,18 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
     if (running) return;
     const job = dequeueReady();
     if (!job) { scheduleWake(); return; }
-    if (job.init.signal?.aborted) { job.reject(abortError()); finish(job); drain(); return; }
+    if (job.init.signal?.aborted) { job.reject(callerAbortReason(job.init.signal)); finish(job); drain(); return; }
     running = true;
     job.attempt += 1;
     void executeAttempt(job).then(
       (value) => { job.resolve(value); finish(job); },
       (error) => {
+        // A direct rate limit is authoritative for this operation. If a later
+        // retry fails in a way that would otherwise use the proxy, keep the
+        // 429 terminal instead of changing origins.
+        const terminalError = job.lastDirect429Error && isBitgetProxyEligibleFailure(error)
+          ? job.lastDirect429Error
+          : error;
         const retryable = error instanceof BitgetTimeoutError || (error instanceof BitgetHttpError && error.transient);
         const exponential = Math.min(8_000, 1_000 * 2 ** (job.attempt - 1));
         const honored = error instanceof BitgetHttpError ? error.retryAfterMs : null;
@@ -251,7 +270,7 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
           // Retaining the head preserves FIFO within this priority across retries.
           queues[job.priority].unshift(job);
         } else {
-          job.reject(job.init.signal?.aborted ? abortError() : error);
+          job.reject(job.init.signal?.aborted ? callerAbortReason(job.init.signal) : terminalError);
           finish(job);
         }
       },
@@ -267,10 +286,10 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
         const queue = queues[job.priority];
         const index = queue.indexOf(job);
         if (index !== -1) queue.splice(index, 1);
-        reject(abortError());
+        reject(callerAbortReason(job.init.signal));
         refreshWake();
       };
-      if (init.signal?.aborted) { reject(abortError()); return; }
+      if (init.signal?.aborted) { reject(callerAbortReason(init.signal)); return; }
       init.signal?.addEventListener("abort", job.aborted, { once: true });
       queues[priority].push(job);
       refreshWake();
@@ -435,10 +454,13 @@ export function createBitgetRequest(
   scheduler: Pick<ReturnType<typeof createBitgetScheduler>, "fetchJson"> = bitgetScheduler,
 ): BitgetRequest {
   return async (action, params, signal, options) => {
+    throwIfAborted(signal);
     try {
       return await scheduler.fetchJson(buildBitgetUrl(action, params), { signal }, options?.priority);
     } catch (error) {
+      if (signal?.aborted) throw callerAbortReason(signal);
       if (!isBitgetProxyEligibleFailure(error)) throw error;
+      throwIfAborted(signal);
       return scheduler.fetchJson(buildBitgetProxyUrl(action, params), { signal }, options?.priority);
     }
   };
@@ -727,7 +749,7 @@ export async function fetchBitgetCanonicalDetail(
       request: options.request,
       priority: options.priority,
     }).catch((error): CanonicalCandlePoint[] => {
-      if (options.signal?.aborted) throw getAbortReason(options.signal);
+      if (options.signal?.aborted) throw callerAbortReason(options.signal);
       if (isAbortLikeError(error)) throw error;
       console.warn(`Bitget candle detail request failed for ${row.rawSymbol}; returning funding-only detail`, error);
       return [];

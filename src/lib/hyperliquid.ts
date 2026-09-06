@@ -87,8 +87,6 @@ function hyperliquidHeaders(): HeadersInit {
   return {
     "Content-Type": "application/json",
     Accept: "application/json",
-    Origin: "https://app.hyperliquid.xyz",
-    Referer: "https://app.hyperliquid.xyz/",
   };
 }
 
@@ -109,31 +107,32 @@ async function fetchHyperliquidResponse(
     body: serializedBody,
   } satisfies RequestInit;
 
-  const direct = async (): Promise<Response> => {
+  const direct = async (directSignal?: AbortSignal, reportResponse?: (response: Response) => void): Promise<Response> => {
     let lastError: unknown;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      throwIfAborted(signal);
-      const requestSignal = createDirectSignal(signal);
+      throwIfAborted(directSignal);
+      const requestSignal = createDirectSignal(directSignal);
 
       try {
         const response = await fetch(HYPERLIQUID_INFO_URL, {
           ...init,
           signal: requestSignal,
         });
+        reportResponse?.(response);
 
         if (
           (response.status === 429 || response.status >= 500) &&
           attempt < maxAttempts - 1
         ) {
-          await sleep(250 * (attempt + 1), signal);
+          await sleep(250 * (attempt + 1), directSignal);
           continue;
         }
 
         return response;
       } catch (error) {
-        if (signal?.aborted) {
-          throwIfAborted(signal);
+        if (directSignal?.aborted) {
+          throwIfAborted(directSignal);
         }
 
         lastError = error;
@@ -142,7 +141,7 @@ async function fetchHyperliquidResponse(
         }
 
         // Preserve the old retry count for network and client-timeout errors.
-        await sleep(250 * (attempt + 1), signal);
+        await sleep(250 * (attempt + 1), directSignal);
       }
     }
 

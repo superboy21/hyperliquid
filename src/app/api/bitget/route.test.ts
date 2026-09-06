@@ -1,15 +1,19 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+
+mock.module("server-only", () => ({}));
 
 mock.module("@/lib/utils/proxy", () => ({
   proxyFetch: (url: string | URL, init?: RequestInit) => globalThis.fetch(url, init),
 }));
 
 import { NextRequest } from "next/server";
-import { bitgetActionPath, GET, mappedBitgetStatus } from "./route";
+const { bitgetActionPath, GET, mappedBitgetStatus, clearBitgetCaches } = await import("./route");
 
 const request = (query: string) => new NextRequest(`http://localhost/api/bitget?${query}`);
 
 describe("Bitget proxy contract", () => {
+  beforeEach(() => clearBitgetCaches());
+
   test("maps only the fixed Phase 1 actions", () => {
     expect([
       "instruments", "tickers", "current-fund-rate", "history-fund-rate", "candles", "history-candles", "orderbook", "rpi-orderbook",
@@ -68,7 +72,7 @@ describe("Bitget proxy contract", () => {
   });
 
   test.each(["1Dutc", "1Wutc"])("allows official UTC candle interval %s", async (interval) => {
-    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ code: "00000", msg: "success", data: [] }));
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ code: "00000", msg: "success", data: [] }));
     try {
       const response = await GET(request(`action=candles&symbol=BTCUSDT&interval=${interval}`));
       expect(response.status).toBe(200);
@@ -85,6 +89,71 @@ describe("Bitget proxy contract", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ code: "00000", msg: "success", data: [{ asks: [] }] });
       expect(new URL(String(fetchMock.mock.calls[0][0])).pathname).toBe("/api/v3/market/rpi-orderbook");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test.each([
+    ["abort", new DOMException("aborted", "AbortError"), 499, "Request cancelled"],
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(error);
+    const controller = new AbortController();
+    if (status === 499) controller.abort();
+    try {
+      const response = await GET(new NextRequest("http://localhost/api/bitget?action=tickers", { signal: controller.signal }));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error: message });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(new Response("not json", { status: 200 }));
+    try {
+      const response = await GET(request("action=tickers"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "Failed to fetch upstream" });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("caches only bulk instruments metadata for five minutes", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ code: "00000", msg: "success", data: [] }));
+    const clock = spyOn(Date, "now").mockReturnValue(2_000_000);
+    try {
+      expect((await GET(request("action=instruments"))).status).toBe(200);
+      expect((await GET(request("action=instruments&symbol=BTCUSDT"))).status).toBe(200);
+      expect((await GET(request("action=instruments"))).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      clock.mockReturnValue(2_000_000 + 5 * 60 * 1000);
+      await GET(request("action=instruments"));
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("does not give TTL storage to tickers, funding, books, or RPI", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ code: "00000", msg: "success", data: [] }));
+    try {
+      const uncached = [
+        "action=tickers",
+        "action=current-fund-rate",
+        "action=history-fund-rate&symbol=BTCUSDT",
+        "action=orderbook&symbol=BTCUSDT",
+        "action=rpi-orderbook&symbol=BTCUSDT",
+      ];
+      for (const query of uncached) {
+        await GET(request(query));
+        await GET(request(query));
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(uncached.length * 2);
     } finally {
       fetchMock.mockRestore();
     }

@@ -42,6 +42,27 @@ describe.serial("Binance direct-first transport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  test.each(["binanceFetch", "binanceKlinesFetch"] as const)("does not proxy a 429 followed by a network failure (%s)", async (name) => {
+    const first = new Response(null, { status: 429, headers: { "Retry-After": "0" } });
+    const fetchMock = mock().mockResolvedValueOnce(first).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const result = name === "binanceFetch"
+      ? binanceFetch("premiumIndex", "")
+      : binanceKlinesFetch("BTCUSDT", "1h", "30");
+    await expect(result).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not proxy a 429 whose Retry-After outlives the direct deadline", async () => {
+    const first = new Response(null, { status: 429, headers: { "Retry-After": "60" } });
+    const fetchMock = mock().mockResolvedValueOnce(first);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(binanceFetch("premiumIndex", "", undefined, 1)).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test("falls back once for a direct network failure", async () => {
     const proxy = new Response(null, { status: 200 });
     const fetchMock = mock().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce(proxy);

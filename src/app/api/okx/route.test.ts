@@ -1,15 +1,24 @@
 import { describe, expect, mock, test } from "bun:test";
 
+mock.module("server-only", () => ({}));
+
 const calls: URL[] = [];
+let lastInit: RequestInit | undefined;
+let failure: unknown;
+let upstreamResponse = Response.json({ code: "0", data: [] });
+let pendingResponse: Promise<Response> | undefined;
 mock.module("@/lib/utils/proxy", () => ({
-  proxyFetch: async (url: URL) => {
+  proxyFetch: async (url: URL, init?: RequestInit) => {
+    lastInit = init;
+    if (failure) throw failure;
     calls.push(new URL(url));
-    return Response.json({ code: "0", data: [] });
+    if (pendingResponse) return (await pendingResponse).clone();
+    return upstreamResponse.clone();
   },
 }));
 
 import { NextRequest } from "next/server";
-import { buildOkxUrl, GET, okxEndpointPath } from "./route";
+const { buildOkxUrl, GET, okxEndpointPath } = await import("./route");
 
 const request = (query: string) => new NextRequest(`http://localhost/api/okx?${query}`);
 
@@ -67,5 +76,114 @@ describe("OKX fixed endpoint proxy", () => {
       "endpoint=public%2Fopen-interest&instType=BAD",
     ]) expect((await GET(request(query))).status).toBe(400);
     expect(calls).toHaveLength(0);
+  });
+
+  test.each([
+    ["abort", new DOMException("aborted", "AbortError"), 499, "Request cancelled"],
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    failure = error;
+    const controller = new AbortController();
+    if (status === 499) controller.abort();
+    try {
+      const response = await GET(new NextRequest("http://localhost/api/okx?endpoint=public%2Ffunding-rate&instId=BTC-USDT-SWAP", { signal: controller.signal }));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error: message });
+    } finally {
+      failure = undefined;
+    }
+  });
+
+  test("passes caller cancellation to a non-cacheable upstream request", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    const response = await GET(new NextRequest("http://localhost/api/okx?endpoint=public%2Ffunding-rate&instId=BTC-USDT-SWAP", {
+      signal: controller.signal,
+    }));
+    expect(lastInit?.signal?.aborted).toBe(true);
+    expect(response.status).toBe(499);
+  });
+
+  test("does not cache a business-error instruments response", async () => {
+    const previous = upstreamResponse;
+    const before = calls.length;
+    const query = "endpoint=public%2Finstruments&instType=SWAP&instFamily=SOL-USD";
+    try {
+      upstreamResponse = Response.json({ code: "51000", msg: "temporarily unavailable", data: [] });
+      await expect(GET(request(query))).resolves.toMatchObject({ status: 502 });
+      upstreamResponse = Response.json({ code: "0", data: [] });
+      await expect(GET(request(query))).resolves.toMatchObject({ status: 200 });
+      expect(calls.length - before).toBe(2);
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const previous = upstreamResponse;
+    upstreamResponse = new Response("not json", { status: 200 });
+    try {
+      const response = await GET(request("endpoint=public%2Ffunding-rate&instId=BTC-USDT-SWAP"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "Failed to fetch upstream" });
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("does not cache malformed TTL responses", async () => {
+    const previous = upstreamResponse;
+    const before = calls.length;
+    upstreamResponse = new Response("not json", { status: 200 });
+    try {
+      const query = "endpoint=public%2Finstruments&instType=SWAP&instFamily=ETH-USD";
+      await expect(GET(request(query))).resolves.toMatchObject({ status: 502 });
+      await expect(GET(request(query))).resolves.toMatchObject({ status: 502 });
+      expect(calls.length - before).toBe(2);
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("serves a fresh response from the instruments TTL cache", async () => {
+    const query = "endpoint=public%2Finstruments&instType=SWAP&instFamily=BTC-USD";
+    const before = calls.length;
+    const first = await GET(request(query));
+    const second = await GET(request(query));
+    expect(first).not.toBe(second);
+    expect(second.headers.get("Cache-Control")).toBe("no-store");
+    expect(calls.length - before).toBe(1);
+  });
+
+  test("coalesces bulk requests while aborting only one waiter", async () => {
+    let resolvePending!: (response: Response) => void;
+    pendingResponse = new Promise((resolve) => { resolvePending = resolve; });
+    const cancelled = new AbortController();
+    const query = "endpoint=market%2Ftickers&instType=FUTURES&uly=ETH-USD";
+    const before = calls.filter((url) => url.pathname.endsWith("/market/tickers")).length;
+    const first = GET(new NextRequest(`http://localhost/api/okx?${query}`, { signal: cancelled.signal }));
+    const second = GET(request(query));
+    await Promise.resolve();
+    expect(calls.filter((url) => url.pathname.endsWith("/market/tickers")).length - before).toBe(1);
+    cancelled.abort(new Error("caller cancelled"));
+    await expect(first).resolves.toMatchObject({ status: 499 });
+    resolvePending(Response.json({ code: "0", data: [{ instId: "ETH-USD-SWAP" }] }));
+    await expect(second).resolves.toMatchObject({ status: 200 });
+    pendingResponse = undefined;
+  });
+
+  test("does not cache single-instrument or candle requests", async () => {
+    const before = calls.length;
+    for (const query of [
+      "endpoint=public%2Finstruments&instType=SWAP&instId=BTC-USDT-SWAP",
+      "endpoint=public%2Fopen-interest&instType=SWAP&instId=BTC-USDT-SWAP",
+      "endpoint=market%2Findex-tickers&instId=BTC-USDT",
+      "endpoint=market%2Fhistory-candles&instId=BTC-USDT-SWAP&bar=1m",
+    ]) {
+      await GET(request(query));
+      await GET(request(query));
+    }
+    expect(calls.length - before).toBe(8);
   });
 });

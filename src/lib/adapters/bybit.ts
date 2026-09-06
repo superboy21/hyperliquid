@@ -1,5 +1,5 @@
 import type { CanonicalCandlePoint, CanonicalFundingDetail, CanonicalFundingHistoryPoint, CanonicalFundingRateRow } from "@/lib/types";
-import { getAbortReason, isAbortLikeError } from "@/lib/utils/abort";
+import { isAbortLikeError } from "@/lib/utils/abort";
 import { computeOrderBookImpactDetail, resolvePerpImpactDepth, type OrderBookImpactDetailResult } from "@/lib/order-book-impact";
 import { clampRpiDepth, normalizeRpiSplitLevels, type BookMode } from "@/lib/rpi-book";
 
@@ -73,13 +73,16 @@ export const BYBIT_SCHEDULER_PROFILE = {
 } as const;
 
 const abortError = () => new DOMException("The operation was aborted.", "AbortError");
-function throwIfAborted(signal?: AbortSignal) { if (signal?.aborted) throw abortError(); }
+function callerAbortReason(signal?: AbortSignal): unknown {
+  return signal?.aborted ? signal.reason : abortError();
+}
+function throwIfAborted(signal?: AbortSignal) { if (signal?.aborted) throw callerAbortReason(signal); }
 
 const defaultSleep: Sleep = (ms, signal) => new Promise((resolve, reject) => {
   throwIfAborted(signal);
   const timer = setTimeout(done, ms);
   function done() { signal?.removeEventListener("abort", aborted); resolve(); }
-  function aborted() { clearTimeout(timer); signal?.removeEventListener("abort", aborted); reject(abortError()); }
+  function aborted() { clearTimeout(timer); signal?.removeEventListener("abort", aborted); reject(callerAbortReason(signal)); }
   signal?.addEventListener("abort", aborted, { once: true });
 });
 
@@ -109,7 +112,7 @@ function acquireSlot(
       const index = waiters.indexOf(waiter);
       if (index !== -1) waiters.splice(index, 1);
       signal?.removeEventListener("abort", onAbort);
-      reject(abortError());
+      reject(callerAbortReason(signal));
     };
     waiter.wake = () => {
       signal?.removeEventListener("abort", onAbort);
@@ -202,6 +205,8 @@ export function createBybitScheduler(options: SchedulerOptions = {}) {
 
   async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> {
     const signal = init.signal ?? undefined;
+    const isDirect = !url.startsWith("/api/bybit");
+    let lastDirect429Error: BybitHttpError | undefined;
     await acquireSlot(waiters, () => active, () => { active += 1; }, maxInFlight, signal);
     try {
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -226,10 +231,16 @@ export function createBybitScheduler(options: SchedulerOptions = {}) {
           }
           return unwrapBybitEnvelope(payload, retryAfter);
         } catch (error) {
-          if (callerSignal?.aborted) throw abortError();
+          if (callerSignal?.aborted) throw callerAbortReason(callerSignal);
           const failure = timedOut ? new BybitTimeoutError() : error;
+          if (isDirect && failure instanceof BybitHttpError && !failure.business && failure.status === 429) {
+            lastDirect429Error = failure;
+          }
+          const terminalFailure = lastDirect429Error && isBybitProxyEligibleFailure(failure)
+            ? lastDirect429Error
+            : failure;
           const retryable = failure instanceof BybitTimeoutError || (failure instanceof BybitHttpError && failure.transient);
-          if (!retryable || attempt === 3) throw failure;
+          if (!retryable || attempt === 3) throw terminalFailure;
           const exponential = Math.min(8_000, 1_000 * 2 ** (attempt - 1));
           const honored = failure instanceof BybitHttpError ? failure.retryAfterMs : null;
           await sleep(Math.max(exponential, honored ?? 0) + Math.floor(random() * 251), callerSignal);
@@ -481,7 +492,7 @@ export function createBybitRequest(
     try {
       return await scheduler.fetchJson(buildBybitUrl(action, params), { signal });
     } catch (error) {
-      if (signal?.aborted) throw getAbortReason(signal);
+      if (signal?.aborted) throw callerAbortReason(signal);
       if (!isBybitProxyEligibleFailure(error)) throw error;
       throwIfAborted(signal);
       return scheduler.fetchJson(buildBybitProxyUrl(action, params), { signal });
@@ -943,7 +954,7 @@ export async function fetchBybitCanonicalDetail(
       request: options.request,
       cache: options.candleCache,
     }).catch((error): CanonicalCandlePoint[] => {
-      if (options.signal?.aborted) throw getAbortReason(options.signal);
+      if (options.signal?.aborted) throw callerAbortReason(options.signal);
       if (isAbortLikeError(error)) throw error;
       console.warn(`Bybit candle detail request failed for ${row.rawSymbol}; returning funding-only detail`, error);
       return [];

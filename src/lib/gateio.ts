@@ -3,6 +3,7 @@ import {
   buildGateBatchProxyRequest,
   createGateDirectRequest,
   enrichGateTickers,
+  hasCompleteGateTickerEnrichment,
   requestGate,
   type GateTransportOptions,
 } from "./gate-upstream";
@@ -44,6 +45,11 @@ export interface GateFundingHistoryItem {
 export interface GateBatchFundingRatesResponseItem {
   contract?: string;
   data?: GateFundingHistoryItem[];
+  error?: {
+    status: number;
+    message: string;
+    retryAfter?: string;
+  };
 }
 
 export interface GateCandlestick {
@@ -145,6 +151,11 @@ export async function getGateTickers(contract?: string, signal?: AbortSignal): P
       throw new Error("Invalid ticker response format");
     }
 
+    // Contracts are required metadata. Do not let enrichment fill in an
+    // assumed 8-hour interval when the contracts leg was unavailable.
+    if (!hasCompleteGateTickerEnrichment(data, contracts)) {
+      throw new Error("Gate ticker contracts enrichment is unavailable");
+    }
     return enrichGateTickers(data, contracts) as unknown as GateTicker[];
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) {
@@ -292,13 +303,19 @@ export async function fetchGateBatchFundingHistory(
   const result = new Map<string, FundingHistoryItem[]>();
   const directNeedsProxy = await Promise.all(uniqueContracts.map(async (contract) => {
     throwIfAborted(signal);
+    let observedDirect429 = false;
     let response: Response;
     try {
-      response = await direct("funding-rate", { contract, limit: "1" }, signal);
+      response = await direct("funding-rate", { contract, limit: "1" }, signal, (directResponse) => {
+        if (directResponse.status === 429) observedDirect429 = true;
+      });
     } catch (error) {
       if (signal?.aborted) {
         throwIfAborted(signal);
       }
+      // A direct 429 is authoritative for this contract, even if the
+      // direct client's retry subsequently fails as a transport error.
+      if (observedDirect429) return false;
       // Only direct transport failures (including the direct client's own
       // timeout) are eligible for the batch proxy. Parsing and validation are
       // deliberately below this catch so malformed 200 responses never proxy.
@@ -321,6 +338,7 @@ export async function fetchGateBatchFundingHistory(
       return false;
     }
 
+    if (observedDirect429) return false;
     if (response.status === 403 || response.status === 451 || response.status >= 500) return true;
     // 400/404/429 are definitive direct responses; do not proxy them.
     return false;

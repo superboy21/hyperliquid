@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAbortLikeError } from "@/lib/utils/abort";
+import { createInflightJsonCache } from "@/lib/utils/inflight-json-cache";
 import { proxyFetch } from "@/lib/utils/proxy";
+import { proxyFailureResponse, retryAfterHeaders } from "@/lib/utils/proxy-error";
 
 const BINANCE_API_BASE = "https://fapi.binance.com";
 const BINANCE_TIMEOUT_MS = 10_000;
@@ -9,6 +10,7 @@ const INTERVALS = new Set([
   "1s", "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h",
   "12h", "1d", "3d", "1w", "1M",
 ]);
+const BINANCE_CACHE = createInflightJsonCache();
 
 type EndpointSpec = {
   path: string;
@@ -46,7 +48,45 @@ const ENDPOINTS: Record<string, EndpointSpec> = {
 };
 
 function badRequest(error: string) {
-  return NextResponse.json({ error }, { status: 400 });
+  return NextResponse.json({ error }, { status: 400, headers: { "Cache-Control": "no-store" } });
+}
+
+class UpstreamHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly headers: Headers,
+  ) {
+    super("Binance returned an error response");
+  }
+}
+
+function proxyErrorResponse(signal: AbortSignal, error?: unknown): NextResponse {
+  const response = proxyFailureResponse(signal, error);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
+function cacheTtl(endpoint: string, params: URLSearchParams): number | null {
+  const bulkEndpoints = new Set([
+    "premiumIndex",
+    "ticker/24hr",
+    "ticker/bookTicker",
+    "fundingInfo",
+  ]);
+  return bulkEndpoints.has(endpoint) && params.get("symbol") === null ? 0 : null;
+}
+
+async function loadJson(upstream: URL, signal?: AbortSignal): Promise<unknown> {
+  const response = await proxyFetch(upstream, {
+    timeout: BINANCE_TIMEOUT_MS,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`Binance API error: ${response.status} - ${errorText}`);
+    throw new UpstreamHttpError(response.status, retryAfterHeaders(response));
+  }
+  return response.json();
 }
 
 function validPositiveInteger(value: string): boolean {
@@ -55,13 +95,6 @@ function validPositiveInteger(value: string): boolean {
 
 function validLimit(value: string, max: number): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= max;
-}
-
-function withRetryAfter(response: Response): Headers {
-  const headers = new Headers();
-  const retryAfter = response.headers.get("Retry-After");
-  if (retryAfter) headers.set("Retry-After", retryAfter);
-  return headers;
 }
 
 export function binanceEndpointPath(endpoint: string): string | null {
@@ -119,25 +152,30 @@ export async function GET(request: NextRequest) {
   const upstream = buildBinanceUrl(endpoint as string, params);
   if (!upstream) return badRequest("Unknown or missing endpoint");
 
+  const ttl = cacheTtl(endpoint as string, params);
+  const load = (signal?: AbortSignal) => loadJson(upstream, signal);
+
   try {
-    const response = await proxyFetch(upstream, {
-      timeout: BINANCE_TIMEOUT_MS,
-      signal: request.signal,
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Binance API error: ${response.status} - ${errorText}`);
+    const value = ttl === null
+      ? await load(request.signal)
+      : await BINANCE_CACHE.getOrLoad(upstream.toString(), ttl, () => load(), request.signal);
+    if (request.signal.aborted) return proxyErrorResponse(request.signal);
+    return NextResponse.json(value, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    console.error("Error proxying Binance request:", error);
+    if (request.signal.aborted) return proxyErrorResponse(request.signal, error);
+    if (error instanceof UpstreamHttpError) {
       return NextResponse.json(
         { error: "Failed to fetch data from Binance" },
-        { status: response.status, headers: withRetryAfter(response) },
+        { status: error.status, headers: noStoreHeaders(error.headers) },
       );
     }
-    return NextResponse.json(await response.json());
-  } catch (error) {
-    if (request.signal.aborted || isAbortLikeError(error)) {
-      return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-    }
-    console.error("Error proxying Binance request:", error);
-    return NextResponse.json({ error: "Failed to proxy request" }, { status: 500 });
+    return proxyErrorResponse(request.signal, error);
   }
+}
+
+function noStoreHeaders(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  result.set("Cache-Control", "no-store");
+  return result;
 }

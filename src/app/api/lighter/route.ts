@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAbortLikeError } from "@/lib/utils/abort";
+import { createInflightJsonCache } from "@/lib/utils/inflight-json-cache";
 import { proxyFetch } from "@/lib/utils/proxy";
+import { proxyFailureResponse, retryAfterHeaders } from "@/lib/utils/proxy-error";
 
 const LIGHTER_API_BASE = "https://mainnet.zklighter.elliot.ai";
 const MARKET_ID_RE = /^\d+$/;
 const RESOLUTIONS = new Set(["1m", "1h", "4h", "1d"]);
 const FILTERS = new Set(["perp", "spot"]);
+const LIGHTER_CACHE = createInflightJsonCache();
+const LIGHTER_TTL_MS = 5 * 60 * 1000;
 
 type EndpointSpec = {
   path: string;
@@ -41,18 +44,73 @@ const ENDPOINTS: Record<string, EndpointSpec> = {
 };
 
 function badRequest(error: string) {
-  return NextResponse.json({ error }, { status: 400 });
+  return NextResponse.json({ error }, { status: 400, headers: { "Cache-Control": "no-store" } });
+}
+
+class UpstreamHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly headers: Headers,
+  ) {
+    super("Lighter returned an error response");
+  }
+}
+
+class InvalidLighterResponseError extends Error {
+  constructor() {
+    super("Invalid Lighter upstream response");
+    this.name = "InvalidLighterResponseError";
+  }
+}
+
+function proxyErrorResponse(signal: AbortSignal, error?: unknown): NextResponse {
+  const response = proxyFailureResponse(signal, error);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
+function cacheTtl(endpoint: string): number | null {
+  if (endpoint === "orderBooks") return LIGHTER_TTL_MS;
+  if (new Set(["funding-rates", "exchangeStats", "orderBookDetails"]).has(endpoint)) return 0;
+  return null;
+}
+
+export function clearLighterCaches(): void {
+  LIGHTER_CACHE.clear();
+}
+
+function isLighterSuccessEnvelope(payload: unknown): boolean {
+  if (payload === null || (typeof payload !== "object" && !Array.isArray(payload))) return false;
+  if (Array.isArray(payload)) return true;
+
+  const object = payload as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(object, "error") || object.success === false) return false;
+  if (typeof object.status === "string" && ["error", "failed", "failure"].includes(object.status.toLowerCase())) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(object, "code")) {
+    return object.code === 0 || object.code === "0" || object.code === 200 || object.code === "200";
+  }
+  return true;
+}
+
+async function loadJson(upstream: URL, signal?: AbortSignal): Promise<unknown> {
+  const response = await proxyFetch(upstream, {
+    timeout: 15_000,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[Lighter API] Error: ${response.status} - ${errorText}`);
+    throw new UpstreamHttpError(response.status, retryAfterHeaders(response));
+  }
+  const payload = await response.json();
+  if (!isLighterSuccessEnvelope(payload)) throw new InvalidLighterResponseError();
+  return payload;
 }
 
 function validPositiveInteger(value: string): boolean {
   return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
-}
-
-function retryHeaders(response: Response): Headers {
-  const headers = new Headers();
-  const retryAfter = response.headers.get("Retry-After");
-  if (retryAfter) headers.set("Retry-After", retryAfter);
-  return headers;
 }
 
 export function lighterEndpointPath(endpoint: string): string | null {
@@ -118,25 +176,30 @@ export async function GET(request: NextRequest) {
   const upstream = buildLighterUrl(endpoint as string, params);
   if (!upstream) return badRequest("Unknown or missing endpoint");
 
+  const ttl = cacheTtl(endpoint as string);
+  const load = (signal?: AbortSignal) => loadJson(upstream, signal);
+
   try {
-    const response = await proxyFetch(upstream, {
-      timeout: 15_000,
-      signal: request.signal,
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Lighter API] Error: ${response.status} - ${errorText}`);
+    const value = ttl === null
+      ? await load(request.signal)
+      : await LIGHTER_CACHE.getOrLoad(upstream.toString(), ttl, () => load(), request.signal);
+    if (request.signal.aborted) return proxyErrorResponse(request.signal);
+    return NextResponse.json(value, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    console.error("[Lighter API] Error proxying request:", error);
+    if (request.signal.aborted) return proxyErrorResponse(request.signal, error);
+    if (error instanceof UpstreamHttpError) {
       return NextResponse.json(
-        { error: `Failed to fetch data from Lighter: ${response.status}` },
-        { status: response.status, headers: retryHeaders(response) },
+        { error: `Failed to fetch data from Lighter: ${error.status}` },
+        { status: error.status, headers: noStoreHeaders(error.headers) },
       );
     }
-    return NextResponse.json(await response.json());
-  } catch (error) {
-    if (request.signal.aborted || isAbortLikeError(error)) {
-      return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-    }
-    console.error("[Lighter API] Error proxying request:", error);
-    return NextResponse.json({ error: "Failed to proxy request" }, { status: 500 });
+    return proxyErrorResponse(request.signal, error);
   }
+}
+
+function noStoreHeaders(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  result.set("Cache-Control", "no-store");
+  return result;
 }

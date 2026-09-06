@@ -132,13 +132,16 @@ async function directBinanceFetch(
   directUrl: string,
   init: RequestInit | undefined,
   signal?: AbortSignal,
+  reportResponse?: (response: Response) => void,
 ): Promise<Response> {
   const directInit = { ...init, signal };
   let response = await fetch(directUrl, directInit);
+  reportResponse?.(response);
   if (response.status === 429) {
     await sleep(retryAfterMs(response) ?? 1_000, signal);
     throwIfAborted(signal);
     response = await fetch(directUrl, directInit);
+    reportResponse?.(response);
   }
   return response;
 }
@@ -157,7 +160,7 @@ export async function binanceFetch(endpoint: string, params: string, init?: Requ
   return runDirectFirst({
     signal,
     directTimeoutMs,
-    direct: (directSignal) => directBinanceFetch(directUrl, init, directSignal),
+    direct: (directSignal, reportResponse) => directBinanceFetch(directUrl, init, directSignal, reportResponse),
     proxy: () => fetch(proxyUrl, { ...init, cache: "no-store" }),
   });
 }
@@ -175,7 +178,7 @@ export async function binanceKlinesFetch(symbol: string, interval: string, limit
   return runDirectFirst({
     signal,
     directTimeoutMs,
-    direct: (directSignal) => directBinanceFetch(directUrl, init, directSignal),
+    direct: (directSignal, reportResponse) => directBinanceFetch(directUrl, init, directSignal, reportResponse),
     proxy: () => fetch(proxyUrl, { ...init, cache: "no-store" }),
   });
 }

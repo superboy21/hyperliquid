@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAbortLikeError } from "@/lib/utils/abort";
 import { proxyFetch } from "@/lib/utils/proxy";
+import { proxyFailureResponse, retryAfterHeaders } from "@/lib/utils/proxy-error";
 
 const BINANCE_KLINES_URL = "https://fapi.binance.com/fapi/v1/klines";
 const SYMBOL_RE = /^[A-Z0-9]{1,40}$/;
@@ -10,7 +10,7 @@ const INTERVALS = new Set([
 ]);
 
 function badRequest(error: string) {
-  return NextResponse.json({ error }, { status: 400 });
+  return NextResponse.json({ error }, { status: 400, headers: { "Cache-Control": "no-store" } });
 }
 
 function validPositiveInteger(value: string): boolean {
@@ -57,28 +57,46 @@ export async function GET(request: NextRequest) {
   }
 
   const upstream = buildBinanceKlinesUrl(params);
+  let response: Response;
   try {
-    const response = await proxyFetch(upstream, {
+    response = await proxyFetch(upstream, {
       timeout: 15_000,
       signal: request.signal,
     });
+  } catch (error) {
+    console.error("Error proxying Binance klines request:", error);
+    return proxyErrorResponse(request.signal, error);
+  }
+
+  if (request.signal.aborted) return proxyErrorResponse(request.signal);
+
+  try {
     if (!response.ok) {
       const errorText = await response.text();
+      if (request.signal.aborted) return proxyErrorResponse(request.signal);
       console.error(`Binance API error: ${response.status} - ${errorText}`);
-      const headers = new Headers();
-      const retryAfter = response.headers.get("Retry-After");
-      if (retryAfter) headers.set("Retry-After", retryAfter);
       return NextResponse.json(
         { error: "Failed to fetch data from Binance" },
-        { status: response.status, headers },
+        { status: response.status, headers: noStoreHeaders(retryAfterHeaders(response)) },
       );
     }
-    return NextResponse.json(await response.json());
+    const payload = await response.json();
+    if (request.signal.aborted) return proxyErrorResponse(request.signal);
+    return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    if (request.signal.aborted || isAbortLikeError(error)) {
-      return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-    }
     console.error("Error proxying Binance klines request:", error);
-    return NextResponse.json({ error: "Failed to proxy request" }, { status: 500 });
+    return proxyErrorResponse(request.signal);
   }
+}
+
+function proxyErrorResponse(signal: AbortSignal, error?: unknown): NextResponse {
+  const response = proxyFailureResponse(signal, error);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
+function noStoreHeaders(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  result.set("Cache-Control", "no-store");
+  return result;
 }

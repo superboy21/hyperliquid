@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { fetchGateBatchFundingHistory } from "../gateio";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fetchGateBatchFundingHistory, getGateTickers } from "../gateio";
 import {
   buildGateUrl,
+  buildGateRequest,
   createGateRequest,
   enrichGateTickers,
+  hasCompleteGateTickerEnrichment,
 } from "../gate-upstream";
 import { fetchGateCanonicalDetail } from "./gate";
 
@@ -122,6 +124,36 @@ describe("Gate direct-first transport", () => {
     expect(urls).toEqual(["https://api.gateio.ws/api/v4/futures/usdt/contracts", "/api/gate/futures/usdt/contracts"]);
   });
 
+  test("does not proxy a 429 followed by a direct network failure", async () => {
+    const urls: string[] = [];
+    const first = new Response(null, { status: 429, headers: { "Retry-After": "0" } });
+    const request = createGateRequest({
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        urls.push(String(url));
+        if (urls.length === 1) return first;
+        throw new TypeError("Failed to fetch");
+      }) as typeof fetch,
+    });
+
+    await expect(request("tickers")).resolves.toBe(first);
+    expect(urls).toHaveLength(2);
+  });
+
+  test("does not proxy a 429 when its Retry-After exceeds the direct deadline", async () => {
+    const first = new Response(null, { status: 429, headers: { "Retry-After": "60" } });
+    const fetchMock = mock().mockResolvedValueOnce(first);
+
+    const request = createGateRequest({ fetch: fetchMock as typeof fetch, requestTimeoutMs: 1 });
+    await expect(request("tickers")).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("only includes Content-Type for Gate POST requests", () => {
+    expect(new Headers(buildGateRequest("tickers").init.headers).get("Content-Type")).toBeNull();
+    expect(new Headers(buildGateRequest("funding-rates").init.headers).get("Content-Type")).toBe("application/json");
+  });
+
   test("keeps direct and proxy enrichment semantics aligned", () => {
     const tickers = [{ contract: "BTC_USDT", last: "1" }, { contract: "XAUT_USDT", last: "2" }];
     const contracts = [{ name: "BTC_USDT", funding_interval: 14_400 }, { name: "XAUT_USDT", funding_interval: 28_800 }];
@@ -131,6 +163,42 @@ describe("Gate direct-first transport", () => {
     ]);
     expect(new URL(buildGateUrl("order-book", { contract: "BTC_USDT", limit: "20", rpi: "1" })).pathname)
       .toBe("/api/v4/futures/usdt/rpi_order_book");
+  });
+
+  test("requires contracts metadata for non-empty tickers but preserves empty results", () => {
+    expect(hasCompleteGateTickerEnrichment([], undefined)).toBe(true);
+    expect(hasCompleteGateTickerEnrichment([{ contract: "BTC_USDT" }], [])).toBe(false);
+    expect(hasCompleteGateTickerEnrichment(
+      [{ contract: "BTC_USDT" }],
+      [{ name: "BTC_USDT", funding_interval: 28_800 }],
+    )).toBe(true);
+  });
+
+  test("does not fabricate an 8-hour interval when the direct contracts leg is unavailable", async () => {
+    const urls: string[] = [];
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      urls.push(text);
+      if (text.includes("/tickers")) return Response.json([{ contract: "BTC_USDT", last: "1" }]);
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+
+    try {
+      await expect(getGateTickers()).resolves.toEqual([]);
+      expect(urls.some((url) => url.includes("/contracts"))).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("keeps an authentically empty direct ticker response empty without enrichment metadata", async () => {
+    globalThis.fetch = mock(async (url) => {
+      if (String(url).includes("/tickers")) return Response.json([]);
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+
+    await expect(getGateTickers()).resolves.toEqual([]);
   });
 });
 
@@ -175,5 +243,41 @@ describe("Gate batch latest settlements", () => {
     expect(proxyBodies).toHaveLength(2);
     expect(proxyBodies.map((body) => body.length)).toEqual([50, 50]);
     expect(urls.filter((url) => url.startsWith("https://"))).toHaveLength(101);
+  });
+
+  test.each(["retry returns 5xx", "retry throws transport failure"])("never proxies a contract after a direct 429 when %s", async (mode) => {
+    const urls: string[] = [];
+    const result = await fetchGateBatchFundingHistory(["BTC_USDT"], undefined, {
+      fetch: (async (url) => {
+        const text = String(url);
+        urls.push(text);
+        if (urls.length === 1) return new Response("rate limited", { status: 429 });
+        if (mode === "retry returns 5xx") return new Response("upstream", { status: 503 });
+        throw new TypeError("Failed to fetch");
+      }) as typeof fetch,
+      sleep: async () => undefined,
+    });
+
+    expect(result).toEqual(new Map());
+    expect(urls).toHaveLength(2);
+    expect(urls.every((url) => url.startsWith("https://api.gateio.ws/"))).toBe(true);
+  });
+
+  test("retains a successful direct retry after an initial 429 without proxying", async () => {
+    const urls: string[] = [];
+    const result = await fetchGateBatchFundingHistory(["BTC_USDT"], undefined, {
+      fetch: (async (url) => {
+        const text = String(url);
+        urls.push(text);
+        return urls.length === 1
+          ? new Response("rate limited", { status: 429 })
+          : Response.json([{ t: 3, r: "0.3" }]);
+      }) as typeof fetch,
+      sleep: async () => undefined,
+    });
+
+    expect(result.get("BTC_USDT")).toEqual([{ time: 3000, fundingRate: "0.3" }]);
+    expect(urls).toHaveLength(2);
+    expect(urls.every((url) => url.startsWith("https://api.gateio.ws/"))).toBe(true);
   });
 });

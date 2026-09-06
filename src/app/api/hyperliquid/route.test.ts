@@ -1,11 +1,15 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+
+mock.module("server-only", () => ({}));
 
 mock.module("@/lib/utils/proxy", () => ({
   proxyFetch: (url: string | URL, init?: RequestInit) => globalThis.fetch(url, init),
 }));
 
 import { NextRequest } from "next/server";
-import { POST } from "./route";
+const { POST, clearHyperliquidCaches } = await import("./route");
+
+beforeEach(() => clearHyperliquidCaches());
 
 const request = (body: string) => new NextRequest("http://localhost/api/hyperliquid", {
   method: "POST",
@@ -92,6 +96,88 @@ describe("Hyperliquid Perp proxy contract", () => {
         signal: controller.signal,
       });
       expect((await POST(nextRequest)).status).toBe(499);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test.each([
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    const fetchMock = spyOn(globalThis, "fetch").mockRejectedValue(error);
+    try {
+      const response = await POST(request(JSON.stringify({ type: "meta" })));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error: message });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const fetchMock = spyOn(globalThis, "fetch").mockResolvedValue(new Response("not json", { status: 200 }));
+    try {
+      const response = await POST(request(JSON.stringify({ type: "meta" })));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "Failed to fetch upstream" });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("coalesces live context requests and does not pass a caller signal upstream", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      expect(init?.signal).toBeUndefined();
+      await gate;
+      return Response.json([]);
+    });
+    try {
+      const first = POST(request(JSON.stringify({ type: "metaAndAssetCtxs" })));
+      await Promise.resolve();
+      const controller = new AbortController();
+      const second = POST(new NextRequest("http://localhost/api/hyperliquid", {
+        method: "POST", body: JSON.stringify({ type: "metaAndAssetCtxs" }), signal: controller.signal,
+      }));
+      controller.abort();
+      release();
+      expect((await first).status).toBe(200);
+      expect((await second).status).toBe(499);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("reuses metadata for five minutes, then refetches, while errors are not cached", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(3_000_000);
+    const fetchMock = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "busy" }), { status: 503 }))
+      .mockResolvedValue(Response.json([]));
+    try {
+      expect((await POST(request(JSON.stringify({ type: "meta" })))).status).toBe(503);
+      expect((await POST(request(JSON.stringify({ type: "meta" })))).status).toBe(200);
+      expect((await POST(request(JSON.stringify({ type: "meta" })))).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      clock.mockReturnValue(3_000_000 + 5 * 60 * 1000);
+      await POST(request(JSON.stringify({ type: "meta" })));
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("does not cache a HTTP 200 business-error metadata response", async () => {
+    const fetchMock = spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ error: "temporarily unavailable" }))
+      .mockResolvedValue(Response.json({ universe: [] }));
+    try {
+      expect((await POST(request(JSON.stringify({ type: "meta" })))).status).toBe(502);
+      expect((await POST(request(JSON.stringify({ type: "meta" })))).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       fetchMock.mockRestore();
     }

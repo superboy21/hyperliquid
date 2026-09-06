@@ -68,17 +68,17 @@ describe("Gate futures ticker route", () => {
 
     const response = await GET(request());
 
-    expect(proxyFetchMock).toHaveBeenCalledTimes(2);
+    expect(proxyFetchMock).toHaveBeenCalledTimes(4);
     expect(response.ok).toBe(false);
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Tickers API failed: 503" });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "upstream details" });
   });
 
   test("allows the impact-price contract filter and rejects duplicate or unknown queries", async () => {
     proxyFetchMock.mockImplementation(async (url) => (
       new URL(url.toString()).pathname.endsWith("/tickers")
         ? Response.json([{ contract: "BTC_USDT" }])
-        : Response.json([])
+        : Response.json([{ name: "BTC_USDT", funding_interval: 28_800 }])
     ));
     const compatible = await GET(requestWithUrl("http://localhost/api/gate/futures/usdt/tickers?contract=BTC_USDT"));
     expect(compatible.status).toBe(200);
@@ -88,6 +88,58 @@ describe("Gate futures ticker route", () => {
     const invalid = await GET(requestWithUrl("http://localhost/api/gate/futures/usdt/tickers?contract=BTC_USDT&contract=ETH_USDT"));
     expect(invalid.status).toBe(400);
     expect(proxyFetchMock).not.toHaveBeenCalled();
+  });
+
+  test("returns an error instead of defaulting missing contract metadata to 8h", async () => {
+    proxyFetchMock.mockImplementation(async (url) => (
+      new URL(url.toString()).pathname.endsWith("/tickers")
+        ? Response.json([{ contract: "BTC_USDT" }])
+        : Response.json([])
+    ));
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "Contracts enrichment is unavailable" });
+  });
+
+  test("starts ticker and contracts requests concurrently", async () => {
+    const started = new Set<string>();
+    let release!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { release = resolve; });
+
+    proxyFetchMock.mockImplementation(async (url) => {
+      const path = new URL(url.toString()).pathname;
+      started.add(path);
+      if (started.size === 2) release();
+      await bothStarted;
+
+      return path.endsWith("/tickers")
+        ? Response.json([{ contract: "BTC_USDT" }])
+        : Response.json([{ name: "BTC_USDT", funding_interval: 28_800 }]);
+    });
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(started).toEqual(new Set([
+      "/api/v4/futures/usdt/tickers",
+      "/api/v4/futures/usdt/contracts",
+    ]));
+  });
+
+  test("returns an empty ticker result without requiring contracts metadata", async () => {
+    proxyFetchMock.mockImplementation(async (url) => (
+      new URL(url.toString()).pathname.endsWith("/tickers")
+        ? Response.json([])
+        : Response.json({ error: "contracts unavailable" }, { status: 503 })
+    ));
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([]);
+    expect(proxyFetchMock).toHaveBeenCalledTimes(4);
   });
 });
 

@@ -76,6 +76,45 @@ describe("Hyperliquid direct-first transport", () => {
     }
   });
 
+  test("does not proxy when a direct 429 is followed by a network failure", async () => {
+    let directCalls = 0;
+    let proxyCalls = 0;
+    const restore = mockFetch(async (url) => {
+      if (url === directUrl) {
+        directCalls += 1;
+        if (directCalls === 1) return new Response(null, { status: 429 });
+        throw new TypeError("Failed to fetch");
+      }
+      proxyCalls += 1;
+      return jsonResponse({ ok: true });
+    });
+
+    try {
+      await expect(fetchHyperliquidInfo({ type: "meta" }, 2)).resolves.toBeNull();
+      expect(directCalls).toBe(2);
+      expect(proxyCalls).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not send forbidden Origin or Referer headers on direct POST", async () => {
+    let directHeaders: Headers | undefined;
+    const restore = mockFetch(async (_url, init) => {
+      directHeaders = new Headers(init?.headers);
+      return jsonResponse({ ok: true });
+    });
+
+    try {
+      await expect(fetchHyperliquidInfo({ type: "meta" }, 1)).resolves.toEqual({ ok: true });
+      expect(directHeaders?.get("Content-Type")).toBe("application/json");
+      expect(directHeaders?.get("Origin")).toBeNull();
+      expect(directHeaders?.get("Referer")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
   test.each([400, 429])("does not proxy ordinary direct status %s", async (status) => {
     let proxyCalls = 0;
     const restore = mockFetch(async (url) => {

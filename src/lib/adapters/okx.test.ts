@@ -91,6 +91,24 @@ describe.serial("okxFetch retries", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  test("does not proxy when a direct 429 is followed by a network failure", async () => {
+    const first = response(429, { "Retry-After": "0" });
+    const fetchMock = mock().mockResolvedValueOnce(first).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(okxFetch("/api/okx", {}, [0, 0])).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not proxy when a direct 429 backoff exceeds the direct deadline", async () => {
+    const first = response(429, { "Retry-After": "60" });
+    const fetchMock = mock().mockResolvedValueOnce(first);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(okxFetch("/api/okx", {}, [60_000, 60_000], 1)).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test.each([400, 404])("does not retry HTTP %s", async (status) => {
     const fetchMock = mock(() => Promise.resolve(response(status)));
     globalThis.fetch = fetchMock as typeof fetch;

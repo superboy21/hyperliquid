@@ -39,4 +39,33 @@ describe("Gate batch funding rates route", () => {
     expect(response.status).toBe(400);
     expect(proxyFetchMock).not.toHaveBeenCalled();
   });
+
+  test("bounds concurrency and reports exhausted upstream failures per item", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    proxyFetchMock.mockImplementation(async (url) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+
+      const contract = new URL(url.toString()).searchParams.get("contract");
+      if (contract === "FAIL_USDT") return Response.json({ error: "upstream unavailable" }, { status: 503 });
+      return Response.json([{ t: 1, r: "0.01" }]);
+    });
+
+    const response = await POST(request({
+      contracts: ["A_USDT", "B_USDT", "C_USDT", "D_USDT", "E_USDT", "F_USDT", "G_USDT", "H_USDT", "I_USDT", "FAIL_USDT"],
+    }));
+
+    expect(response.status).toBe(200);
+    expect(maximumActive).toBeLessThanOrEqual(8);
+    const payload = await response.json() as Array<{ contract: string; data?: unknown[]; error?: { status: number } }>;
+    expect(payload.find((item) => item.contract === "FAIL_USDT")).toEqual({
+      contract: "FAIL_USDT",
+      error: { status: 503, message: "HTTP 503" },
+    });
+    expect(payload.find((item) => item.contract === "A_USDT")?.data).toEqual([{ t: 1, r: "0.01" }]);
+    expect(proxyFetchMock).toHaveBeenCalledTimes(12);
+  });
 });

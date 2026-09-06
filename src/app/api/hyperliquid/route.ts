@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { proxyFetch } from "@/lib/utils/proxy";
+import { proxyFailureResponse, retryAfterHeaders } from "@/lib/utils/proxy-error";
+import { InflightJsonCache } from "@/lib/utils/inflight-json-cache";
 
 const API_URL = "https://api.hyperliquid.xyz/info";
 const TIMEOUT_MS = 10_000;
@@ -168,6 +170,109 @@ function upstreamStatus(status: number) {
   return status >= 400 && status <= 599 ? status : 502;
 }
 
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const hyperliquidCache = new InflightJsonCache({ now: () => Date.now() });
+const hyperliquidCoalescingCache = new InflightJsonCache({ maxEntries: 0, now: () => Date.now() });
+
+class HyperliquidResponseError extends Error {
+  constructor(
+    readonly status: number,
+    readonly payload: unknown,
+    readonly retryHeaders: Headers,
+  ) {
+    super("Hyperliquid upstream returned an error");
+    this.name = "HyperliquidResponseError";
+  }
+}
+class InvalidHyperliquidResponseError extends Error {
+  constructor() {
+    super("Invalid Hyperliquid upstream response");
+    this.name = "InvalidHyperliquidResponseError";
+  }
+}
+
+function isHyperliquidSuccessEnvelope(type: string, payload: unknown): boolean {
+  if (type !== "meta" && type !== "metaAndAssetCtxs") return true;
+  if (payload === null || (typeof payload !== "object" && !Array.isArray(payload))) return false;
+  if (Array.isArray(payload)) {
+    return !payload.some((item) => isObject(item) && (
+      Object.prototype.hasOwnProperty.call(item, "error") ||
+      Object.prototype.hasOwnProperty.call(item, "code") ||
+      Object.prototype.hasOwnProperty.call(item, "message") ||
+      Object.prototype.hasOwnProperty.call(item, "msg")
+    ));
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(payload, "error") ||
+    Object.prototype.hasOwnProperty.call(payload, "code") ||
+    Object.prototype.hasOwnProperty.call(payload, "message") ||
+    Object.prototype.hasOwnProperty.call(payload, "msg") ||
+    (payload as JsonObject).success === false
+  ) return false;
+  return true;
+}
+
+function canonicalBody(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalBody);
+  if (isObject(value)) return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalBody(value[key])]));
+  return value;
+}
+function hyperliquidCachePolicy(type: string): { cache: InflightJsonCache; ttlMs: number } | null {
+  if (type === "meta") return { cache: hyperliquidCache, ttlMs: CACHE_TTL_MS };
+  if (type === "metaAndAssetCtxs") return { cache: hyperliquidCoalescingCache, ttlMs: 0 };
+  return null;
+}
+export function clearHyperliquidCaches(): void {
+  hyperliquidCache.clear();
+  hyperliquidCoalescingCache.clear();
+}
+
+async function loadHyperliquid(body: JsonObject, signal?: AbortSignal): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await proxyFetch(API_URL, {
+      method: "POST",
+      timeout: TIMEOUT_MS,
+      ...(signal === undefined ? {} : { signal }),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    console.error("[Hyperliquid API] Fetch error");
+    throw error;
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    if (response.ok) throw new InvalidHyperliquidResponseError();
+    throw new HyperliquidResponseError(upstreamStatus(response.status), null, response.status === 429 || response.status === 503 ? retryAfterHeaders(response) : new Headers());
+  }
+  const jsonPayload = Array.isArray(payload) || isObject(payload) ? payload : null;
+  const status = response.ok ? response.status : upstreamStatus(response.status);
+  const headers = status === 429 || status === 503 ? retryAfterHeaders(response) : new Headers();
+  if (jsonPayload !== null && response.ok) {
+    if (!isHyperliquidSuccessEnvelope(String(body.type), jsonPayload)) {
+      throw new InvalidHyperliquidResponseError();
+    }
+    return jsonPayload;
+  }
+  if (jsonPayload !== null) throw new HyperliquidResponseError(status, jsonPayload, headers);
+  if (response.ok) throw new InvalidHyperliquidResponseError();
+  throw new HyperliquidResponseError(status, null, headers);
+}
+
+function hyperliquidFailureResponse(request: NextRequest, error: unknown): NextResponse {
+  if (request.signal.aborted) return proxyFailureResponse(request.signal);
+  if (error instanceof HyperliquidResponseError) {
+    if (error.payload !== null) return NextResponse.json(error.payload, { status: error.status, headers: error.retryHeaders });
+    return NextResponse.json({ error: "Upstream returned non-JSON" }, { status: error.status, headers: error.retryHeaders });
+  }
+  if (error instanceof InvalidHyperliquidResponseError) return proxyFailureResponse(request.signal);
+  return proxyFailureResponse(request.signal, error);
+}
+
 export async function POST(request: NextRequest) {
   let rawBody: string;
   try {
@@ -189,36 +294,15 @@ export async function POST(request: NextRequest) {
   }
   if (!validateBody(body)) return badRequest();
 
+  const bodyType = body.type as string;
+  const policy = hyperliquidCachePolicy(bodyType);
   try {
-    const response = await proxyFetch(API_URL, {
-      method: "POST",
-      timeout: TIMEOUT_MS,
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(TIMEOUT_MS)]),
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      payload = null;
-    }
-    if (request.signal.aborted) return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-    const jsonPayload = Array.isArray(payload) || isObject(payload) ? payload : null;
-    const status = response.ok ? response.status : upstreamStatus(response.status);
-    const headers = new Headers();
-    const retryAfter = response.headers.get("retry-after");
-    if (retryAfter && (status === 429 || status === 503)) headers.set("Retry-After", retryAfter);
-    if (jsonPayload !== null) return NextResponse.json(jsonPayload, { status, headers });
-    return NextResponse.json({ error: "Upstream returned non-JSON" }, { status: response.ok ? 502 : status, headers });
+    const payload = policy
+      ? await policy.cache.getOrLoad(`hyperliquid:${JSON.stringify(canonicalBody(body))}`, policy.ttlMs, () => loadHyperliquid(body), request.signal)
+      : await loadHyperliquid(body, request.signal);
+    if (request.signal.aborted) return proxyFailureResponse(request.signal);
+    return NextResponse.json(payload);
   } catch (error) {
-    if (request.signal.aborted) return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    console.error(`[Hyperliquid API] Fetch error: ${message}`);
-    return NextResponse.json({ error: `Fetch error: ${message}` }, { status: 502 });
+    return hyperliquidFailureResponse(request, error);
   }
 }

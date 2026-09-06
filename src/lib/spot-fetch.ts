@@ -56,15 +56,17 @@ export async function spotFetch(
   return runDirectFirst({
     signal,
     directTimeoutMs,
-    direct: async (directSignal) => {
+    direct: async (directSignal, reportResponse) => {
       const attemptInit = { ...directInit, signal: directSignal };
       let response = await fetch(built.url, attemptInit);
+      reportResponse?.(response);
       // A single bounded direct retry handles rate limiting without ever
       // routing a final 429 through the same upstream proxy.
       if (response.status === 429) {
         await sleep(retryAfterMs(response) ?? 1_000, directSignal);
         throwIfAborted(directSignal);
         response = await fetch(built.url, attemptInit);
+        reportResponse?.(response);
       }
       return response;
     },

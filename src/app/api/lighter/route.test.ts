@@ -1,15 +1,24 @@
 import { describe, expect, mock, test } from "bun:test";
 
+mock.module("server-only", () => ({}));
+
 const calls: URL[] = [];
+let lastInit: RequestInit | undefined;
+let failure: unknown;
+let upstreamResponse = Response.json({});
+let pendingResponse: Promise<Response> | undefined;
 mock.module("@/lib/utils/proxy", () => ({
-  proxyFetch: async (url: URL) => {
+  proxyFetch: async (url: URL, init?: RequestInit) => {
+    lastInit = init;
+    if (failure) throw failure;
     calls.push(new URL(url));
-    return Response.json({});
+    if (pendingResponse) return (await pendingResponse).clone();
+    return upstreamResponse.clone();
   },
 }));
 
 import { NextRequest } from "next/server";
-import { buildLighterUrl, GET, lighterEndpointPath } from "./route";
+const { buildLighterUrl, clearLighterCaches, GET, lighterEndpointPath } = await import("./route");
 
 const request = (query: string) => new NextRequest(`http://localhost/api/lighter?${query}`);
 
@@ -61,5 +70,110 @@ describe("Lighter fixed endpoint proxy", () => {
       "endpoint=orderBookDetails&filter=bad",
     ]) expect((await GET(request(query))).status).toBe(400);
     expect(calls).toHaveLength(0);
+  });
+
+  test.each([
+    ["abort", new DOMException("aborted", "AbortError"), 499, "Request cancelled"],
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    failure = error;
+    const controller = new AbortController();
+    if (status === 499) controller.abort();
+    try {
+      const response = await GET(new NextRequest("http://localhost/api/lighter?endpoint=orderBookOrders&market_id=1", { signal: controller.signal }));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error: message });
+    } finally {
+      failure = undefined;
+    }
+  });
+
+  test("passes caller cancellation to a non-cacheable upstream request", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    const response = await GET(new NextRequest("http://localhost/api/lighter?endpoint=orderBookOrders&market_id=1", {
+      signal: controller.signal,
+    }));
+    expect(lastInit?.signal?.aborted).toBe(true);
+    expect(response.status).toBe(499);
+  });
+
+  test("does not cache a business-error orderBooks response", async () => {
+    clearLighterCaches();
+    const previous = upstreamResponse;
+    const before = calls.length;
+    try {
+      upstreamResponse = Response.json({ error: "temporarily unavailable" });
+      await expect(GET(request("endpoint=orderBooks"))).resolves.toMatchObject({ status: 502 });
+      upstreamResponse = Response.json({});
+      await expect(GET(request("endpoint=orderBooks"))).resolves.toMatchObject({ status: 200 });
+      expect(calls.length - before).toBe(2);
+    } finally {
+      upstreamResponse = previous;
+      clearLighterCaches();
+    }
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const previous = upstreamResponse;
+    upstreamResponse = new Response("not json", { status: 200 });
+    try {
+      const response = await GET(request("endpoint=orderBookOrders&market_id=1"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "Failed to fetch upstream" });
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("does not cache malformed coalesced responses", async () => {
+    const previous = upstreamResponse;
+    const before = calls.length;
+    upstreamResponse = new Response("not json", { status: 200 });
+    try {
+      const query = "endpoint=orderBookDetails&filter=spot";
+      await expect(GET(request(query))).resolves.toMatchObject({ status: 502 });
+      await expect(GET(request(query))).resolves.toMatchObject({ status: 502 });
+      expect(calls.length - before).toBe(2);
+    } finally {
+      upstreamResponse = previous;
+    }
+  });
+
+  test("reuses the orderBooks TTL cache and returns fresh responses", async () => {
+    clearLighterCaches();
+    const before = calls.length;
+    const first = await GET(request("endpoint=orderBooks"));
+    const second = await GET(request("endpoint=orderBooks"));
+    expect(first).not.toBe(second);
+    expect(second.headers.get("Cache-Control")).toBe("no-store");
+    expect(calls.length - before).toBe(1);
+  });
+
+  test("coalesces orderBookDetails without coalescing history and candle requests", async () => {
+    let resolvePending!: (response: Response) => void;
+    pendingResponse = new Promise((resolve) => { resolvePending = resolve; });
+    const query = "endpoint=orderBookDetails&filter=spot";
+    const beforeDetails = calls.filter((url) => url.pathname.endsWith("/orderBookDetails")).length;
+    const first = GET(request(query));
+    const second = GET(request(query));
+    await Promise.resolve();
+    expect(calls.filter((url) => url.pathname.endsWith("/orderBookDetails")).length - beforeDetails).toBe(1);
+    resolvePending(Response.json({ order_book_id: 2 }));
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(second).resolves.toMatchObject({ status: 200 });
+    pendingResponse = undefined;
+
+    const before = calls.length;
+    for (const query of [
+      "endpoint=orderBookOrders&market_id=2",
+      "endpoint=fundings&market_id=2&resolution=1h",
+      "endpoint=candles&market_id=2&resolution=1h",
+    ]) {
+      await GET(request(query));
+      await GET(request(query));
+    }
+    expect(calls.length - before).toBe(6);
   });
 });

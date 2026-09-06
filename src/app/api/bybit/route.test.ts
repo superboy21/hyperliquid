@@ -1,19 +1,31 @@
-import { describe, expect, test, mock } from "bun:test";
+import { beforeEach, describe, expect, test, mock, spyOn } from "bun:test";
+
+mock.module("server-only", () => ({}));
 
 const proxyCalls: Array<{ url: URL; init: RequestInit }> = [];
+let proxyFailure: unknown;
+let proxyWait: Promise<void> | undefined;
+let proxyResponse = Response.json({ retCode: 0, retMsg: "OK", result: { list: [{ symbol: "BTCUSDT" }] } });
 mock.module("@/lib/utils/proxy", () => ({
   proxyFetch: async (url: URL, init: RequestInit = {}) => {
+    if (proxyWait) await proxyWait;
+    if (proxyFailure) throw proxyFailure;
     proxyCalls.push({ url, init });
-    return Response.json({ retCode: 0, retMsg: "OK", result: { list: [{ symbol: "BTCUSDT" }] } });
+    return proxyResponse.clone();
   },
 }));
 
 import { NextRequest } from "next/server";
-import { bybitActionPath, GET, mappedBybitStatus } from "./route";
+const { bybitActionPath, GET, mappedBybitStatus, clearBybitCaches } = await import("./route");
 
 const request = (query: string) => new NextRequest(`http://localhost/api/bybit?${query}`);
 
 describe("Bybit proxy contract", () => {
+  beforeEach(() => {
+    clearBybitCaches();
+    proxyWait = undefined;
+  });
+
   test("maps only the fixed Phase 1 actions", () => {
     expect([
       "instruments", "tickers", "funding-history", "kline", "orderbook",
@@ -130,5 +142,72 @@ describe("Bybit proxy contract", () => {
       end: String(end),
       limit: "1000",
     });
+  });
+
+  test.each([
+    ["abort", new DOMException("aborted", "AbortError"), 499, "Request cancelled"],
+    ["timeout", new DOMException("timed out", "TimeoutError"), 504, "Upstream request timed out"],
+    ["transport", new TypeError("network"), 502, "Failed to fetch upstream"],
+  ])("classifies %s failures", async (_name, error, status, message) => {
+    proxyFailure = error;
+    const controller = new AbortController();
+    if (status === 499) controller.abort();
+    try {
+      const response = await GET(new NextRequest("http://localhost/api/bybit?action=tickers", { signal: controller.signal }));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ error: message });
+    } finally {
+      proxyFailure = undefined;
+    }
+  });
+
+  test("classifies malformed successful JSON as upstream failure", async () => {
+    const previous = proxyResponse;
+    proxyResponse = new Response("not json", { status: 200 });
+    try {
+      const response = await GET(request("action=tickers"));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "Failed to fetch upstream" });
+    } finally {
+      proxyResponse = previous;
+    }
+  });
+
+  test("coalesces identical instruments loads, then reuses and expires the five-minute TTL", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      proxyCalls.length = 0;
+      const [first, second] = await Promise.all([
+        GET(request("action=instruments")),
+        GET(request("action=instruments&limit=1000")),
+      ]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(proxyCalls).toHaveLength(1);
+      expect(proxyCalls[0].init.signal).toBeUndefined();
+      await GET(request("action=instruments"));
+      expect(proxyCalls).toHaveLength(1);
+      clock.mockReturnValue(1_000_000 + 5 * 60 * 1000);
+      await GET(request("action=instruments"));
+      expect(proxyCalls).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("an aborted cache waiter gets 499 without cancelling the shared loader", async () => {
+    proxyCalls.length = 0;
+    let release!: () => void;
+    proxyWait = new Promise<void>((resolve) => { release = resolve; });
+    const first = GET(request("action=tickers"));
+    await Promise.resolve();
+    const controller = new AbortController();
+    const second = GET(new NextRequest("http://localhost/api/bybit?action=tickers", { signal: controller.signal }));
+    controller.abort();
+    release();
+    expect((await first).status).toBe(200);
+    expect((await second).status).toBe(499);
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0].init.signal).toBeUndefined();
   });
 });

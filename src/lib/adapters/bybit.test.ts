@@ -965,6 +965,42 @@ describe("Bybit direct-to-proxy transport fallback", () => {
     expect(urls[1]).toBe("/api/bybit?action=kline&symbol=BTCUSDT&interval=60&start=1&end=2");
   });
 
+  test("does not proxy after a direct 429 followed by a network failure", async () => {
+    const urls: string[] = [];
+    const scheduler = createBybitScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        urls.push(String(url));
+        if (urls.length === 1) return new Response("rate limited", { status: 429 });
+        throw new TypeError("Failed to fetch");
+      }) as typeof fetch,
+    });
+
+    await expect(createBybitRequest(scheduler)("tickers", {}, undefined)).rejects.toMatchObject({ status: 429 });
+    expect(urls.every((url) => url.startsWith("https://api.bybit.com/"))).toBe(true);
+    expect(urls).toHaveLength(2);
+  });
+
+  test("does not proxy after a direct 429 followed by retry timeouts", async () => {
+    let calls = 0;
+    const scheduler = createBybitScheduler({
+      requestTimeoutMs: 1,
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: ((_url, init) => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve(new Response("rate limited", { status: 429 }));
+        return new Promise((_resolve, reject) => init?.signal?.addEventListener(
+          "abort", () => reject(new DOMException("aborted", "AbortError")), { once: true },
+        ));
+      }) as typeof fetch,
+    });
+
+    await expect(createBybitRequest(scheduler)("tickers", {}, undefined)).rejects.toMatchObject({ status: 429 });
+    expect(calls).toBe(3);
+  });
+
   test("never routes a business failure through the proxy", async () => {
     let calls = 0;
     const business = await failureFromFetch((async () => Response.json(
@@ -1002,12 +1038,15 @@ describe("Bybit direct-to-proxy transport fallback", () => {
 
   test("does not fall back after a caller abort", async () => {
     let calls = 0;
+    const reason = new Error("bybit request cancellation");
     const fakeScheduler = {
       fetchJson: async () => { calls += 1; throw new DOMException("aborted", "AbortError"); },
     };
+    const controller = new AbortController();
+    controller.abort(reason);
     const request = createBybitRequest(fakeScheduler);
-    await expect(request("tickers", {}, undefined)).rejects.toHaveProperty("name", "AbortError");
-    expect(calls).toBe(1);
+    await expect(request("tickers", {}, controller.signal)).rejects.toBe(reason);
+    expect(calls).toBe(0);
   });
 });
 
@@ -1171,6 +1210,7 @@ describe("Bybit scheduler", () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const controller = new AbortController();
+    const reason = new Error("bybit queued cancellation");
     const scheduler = createBybitScheduler({
       random: () => 0,
       sleep: async () => undefined,
@@ -1187,8 +1227,8 @@ describe("Bybit scheduler", () => {
     const queued = scheduler.fetchJson("/queued", { signal: controller.signal });
     const fourth = scheduler.fetchJson("/fourth");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    controller.abort();
-    await expect(queued).rejects.toHaveProperty("name", "AbortError");
+    controller.abort(reason);
+    await expect(queued).rejects.toBe(reason);
     release();
     await Promise.all([first, second, fourth]);
     expect(peak).toBe(2);
@@ -1198,16 +1238,37 @@ describe("Bybit scheduler", () => {
   test("does not retry caller aborts", async () => {
     let calls = 0;
     const controller = new AbortController();
+    const reason = new Error("bybit in-flight cancellation");
     const scheduler = createBybitScheduler({
       random: () => 0,
       sleep: async () => undefined,
       fetch: (async (_url, init) => {
         calls += 1;
-        controller.abort();
+        controller.abort(reason);
         throw init?.signal?.reason ?? new DOMException("aborted", "AbortError");
       }) as typeof fetch,
     });
-    await expect(scheduler.fetchJson("/abort", { signal: controller.signal })).rejects.toHaveProperty("name", "AbortError");
+    await expect(scheduler.fetchJson("/abort", { signal: controller.signal })).rejects.toBe(reason);
+    expect(calls).toBe(1);
+  });
+
+  test("preserves the caller reason when aborting during retry sleep", async () => {
+    const controller = new AbortController();
+    const reason = new Error("bybit sleep cancellation");
+    let calls = 0;
+    const scheduler = createBybitScheduler({
+      random: () => 0,
+      fetch: (async () => {
+        calls += 1;
+        return new Response("rate limited", { status: 429 });
+      }) as typeof fetch,
+      sleep: async (_ms, signal) => {
+        controller.abort(reason);
+        if (signal?.aborted) throw signal.reason;
+      },
+    });
+
+    await expect(scheduler.fetchJson("/retry", { signal: controller.signal })).rejects.toBe(reason);
     expect(calls).toBe(1);
   });
 

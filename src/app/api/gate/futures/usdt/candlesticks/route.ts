@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { proxyFetch } from "@/lib/utils/proxy";
+import { fetchGateJson, gateFailureResponse, isArrayPayload } from "../gate-route";
 
-const GATE_API_URLS = [
-  "https://api.gateio.ws/api/v4",
-  "https://api.gate.io/api/v4",
-  "https://fx-api.gateio.ws/api/v4",
-];
 const INTERVALS = new Set(["1m", "5m", "1h", "4h", "1d", "1w"]);
 const CONTRACT_RE = /^[A-Z0-9]+_USDT$/;
 const MAX_LIMIT = 2_000;
@@ -32,40 +27,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "limit must be a positive integer" }, { status: 400 });
   }
 
-  let lastError: Error | null = null;
+  const result = await fetchGateJson<unknown[]>(request, {
+    path: "/futures/usdt/candlesticks",
+    query: { contract, interval, limit },
+    timeout: 10_000,
+    validate: isArrayPayload,
+    invalidMessage: "Invalid candlesticks response format",
+  });
 
-  for (const baseUrl of GATE_API_URLS) {
-    try {
-      if (request.signal.aborted) {
-        return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-      }
-      const url = new URL(`${baseUrl}/futures/usdt/candlesticks`);
-      url.searchParams.set("contract", contract);
-      url.searchParams.set("interval", interval);
-      url.searchParams.set("limit", limit);
-
-      const response = await proxyFetch(url, {
-        timeout: 10_000,
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(10_000)]),
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return NextResponse.json(data);
-      }
-
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      if (request.signal.aborted) {
-        return NextResponse.json({ error: "Request cancelled" }, { status: 499 });
-      }
-      lastError = error instanceof Error ? error : new Error(String(error));
-    }
-  }
-
-  const message = lastError?.message || "Failed to fetch candlesticks from all Gate.io endpoints";
-  return NextResponse.json({ error: message }, { status: 500 });
+  return result.ok ? NextResponse.json(result.data) : gateFailureResponse(result);
 }

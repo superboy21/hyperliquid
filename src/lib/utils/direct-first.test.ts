@@ -100,6 +100,60 @@ describe("runDirectFirst", () => {
     expect(proxyCalls).toBe(1);
   });
 
+  test.each(["network", "timeout"] as const)("does not proxy after a reported 429 followed by %s", async (kind) => {
+    const rateLimited = new Response(null, { status: 429 });
+    let proxyCalls = 0;
+
+    await expect(runDirectFirst({
+      direct: async (_signal, reportResponse) => {
+        reportResponse?.(rateLimited);
+        throw kind === "timeout"
+          ? new DOMException("The operation timed out.", "TimeoutError")
+          : new TypeError("Failed to fetch");
+      },
+      proxy: async () => {
+        proxyCalls += 1;
+        return new Response(null, { status: 200 });
+      },
+    })).resolves.toBe(rateLimited);
+    expect(proxyCalls).toBe(0);
+  });
+
+  test("does not proxy when a reported 429 is followed by a direct 5xx", async () => {
+    const rateLimited = new Response(null, { status: 429 });
+    let proxyCalls = 0;
+
+    await expect(runDirectFirst({
+      direct: async (_signal, reportResponse) => {
+        reportResponse?.(rateLimited);
+        return new Response(null, { status: 503 });
+      },
+      proxy: async () => {
+        proxyCalls += 1;
+        return new Response(null, { status: 200 });
+      },
+    })).resolves.toBe(rateLimited);
+    expect(proxyCalls).toBe(0);
+  });
+
+  test("returns a reported 429 when the direct deadline expires during retry backoff", async () => {
+    const rateLimited = new Response(null, { status: 429 });
+    let proxyCalls = 0;
+
+    await expect(runDirectFirst({
+      directTimeoutMs: 1,
+      direct: async (_signal, reportResponse) => {
+        reportResponse?.(rateLimited);
+        return new Promise<Response>(() => undefined);
+      },
+      proxy: async () => {
+        proxyCalls += 1;
+        return new Response(null, { status: 200 });
+      },
+    })).resolves.toBe(rateLimited);
+    expect(proxyCalls).toBe(0);
+  });
+
   test("aborts a hung direct operation at its client deadline", async () => {
     const originalSetTimeout = globalThis.setTimeout;
     globalThis.setTimeout = ((handler: TimerHandler) => {

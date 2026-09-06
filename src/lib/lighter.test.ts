@@ -39,6 +39,24 @@ describe.serial("Lighter direct-first transport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  test("never proxies a 429 followed by a direct network failure", async () => {
+    const first = new Response(null, { status: 429, headers: { "Retry-After": "0" } });
+    const fetchMock = mock().mockResolvedValueOnce(first).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(lighterFetch("funding-rates")).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("never proxies a 429 when its Retry-After exceeds the direct deadline", async () => {
+    const first = new Response(null, { status: 429, headers: { "Retry-After": "60" } });
+    const fetchMock = mock().mockResolvedValueOnce(first);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(lighterFetch("funding-rates", "", undefined, 1)).resolves.toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test.each(["network", "timeout"] as const)("proxies once for a direct %s failure", async (kind) => {
     const proxy = new Response(null, { status: 200 });
     const fetchMock = mock().mockImplementationOnce(async () => {

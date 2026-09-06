@@ -148,3 +148,9 @@ No CCXT runtime dependency exists anymore (routes, adapter branches, flags, and 
 - `PROXY_URL` (optional, server routes only): `PROXY_URL > HTTP_PROXY > HTTPS_PROXY > http_proxy > https_proxy`; Node-only `undici.ProxyAgent`, Edge degrades to direct; a configured-proxy failure errors loudly instead of silently going direct
 - No `NEXT_PUBLIC_*_TRANSPORT_MODE` flags exist anymore (CCXT modes removed)
 - Use `.env.local` for local development; `.env*` files are excluded from the Docker build context — production config goes through runtime environment (e.g. `PROXY_URL: ${PROXY_URL:-}` in `docker-compose.yml`)
+
+### Proxy errors and response caching
+
+- Non-Gate proxy routes use one failure mapping: caller abort `499`, upstream/proxy timeout `504`, and transport failure or malformed successful upstream response `502`; upstream HTTP and exchange business errors keep their mapped status.
+- `src/lib/utils/inflight-json-cache.ts` coalesces identical in-flight loads by canonical request key. A caller may abort its own wait without cancelling the shared load. Only successful parsed JSON that passes the route's semantic envelope validation is eligible for completed-value storage; failures and exchange business-error envelopes are never cached.
+- Metadata completed values use a 5-minute TTL. Hot bulk live lists use the same coalescer with TTL `0`, so concurrent callers share one load but later calls refetch. There is no completed-value cache for orderbooks, RPI, candles/history, per-symbol live data, or current ticker/funding.

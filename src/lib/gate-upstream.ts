@@ -93,7 +93,10 @@ export function buildGateBatchProxyRequest(contracts: string[]): GateUpstreamReq
     url: buildGateProxyUrl("funding-rates"),
     init: {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ contracts }),
       cache: "no-store",
     },
@@ -106,7 +109,10 @@ export function buildGateRequest(action: GateAction, params: Record<string, stri
     url: buildGateUrl(action, params),
     init: {
       method,
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+      },
       cache: "no-store",
       ...(method === "POST" ? { body: JSON.stringify(params) } : {}),
       timeout: 10_000,
@@ -195,10 +201,16 @@ export function createGateDirectRequest(options: GateTransportOptions = {}) {
   const now = options.now ?? Date.now;
   const timeoutMs = options.requestTimeoutMs ?? 10_000;
 
-  return async (action: GateAction, params: Record<string, string> = {}, signal?: AbortSignal): Promise<Response> => {
+  return async (
+    action: GateAction,
+    params: Record<string, string> = {},
+    signal?: AbortSignal,
+    reportResponse?: (response: Response) => void,
+  ): Promise<Response> => {
     const request = buildGateRequest(action, params);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const response = await fetchWithClientTimeout(fetchImpl, request.url, request.init, timeoutMs, signal);
+      reportResponse?.(response);
       if (response.status !== 429 || attempt === 1) return response;
       const retry = retryAfterMs(response, now);
       await sleep(retry ?? 1_000, signal);
@@ -216,7 +228,7 @@ export function createGateRequest(options: GateTransportOptions = {}) {
     return runDirectFirst({
       signal,
       directTimeoutMs: options.requestTimeoutMs ?? 10_000,
-      direct: (directSignal) => direct(action, params, directSignal),
+      direct: (directSignal, reportResponse) => direct(action, params, directSignal, reportResponse),
       proxy: () => fetchImpl(buildGateProxyUrl(action, params), { ...request.init, signal }),
     });
   };
@@ -252,6 +264,31 @@ export function getGateAssetCategory(contractName: string): string {
     if (symbols.includes(symbol)) return CRYPTO_SUBCATEGORIES.has(category) ? "Crypto" : category;
   }
   return "其他";
+}
+
+/** Contracts must enrich every non-empty ticker response. */
+export function hasCompleteGateTickerEnrichment(tickers: unknown, contracts: unknown): boolean {
+  // An empty ticker response is a legitimate result and needs no metadata.
+  if (!Array.isArray(tickers)) return false;
+  if (tickers.length === 0) return true;
+  if (!Array.isArray(contracts)) return false;
+
+  const fundingIntervals = new Map<string, number>();
+  for (const item of contracts) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as { name?: unknown; funding_interval?: unknown };
+    if (typeof row.name !== "string") continue;
+    const interval = typeof row.funding_interval === "number"
+      ? row.funding_interval
+      : Number(row.funding_interval);
+    if (Number.isFinite(interval) && interval > 0) fundingIntervals.set(row.name, interval);
+  }
+
+  return tickers.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const contract = (item as { contract?: unknown }).contract;
+    return typeof contract === "string" && fundingIntervals.has(contract);
+  });
 }
 
 export function enrichGateTickers(tickers: unknown, contracts: unknown): Array<Record<string, unknown>> {

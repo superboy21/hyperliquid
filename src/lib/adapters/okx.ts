@@ -133,10 +133,11 @@ export async function okxFetch(
   return runDirectFirst({
     signal,
     directTimeoutMs,
-    direct: async (directSignal) => {
+    direct: async (directSignal, reportResponse) => {
       for (let attempt = 0; attempt < OKX_MAX_ATTEMPTS; attempt += 1) {
         const directInit = { ...init, signal: directSignal };
         const response = await throttleOkxFetch(() => fetch(direct, directInit), directSignal);
+        reportResponse?.(response);
 
         if (!shouldRetryOkxResponse(response) || attempt === OKX_MAX_ATTEMPTS - 1) {
           return response;

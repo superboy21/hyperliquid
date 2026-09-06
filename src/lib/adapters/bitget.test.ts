@@ -467,16 +467,17 @@ describe("Bitget scheduler", () => {
   test("does not retry caller aborts", async () => {
     let calls = 0;
     const controller = new AbortController();
+    const reason = new Error("bitget in-flight cancellation");
     const scheduler = createBitgetScheduler({
       random: () => 0,
       sleep: async () => undefined,
       fetch: (async (_url, init) => {
         calls += 1;
-        controller.abort();
+        controller.abort(reason);
         throw init?.signal?.reason ?? new DOMException("aborted", "AbortError");
       }) as typeof fetch,
     });
-    await expect(scheduler.fetchJson("/abort", { signal: controller.signal })).rejects.toHaveProperty("name", "AbortError");
+    await expect(scheduler.fetchJson("/abort", { signal: controller.signal })).rejects.toBe(reason);
     expect(calls).toBe(1);
   });
 
@@ -495,9 +496,10 @@ describe("Bitget scheduler", () => {
     const first = scheduler.fetchJson("/first");
     await Promise.resolve();
     const controller = new AbortController();
+    const reason = new Error("bitget queued cancellation");
     const queued = scheduler.fetchJson("/queued", { signal: controller.signal });
-    controller.abort();
-    await expect(queued).rejects.toHaveProperty("name", "AbortError");
+    controller.abort(reason);
+    await expect(queued).rejects.toBe(reason);
     releaseFirst();
     await first;
     expect(calls).toBe(1);
@@ -612,16 +614,17 @@ describe("Bitget scheduler", () => {
 
   test("aborts during retry backoff without another attempt", async () => {
     const controller = new AbortController();
+    const reason = new Error("bitget sleep cancellation");
     let calls = 0;
     const scheduler = createBitgetScheduler({
       random: () => 0,
       fetch: (async () => { calls += 1; return new Response("{}", { status: 429 }); }) as typeof fetch,
       sleep: async (_ms, signal) => {
-        controller.abort();
-        if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+        controller.abort(reason);
+        if (signal?.aborted) throw signal.reason;
       },
     });
-    await expect(scheduler.fetchJson("/retry", { signal: controller.signal })).rejects.toHaveProperty("name", "AbortError");
+    await expect(scheduler.fetchJson("/retry", { signal: controller.signal })).rejects.toBe(reason);
     expect(calls).toBe(1);
   });
 
@@ -728,6 +731,42 @@ describe("Bitget direct-to-proxy transport fallback", () => {
     expect(urls[3]).toBe("/api/bitget?action=orderbook&symbol=BTCUSDT");
   });
 
+  test("does not proxy after a direct 429 followed by a network failure", async () => {
+    const urls: string[] = [];
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        urls.push(String(url));
+        if (urls.length === 1) return new Response("rate limited", { status: 429 });
+        throw new TypeError("Failed to fetch");
+      }) as typeof fetch,
+    });
+
+    await expect(createBitgetRequest(scheduler)("tickers", {})).rejects.toMatchObject({ status: 429 });
+    expect(urls.every((url) => url.startsWith("https://api.bitget.com/"))).toBe(true);
+    expect(urls).toHaveLength(2);
+  });
+
+  test("does not proxy after a direct 429 followed by retry timeouts", async () => {
+    let calls = 0;
+    const scheduler = createBitgetScheduler({
+      requestTimeoutMs: 1,
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: ((_url, init) => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve(new Response("rate limited", { status: 429 }));
+        return new Promise((_resolve, reject) => init?.signal?.addEventListener(
+          "abort", () => reject(new DOMException("aborted", "AbortError")), { once: true },
+        ));
+      }) as typeof fetch,
+    });
+
+    await expect(createBitgetRequest(scheduler)("tickers", {})).rejects.toMatchObject({ status: 429 });
+    expect(calls).toBe(3);
+  });
+
   test.each([
     ["business code mapped to 503", Response.json({ code: "25000", msg: "busy", data: null })],
     ["HTTP 429", new Response("rate limited", { status: 429 })],
@@ -755,11 +794,12 @@ describe("Bitget direct-to-proxy transport fallback", () => {
 
     const abortUrls: string[] = [];
     const controller = new AbortController();
-    controller.abort();
+    const reason = new Error("bitget request cancellation");
+    controller.abort(reason);
     const abortScheduler = createBitgetScheduler({
       fetch: (async (url) => { abortUrls.push(String(url)); return Response.json({ code: "00000", data: [] }); }) as typeof fetch,
     });
-    await expect(createBitgetRequest(abortScheduler)("instruments", {}, controller.signal)).rejects.toHaveProperty("name", "AbortError");
+    await expect(createBitgetRequest(abortScheduler)("instruments", {}, controller.signal)).rejects.toBe(reason);
     expect(abortUrls).toHaveLength(0);
   });
 });

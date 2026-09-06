@@ -223,6 +223,8 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 
 这些公开市场数据无需交易所认证；服务端代理用于处理 CORS/地区限制、参数白名单、超时和上游错误映射。项目不再包含任何 CCXT 运行时路径（路由、分支、开关与依赖均已移除）。
 
+非 Gate 同源代理统一错误映射：调用方取消返回 `499`，上游或代理超时返回 `504`，传输失败或上游成功响应无法解析时返回 `502`。代理请求按规范化请求键合并并发请求；只有成功解析且通过语义校验的 JSON 才可进入完成值缓存。元数据 TTL 为 5 分钟，热门批量实时列表仅做并发合并（TTL `0`）；订单簿、RPI、K 线/历史、按交易对实时数据、当前 ticker/funding 不做完成值缓存，交易所业务错误包络也不缓存。
+
 ### 现货严格代理
 
 `/api/spot/[exchange]` 是 Hyperliquid、Gate.io、Binance、Lighter、OKX、Bitget 和 Bybit 七家交易所的严格现货门面，允许 `list`、`candles`、`book` 三类操作，以及仅 Bitget 可用的 `instrument` 元数据操作（用于核验 Reality instruments）和 `realityBook` 公共 V3 SPOT 订单簿操作；所有参数仍严格白名单校验，并校验交易所、交易对/市场 ID、周期、时间范围和请求上限后映射到固定上游主机。订单簿 REST 最大深度按交易所限制为 Hyperliquid 20、Gate.io 100、Binance 5000、Lighter 250、OKX 5000、Bitget 150；Hyperliquid 现货列表使用 `spotMetaAndAssetCtxs`，PURR 请求使用上游要求的 `PURR/USDC`，其余索引市场使用 `@index`。
@@ -267,7 +269,7 @@ environment:
   PROXY_URL: ${PROXY_URL:-}
 ```
 
-注意：该变量只影响服务端路由出站，不影响浏览器直连；浏览器直连失败才会回退到同源代理。`.env*` 文件不会进入 Docker 构建上下文，生产配置请使用运行时环境变量。
+注意：该变量只影响服务端路由出站，不影响浏览器直连；浏览器直连失败才会回退到同源代理。不要仅凭单一网络环境把某家交易所静态改为 proxy-first：浏览器 CORS、地区限制、系统代理和部署出站策略都可能变化，应保持 direct-first，并在取得按交易所/动作区分的持续成功率数据后再考虑短 TTL 自适应偏好。`.env*` 文件不会进入 Docker 构建上下文，生产配置请使用运行时环境变量。
 
 ### Docker
 
@@ -310,8 +312,9 @@ Invoke-WebRequest "http://localhost:3000/api/spot/binance?action=list"
 ### v2026.09.06
 - 全交易所统一浏览器 direct-first + 同源代理回退：补齐 Hyperlink（新增严格 `POST /api/hyperliquid`）、Gate（直连优先 + enrichment 对齐 + 批量 50 分片）、Bitget（`rpi-orderbook` 代理与完整包络契约）三条缺失链路；Binance/OKX/Lighter/Bybit/Spot 收敛到同一失败分类（仅网络-CORS-超时/403/451/最终 5xx 回退；429 同侧退避；4xx-业务错误-取消不回退）
 - 服务端路由全部收紧为固定端点/参数白名单并统一经 `proxyFetch`（配置代理后失败不再静默直连）；`undici` 移入运行时依赖
+- 非 Gate 代理错误统一为调用方取消 `499`、上游/代理超时 `504`、传输或成功响应解析失败 `502`；新增并发请求合并与严格缓存边界：成功解析 JSON 才可缓存，元数据 TTL 5 分钟，热门批量实时列表 TTL `0` 仅合并 in-flight 请求，订单簿/RPI/K 线与历史/按交易对实时数据/当前 ticker 与 funding 及业务错误包络均不缓存
 - 彻底移除 CCXT 运行时路径：删除 Binance/Gate/OKX 三条 `/ccxt` 路由、`exchange-flags.ts` 及开关、`ccxt` 依赖与 `next.config.ts` external 配置；`TransportMode` 收窄为 `"native"`；删除零引用的整个 `src/lib/normalizers/` 目录
-- 验证通过：590 项测试、TypeScript 类型检查、ESLint、Next.js 生产构建
+- 验证通过：Bun 测试套件、TypeScript 类型检查、ESLint、Next.js 生产构建
 
 ### v2026.09.01
 - 组合图加权联动统计面板：波动率平价或自定义配比生效时，统计面板的比值/价差当前值、均值、±1σ/±2σ 区间及较均值百分比均按同一配比重算，公式为 Ratio `(wA×A)/(wB×B)`、Spread `wA×A−wB×B`，基于对齐后的原始双腿收盘价重建加权序列后再做去尾与总体标准差

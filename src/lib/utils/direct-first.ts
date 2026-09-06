@@ -6,8 +6,9 @@ export function isProxyEligibleStatus(status: number): boolean {
   return status === 403 || status === 451 || status >= 500;
 }
 
-export type ResponseOperation = (signal?: AbortSignal) => Promise<Response>;
 export type ProxyEligibility = (status: number) => boolean;
+export type DirectResponseObserver = (response: Response) => void;
+export type ResponseOperation = (signal?: AbortSignal, onResponse?: DirectResponseObserver) => Promise<Response>;
 
 export interface DirectFirstOptions {
   direct: ResponseOperation;
@@ -15,6 +16,8 @@ export interface DirectFirstOptions {
   signal?: AbortSignal;
   directTimeoutMs?: number;
   isProxyEligibleStatus?: ProxyEligibility;
+  /** Called for every response received by the direct operation, including retries. */
+  onDirectResponse?: DirectResponseObserver;
 }
 
 function throwIfCallerAborted(signal?: AbortSignal): void {
@@ -30,8 +33,9 @@ function throwIfCallerAborted(signal?: AbortSignal): void {
  *
  * The operations are closures so this helper does not know about URLs,
  * request bodies, response envelopes, parsing, retries, schedulers, or cache.
- * Any direct rejection is treated as a transport failure; caller cancellation
- * is the one exception and is never sent to the proxy leg.
+ * Any direct rejection is treated as a transport failure unless the operation
+ * has already reported a non-proxy-eligible response; caller cancellation is
+ * never sent to the proxy leg.
  */
 export async function runDirectFirst({
   direct,
@@ -39,6 +43,7 @@ export async function runDirectFirst({
   signal,
   directTimeoutMs,
   isProxyEligibleStatus: isEligible = isProxyEligibleStatus,
+  onDirectResponse,
 }: DirectFirstOptions): Promise<Response> {
   throwIfCallerAborted(signal);
 
@@ -47,6 +52,16 @@ export async function runDirectFirst({
   let callerAbort: (() => void) | undefined;
   let rejectCallerAbort: ((reason: unknown) => void) | undefined;
   let rejectTimeout: ((reason: unknown) => void) | undefined;
+  let lastNonProxyEligibleResponse: Response | undefined;
+  let observed429 = false;
+  const reportedResponses = new WeakSet<Response>();
+  const reportDirectResponse: DirectResponseObserver = (response) => {
+    if (reportedResponses.has(response)) return;
+    reportedResponses.add(response);
+    if (!isEligible(response.status) || response.status === 429) lastNonProxyEligibleResponse = response;
+    if (response.status === 429) observed429 = true;
+    onDirectResponse?.(response);
+  };
   const callerAbortPromise = new Promise<never>((_, reject) => {
     rejectCallerAbort = reject;
   });
@@ -70,13 +85,23 @@ export async function runDirectFirst({
   }
 
   try {
-    const directOperation = Promise.resolve().then(() => direct(directController.signal));
+    const directOperation = Promise.resolve().then(async () => {
+      const response = await direct(directController.signal, reportDirectResponse);
+      // Operations which retry internally report each response through
+      // onDirectResponse. The returned response is reported here as well for
+      // simple operations that do not do so themselves.
+      reportDirectResponse(response);
+      return response;
+    });
     const race = timeoutEnabled
       ? Promise.race([directOperation, callerAbortPromise, timeoutPromise])
       : Promise.race([directOperation, callerAbortPromise]);
     const directResponse = await race;
 
     throwIfCallerAborted(signal);
+    if (observed429) {
+      return lastNonProxyEligibleResponse ?? directResponse;
+    }
     if (!isEligible(directResponse.status)) {
       return directResponse;
     }
@@ -86,6 +111,10 @@ export async function runDirectFirst({
   } catch (error) {
     if (signal?.aborted) {
       throw signal.reason;
+    }
+
+    if (lastNonProxyEligibleResponse) {
+      return lastNonProxyEligibleResponse;
     }
 
     // Check immediately before invoking the fallback as the direct operation
