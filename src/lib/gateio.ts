@@ -1,11 +1,14 @@
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
+import {
+  buildGateBatchProxyRequest,
+  createGateDirectRequest,
+  enrichGateTickers,
+  requestGate,
+  type GateTransportOptions,
+} from "./gate-upstream";
 
 // Gate.io API 资金费率监控模块
 // API 文档: https://www.gate.com/docs/developers/apiv4/en/
-
-// 使用 Next.js API 代理避免 CORS 问题
-const API_PROXY_BASE = "/api/gate";
-const SETTLE = "usdt";
 
 // ==================== 类型定义 ====================
 
@@ -51,6 +54,11 @@ export interface GateCandlestick {
   c: string;                           // 收盘价
   v: number;                           // 成交量（张）
   sum: string;                         // 成交额
+}
+
+export interface GatePremiumIndexItem {
+  t?: number;
+  c?: string;
 }
 
 // 内部使用的统一类型
@@ -100,16 +108,33 @@ export interface IntervalFundingRateItem {
 /**
  * 获取所有合约的行情数据（包含资金费率）
  */
-export async function getAllGateTickers(): Promise<GateTicker[]> {
+export async function getGateContracts(signal?: AbortSignal): Promise<unknown[]> {
   try {
-    const response = await fetch(
-      `${API_PROXY_BASE}/futures/${SETTLE}/tickers`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-      }
-    );
+    throwIfAborted(signal);
+    const response = await requestGate("contracts", {}, signal);
+    throwIfAborted(signal);
+    if (!response.ok) return [];
+    const data = await response.json();
+    throwIfAborted(signal);
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      throwIfAborted(signal);
+      throw error;
+    }
+    return [];
+  }
+}
+
+export async function getGateTickers(contract?: string, signal?: AbortSignal): Promise<GateTicker[]> {
+  try {
+    throwIfAborted(signal);
+    const params: Record<string, string> = contract ? { contract } : {};
+    const [tickersResponse, contracts] = await Promise.all([
+      requestGate("tickers", params, signal),
+      getGateContracts(signal),
+    ]);
+    const response = tickersResponse;
 
     if (!response.ok) {
       throw new Error(`Failed to fetch tickers: ${response.status}`);
@@ -120,11 +145,20 @@ export async function getAllGateTickers(): Promise<GateTicker[]> {
       throw new Error("Invalid ticker response format");
     }
 
-    return data;
+    return enrichGateTickers(data, contracts) as unknown as GateTicker[];
   } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      throwIfAborted(signal);
+      throw error;
+    }
     console.error("Error fetching Gate.io tickers:", error);
     return [];
   }
+}
+
+/** Fetch all USDT perpetual tickers with the same contracts enrichment as the proxy route. */
+export async function getAllGateTickers(signal?: AbortSignal): Promise<GateTicker[]> {
+  return getGateTickers(undefined, signal);
 }
 
 /**
@@ -181,15 +215,7 @@ export async function getFundingHistory(
   try {
     throwIfAborted(signal);
 
-    const response = await fetch(
-      `${API_PROXY_BASE}/futures/${SETTLE}/funding_rate?contract=${contract}&limit=${limit}`,
-      {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        signal,
-      }
-    );
+    const response = await requestGate("funding-rate", { contract, limit: String(limit) }, signal);
     throwIfAborted(signal);
 
     if (!response.ok) {
@@ -229,51 +255,99 @@ export async function getBatchFundingHistory(
     return new Map();
   }
 
-  try {
-    const response = await fetch(
-      `${API_PROXY_BASE}/futures/${SETTLE}/funding_rates`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contracts }),
-        cache: "no-store",
-        signal,
-      }
-    );
-    throwIfAborted(signal);
+  return fetchGateBatchFundingHistory(contracts, signal);
+}
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throwIfAborted(signal);
-      console.error(`Batch Gate.io funding history failed: ${response.status} ${errorText}`);
-      return new Map();
-    }
-
-    const data: GateBatchFundingRatesResponseItem[] = await response.json();
-    throwIfAborted(signal);
-    if (!Array.isArray(data)) {
-      return new Map();
-    }
-
-    return new Map(
-      data
-        .filter((item): item is { contract: string; data: GateFundingHistoryItem[] } => Boolean(item.contract && Array.isArray(item.data)))
-        .map((item) => [
-          item.contract,
-          item.data.map((entry) => ({
-            time: entry.t * 1000,
-            fundingRate: entry.r,
-          })),
-        ])
-    );
-  } catch (error) {
-    if (isAbortLikeError(error) || signal?.aborted) {
-      throwIfAborted(signal);
-      throw error;
-    }
-    console.error("Error fetching batch Gate.io funding history:", error);
-    return new Map();
+function normalizeFundingHistoryPayload(payload: unknown): FundingHistoryItem[] | null {
+  if (!Array.isArray(payload)) return null;
+  if (!payload.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    const row = item as Partial<GateFundingHistoryItem>;
+    return typeof row.t === "number" && Number.isFinite(row.t) && typeof row.r === "string";
+  })) {
+    return null;
   }
+  return payload.map((item) => {
+    const row = item as GateFundingHistoryItem;
+    return { time: row.t * 1000, fundingRate: row.r };
+  });
+}
+
+/**
+ * Fetch latest funding settlements direct-first per contract. Gate's public
+ * API has no bulk endpoint: successful direct items are retained, while only
+ * transport/geo failures are grouped into <=50-contract proxy requests.
+ */
+export async function fetchGateBatchFundingHistory(
+  contracts: string[],
+  signal?: AbortSignal,
+  options: GateTransportOptions = {},
+): Promise<Map<string, FundingHistoryItem[]>> {
+  throwIfAborted(signal);
+  const uniqueContracts = Array.from(new Set(contracts));
+  if (uniqueContracts.length === 0) return new Map();
+
+  const direct = createGateDirectRequest(options);
+  const fetchImpl = options.fetch ?? fetch;
+  const result = new Map<string, FundingHistoryItem[]>();
+  const directNeedsProxy = await Promise.all(uniqueContracts.map(async (contract) => {
+    throwIfAborted(signal);
+    let response: Response;
+    try {
+      response = await direct("funding-rate", { contract, limit: "1" }, signal);
+    } catch (error) {
+      if (signal?.aborted) {
+        throwIfAborted(signal);
+      }
+      // Only direct transport failures (including the direct client's own
+      // timeout) are eligible for the batch proxy. Parsing and validation are
+      // deliberately below this catch so malformed 200 responses never proxy.
+      return true;
+    }
+
+    throwIfAborted(signal);
+    if (response.ok) {
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        return false;
+      }
+
+      const history = normalizeFundingHistoryPayload(payload);
+      // A malformed successful payload is a business/data failure, not a
+      // transport failure, and must not cause a proxy retry.
+      if (history) result.set(contract, history);
+      return false;
+    }
+
+    if (response.status === 403 || response.status === 451 || response.status >= 500) return true;
+    // 400/404/429 are definitive direct responses; do not proxy them.
+    return false;
+  }));
+  const proxyContracts = uniqueContracts.filter((_, index) => directNeedsProxy[index]);
+
+  for (let offset = 0; offset < proxyContracts.length; offset += 50) {
+    throwIfAborted(signal);
+    const chunk = proxyContracts.slice(offset, offset + 50);
+    const request = buildGateBatchProxyRequest(chunk);
+    try {
+      const response = await fetchImpl(request.url, { ...request.init, signal });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      if (!Array.isArray(payload)) continue;
+      for (const item of payload as GateBatchFundingRatesResponseItem[]) {
+        if (!item.contract || !Array.isArray(item.data) || result.has(item.contract)) continue;
+        result.set(item.contract, normalizeFundingHistoryPayload(item.data) ?? []);
+      }
+    } catch (error) {
+      if (isAbortLikeError(error) || signal?.aborted) {
+        throwIfAborted(signal);
+        throw error;
+      }
+    }
+  }
+  return result;
 }
 
 /**
@@ -318,14 +392,12 @@ export async function getFundingHistoryAll(
     const windowSeconds = 90 * 24 * 3600; // 90 天
     const currentFrom = Math.max(0, currentTo - windowSeconds);
 
-    const url = `${API_PROXY_BASE}/futures/${SETTLE}/funding_rate?contract=${encodeURIComponent(contract)}&limit=${pageSize}&from=${currentFrom}&to=${currentTo}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      signal,
-    });
+    const response = await requestGate("funding-rate", {
+      contract,
+      limit: String(pageSize),
+      from: String(currentFrom),
+      to: String(currentTo),
+    }, signal);
     throwIfAborted(signal);
 
     if (!response.ok) break;
@@ -374,15 +446,7 @@ export async function getCandleSnapshot(
     const contract = toContractName(coin);
     const intervalParam = convertInterval(interval);
 
-    const response = await fetch(
-      `${API_PROXY_BASE}/futures/${SETTLE}/candlesticks?contract=${contract}&interval=${intervalParam}&limit=${limit}`,
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          signal,
-        }
-    );
+    const response = await requestGate("candlesticks", { contract, interval: intervalParam, limit: String(limit) }, signal);
     throwIfAborted(signal);
 
     if (!response.ok) {
@@ -417,6 +481,62 @@ export async function getCandleSnapshot(
 
     console.error(`Error fetching candles for ${coin}:`, error);
     return [];
+  }
+}
+
+/** Fetch Gate's official premium-index series (direct-first, then proxy). */
+export async function getGatePremiumIndex(
+  contract: string,
+  limit: number = 1,
+  signal?: AbortSignal,
+): Promise<GatePremiumIndexItem[]> {
+  try {
+    throwIfAborted(signal);
+    const response = await requestGate("premium-index", { contract, limit: String(limit) }, signal);
+    throwIfAborted(signal);
+    if (!response.ok) return [];
+    const data = await response.json();
+    throwIfAborted(signal);
+    return Array.isArray(data) ? data as GatePremiumIndexItem[] : [];
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      throwIfAborted(signal);
+      throw error;
+    }
+    return [];
+  }
+}
+
+export interface GateOrderBookPayload {
+  bids?: Array<{ p: string; s: number }>;
+  asks?: Array<{ p: string; s: number }>;
+}
+
+/** Fetch a Gate futures order book, including the RPI endpoint when requested. */
+export async function getGateOrderBook(
+  contract: string,
+  limit: number,
+  signal?: AbortSignal,
+  rpi = false,
+): Promise<GateOrderBookPayload | null> {
+  try {
+    throwIfAborted(signal);
+    const response = await requestGate("order-book", {
+      contract,
+      limit: String(limit),
+      ...(rpi ? { rpi: "1" } : {}),
+    }, signal);
+    throwIfAborted(signal);
+    if (!response.ok) return null;
+    const data = await response.json();
+    throwIfAborted(signal);
+    return data && typeof data === "object" ? data as GateOrderBookPayload : null;
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      throwIfAborted(signal);
+      throw error;
+    }
+    return null;
   }
 }
 

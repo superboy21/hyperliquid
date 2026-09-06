@@ -1,6 +1,23 @@
-import { describe, expect, test } from "bun:test";
-import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, resolvePerpCandleSource, toOkxBar } from "./search-candles";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, resolvePerpCandleSource, toOkxBar } from "./search-candles";
 import { createCandleSourceProvenance } from "./candle-provenance";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+test("Gate search candles prefer the direct URL before the proxy", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = mock(async (url) => {
+    urls.push(String(url));
+    return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10, sum: "15" }]);
+  }) as typeof fetch;
+
+  await expect(fetchGateCandles("BTC", "1h")).resolves.toMatchObject([{ openTime: 1000, close: "1.5" }]);
+  expect(urls).toEqual(["https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=BTC_USDT&interval=1h&limit=2000"]);
+});
 
 describe("perp weekly candle source policy", () => {
   test("maps OKX weekly candles to its official UTC week", () => {

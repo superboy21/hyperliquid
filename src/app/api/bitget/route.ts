@@ -17,6 +17,7 @@ const ACTIONS: Record<string, ActionSpec> = {
   candles: { path: "/api/v3/market/candles", allowed: ["symbol", "interval", "startTime", "endTime", "type", "limit"], required: ["symbol", "interval"] },
   "history-candles": { path: "/api/v3/market/history-candles", allowed: ["symbol", "interval", "startTime", "endTime", "type", "limit"], required: ["symbol", "interval"] },
   orderbook: { path: "/api/v3/market/orderbook", allowed: ["symbol", "limit"], required: ["symbol"] },
+  "rpi-orderbook": { path: "/api/v3/market/rpi-orderbook", allowed: ["symbol", "limit"], required: ["symbol"] },
 };
 
 function badRequest(message: string) {
@@ -40,13 +41,13 @@ export function mappedBitgetStatus(httpStatus: number, code?: string): number {
 }
 
 export function bitgetActionPath(action: string): string | null {
-  return ACTIONS[action]?.path ?? null;
+  return Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action].path : null;
 }
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const action = params.get("action");
-  const spec = action ? ACTIONS[action] : undefined;
+  const spec = action && Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action] : undefined;
   if (!spec) return badRequest("Unknown or missing action");
   const actionName = action as string;
 
@@ -66,10 +67,10 @@ export async function GET(request: NextRequest) {
   if (type !== null && !CANDLE_TYPES.has(type)) return badRequest("Invalid candle type");
 
   const cursor = params.get("cursor") ?? (actionName === "history-fund-rate" ? "1" : null);
-  const defaultLimit = ["history-fund-rate", "candles", "history-candles", "orderbook"].includes(actionName) ? "100" : null;
+  const defaultLimit = ["history-fund-rate", "candles", "history-candles", "orderbook", "rpi-orderbook"].includes(actionName) ? "100" : null;
   const limit = params.get("limit") ?? defaultLimit;
   if (cursor !== null && !integerInRange(cursor, 1, 100)) return badRequest("Invalid cursor");
-  if (limit !== null && !integerInRange(limit, 1, actionName === "orderbook" ? 1000 : 100)) return badRequest("Invalid limit");
+  if (limit !== null && !integerInRange(limit, 1, actionName === "rpi-orderbook" ? 200 : actionName === "orderbook" ? 1000 : 100)) return badRequest("Invalid limit");
 
   const startTime = params.get("startTime");
   const endTime = params.get("endTime");
@@ -89,8 +90,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const response = await fetch(upstream, {
-      signal: request.signal ?? AbortSignal.timeout(TIMEOUT_MS),
+    const response = await proxyFetch(upstream, {
+      timeout: TIMEOUT_MS,
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(TIMEOUT_MS)]),
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json",
@@ -103,7 +105,7 @@ export async function GET(request: NextRequest) {
     const code = typeof object?.code === "string" ? object.code : undefined;
     const msg = typeof object?.msg === "string" ? object.msg : undefined;
     const success = response.ok && code === "00000" && msg !== undefined && object && Object.prototype.hasOwnProperty.call(object, "data");
-    if (success) return NextResponse.json(object.data);
+    if (success) return NextResponse.json(object);
 
     const status = mappedBitgetStatus(response.status, code);
     const errorBody = `Upstream HTTP ${response.status}, code=${code ?? "none"}`;

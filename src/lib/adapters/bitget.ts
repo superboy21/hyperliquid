@@ -89,6 +89,7 @@ class BitgetHttpError extends Error {
     public retryAfterMs: number | null,
     public apiCode?: string,
     public apiMessage?: string,
+    public source: "http" | "business" = "http",
   ) {
     const diagnostic = apiCode ? `; API code ${apiCode}${apiMessage ? `: ${apiMessage}` : ""}` : "";
     super(`Bitget request failed (${status}${diagnostic})`);
@@ -117,7 +118,7 @@ function unwrapBitgetEnvelope(payload: unknown, retryAfter: number | null): unkn
   const code = String(envelope.code);
   const rawMessage = envelope.msg ?? envelope.message;
   const message = typeof rawMessage === "string" ? rawMessage : undefined;
-  throw new BitgetHttpError(statusForBitgetCode(code), retryAfter, code, message);
+  throw new BitgetHttpError(statusForBitgetCode(code), retryAfter, code, message, "business");
 }
 
 function bitgetEnvelopeDiagnostics(payload: unknown): { apiCode?: string; apiMessage?: string } {
@@ -179,7 +180,7 @@ export function createBitgetScheduler(options: SchedulerOptions = {}) {
       const payload: unknown = await response.json().catch(() => undefined);
       if (!response.ok) {
         const diagnostics = bitgetEnvelopeDiagnostics(payload);
-        throw new BitgetHttpError(response.status, retryAfter, diagnostics.apiCode, diagnostics.apiMessage);
+        throw new BitgetHttpError(response.status, retryAfter, diagnostics.apiCode, diagnostics.apiMessage, "http");
       }
       return unwrapBitgetEnvelope(payload, retryAfter);
     } catch (error) {
@@ -391,9 +392,59 @@ export function buildBitgetUrl(action: BitgetAction, params: Record<string, stri
   return url.toString();
 }
 
-export const requestBitget: BitgetRequest = (action, params, signal, options) => {
-  return bitgetScheduler.fetchJson(buildBitgetUrl(action, params), { signal }, options?.priority);
+/** Local same-origin proxy route. The route fixes category to USDT-FUTURES. */
+const BITGET_PROXY_PATH = "/api/bitget";
+const BITGET_PROXY_ALLOWED_PARAMS: Record<BitgetAction, readonly string[]> = {
+  instruments: ["symbol"],
+  tickers: ["symbol"],
+  "current-fund-rate": ["symbol"],
+  "history-fund-rate": ["symbol", "cursor", "limit"],
+  candles: ["symbol", "interval", "startTime", "endTime", "type", "limit"],
+  "history-candles": ["symbol", "interval", "startTime", "endTime", "type", "limit"],
+  orderbook: ["symbol", "limit"],
+  "rpi-orderbook": ["symbol", "limit"],
 };
+
+/** Builds only the route's action and allowlisted query parameters. */
+export function buildBitgetProxyUrl(action: BitgetAction, params: Record<string, string> = {}): string {
+  const search = new URLSearchParams({ action });
+  for (const [key, value] of Object.entries(params)) {
+    if (BITGET_PROXY_ALLOWED_PARAMS[action].includes(key)) search.set(key, value);
+  }
+  return `${BITGET_PROXY_PATH}?${search.toString()}`;
+}
+
+/**
+ * Only direct transport failures may use the proxy. In particular, a status
+ * produced by mapping a successful HTTP response's business code is not an
+ * upstream HTTP status and must never trigger fallback.
+ */
+export function isBitgetProxyEligibleFailure(error: unknown): boolean {
+  if (isAbortLikeError(error)) return false;
+  if (error instanceof BitgetTimeoutError) return true;
+  if (error instanceof BitgetHttpError) {
+    return error.source === "http" && (error.status === 403 || error.status === 451 || error.status >= 500);
+  }
+  if (error instanceof TypeError && error.message.includes("Malformed Bitget")) return false;
+  // Fetch network/CORS failures are rejected as ordinary Error/DOMException.
+  return error instanceof Error || error instanceof DOMException;
+}
+
+/** Direct-first request transport with one same-origin proxy fallback leg. */
+export function createBitgetRequest(
+  scheduler: Pick<ReturnType<typeof createBitgetScheduler>, "fetchJson"> = bitgetScheduler,
+): BitgetRequest {
+  return async (action, params, signal, options) => {
+    try {
+      return await scheduler.fetchJson(buildBitgetUrl(action, params), { signal }, options?.priority);
+    } catch (error) {
+      if (!isBitgetProxyEligibleFailure(error)) throw error;
+      return scheduler.fetchJson(buildBitgetProxyUrl(action, params), { signal }, options?.priority);
+    }
+  };
+}
+
+export const requestBitget: BitgetRequest = createBitgetRequest();
 
 export async function fetchBitgetCanonicalRates(signal?: AbortSignal, request: BitgetRequest = requestBitget) {
   const [instruments, tickers, funding] = await Promise.all([

@@ -10,4 +10,5 @@ services:
       PORT: "3000"
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
+      PROXY_URL: ${PROXY_URL:-}
     restart: unless-stopped

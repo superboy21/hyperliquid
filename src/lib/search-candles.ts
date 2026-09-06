@@ -10,6 +10,7 @@ import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget";
 import { fetchBybitCandles, fetchBybitFundingHistory, resolveBybitFundingHistoryWindowMs } from "./adapters/bybit";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
+import { requestGate } from "./gate-upstream";
 import { requireBitgetRawSymbol, requireBybitRawSymbol, type SearchExchangeRate } from "./search";
 import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
 
@@ -333,7 +334,7 @@ async function fetchBinanceCandles(
   }
 }
 
-async function fetchGateCandles(
+export async function fetchGateCandles(
   symbol: string,
   interval: SearchChartInterval,
   signal?: AbortSignal,
@@ -343,13 +344,11 @@ async function fetchGateCandles(
     const gateInterval = toGateInterval(interval);
     const limit = MAX_CANDLES.gateio;
     const contract = `${symbol}_USDT`;
-    const url = `/api/gate/futures/usdt/candlesticks?contract=${encodeURIComponent(contract)}&interval=${gateInterval}&limit=${limit}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      signal,
-    });
+    const response = await requestGate("candlesticks", {
+      contract,
+      interval: gateInterval,
+      limit: String(limit),
+    }, signal);
 
     if (!response.ok) return [];
 

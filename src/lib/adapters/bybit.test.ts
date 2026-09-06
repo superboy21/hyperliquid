@@ -979,6 +979,27 @@ describe("Bybit direct-to-proxy transport fallback", () => {
     expect(calls).toBe(1);
   });
 
+  test.each([
+    ["10003", 1], // compatibility mapping: 403
+    ["unfamiliar", 3], // compatibility mapping: 502/503-like transient
+  ] as const)("does not proxy an HTTP 200 business code mapped to %s", async (code, expectedDirectCalls) => {
+    let directCalls = 0;
+    let proxyCalls = 0;
+    const scheduler = createBybitScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        if (String(url).startsWith("/api/bybit")) proxyCalls += 1;
+        else directCalls += 1;
+        return Response.json({ retCode: code, retMsg: "business failure", result: null });
+      }) as typeof fetch,
+    });
+
+    await expect(createBybitRequest(scheduler)("tickers", {}, undefined)).rejects.toThrow("business failure");
+    expect(directCalls).toBe(expectedDirectCalls);
+    expect(proxyCalls).toBe(0);
+  });
+
   test("does not fall back after a caller abort", async () => {
     let calls = 0;
     const fakeScheduler = {

@@ -136,6 +136,7 @@ class BybitHttpError extends Error {
     public retryAfterMs: number | null,
     public apiCode?: string,
     public apiMessage?: string,
+    public business = false,
   ) {
     const diagnostic = apiCode ? `; API code ${apiCode}${apiMessage ? `: ${apiMessage}` : ""}` : "";
     super(`Bybit request failed (${status}${diagnostic})`);
@@ -165,7 +166,7 @@ export function unwrapBybitEnvelope(payload: unknown, retryAfter: number | null)
   const code = String(envelope.retCode);
   const rawMessage = envelope.retMsg;
   const message = typeof rawMessage === "string" ? rawMessage : undefined;
-  throw new BybitHttpError(statusForBybitCode(code), retryAfter, code, message);
+  throw new BybitHttpError(statusForBybitCode(code), retryAfter, code, message, true);
 }
 
 function bybitEnvelopeDiagnostics(payload: unknown): { apiCode?: string; apiMessage?: string } {
@@ -454,6 +455,10 @@ export function isBybitProxyEligibleFailure(error: unknown): boolean {
   if (isAbortLikeError(error)) return false;
   if (error instanceof BybitTimeoutError) return true;
   if (error instanceof BybitHttpError) {
+    // A retCode returned inside an HTTP 200 envelope is an upstream business
+    // result, not a transport failure. Even when its compatibility mapping is
+    // 403/503, it must never switch to the proxy leg.
+    if (error.business) return false;
     return error.status === 403 || error.status === 451 || error.status >= 500;
   }
   if (error instanceof TypeError && error.message.includes("Malformed Bybit")) return false;
@@ -472,10 +477,13 @@ export function createBybitRequest(
   scheduler: Pick<ReturnType<typeof createBybitScheduler>, "fetchJson"> = bybitScheduler,
 ): BybitRequest {
   return async (action, params, signal) => {
+    throwIfAborted(signal);
     try {
       return await scheduler.fetchJson(buildBybitUrl(action, params), { signal });
     } catch (error) {
+      if (signal?.aborted) throw getAbortReason(signal);
       if (!isBybitProxyEligibleFailure(error)) throw error;
+      throwIfAborted(signal);
       return scheduler.fetchJson(buildBybitProxyUrl(action, params), { signal });
     }
   };

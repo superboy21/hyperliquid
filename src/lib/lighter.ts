@@ -1,4 +1,5 @@
-import { isAbortLikeError, throwIfAborted } from "./utils/abort";
+import { isAbortLikeError, sleep, throwIfAborted } from "./utils/abort";
+import { isProxyEligibleStatus, runDirectFirst } from "./utils/direct-first";
 
 // Lighter.xyz API 资金费率监控模块
 // API 文档: https://apidocs.lighter.xyz
@@ -11,38 +12,58 @@ const LIGHTER_PROXY_BASE = "/api/lighter";
 // Lighter's standard tier caps unweighted requests at 60/minute. Concurrent
 // callers (e.g. the search page firing detail fetches for many symbols at
 // once) can easily burst past that and trip 429. We serialize every Lighter
-// HTTP attempt behind a single promise chain with a minimum interval so
-// bursts are smoothed into a steady trickle regardless of caller.
+// HTTP attempt starts behind a single promise-chain gate with a minimum
+// interval. The request itself is not held in the gate, so timeout fallback can
+// proceed even if a fetch implementation ignores AbortSignal.
 
 const LIGHTER_MIN_INTERVAL_MS = 300;
 let lighterFetchQueue: Promise<unknown> = Promise.resolve();
 let lastLighterFetchAt = 0;
+export const LIGHTER_DIRECT_TIMEOUT_MS = 10_000;
 
 async function throttleLighterFetch<T>(
   task: () => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  const run = async (): Promise<T> => {
+  const run = async (): Promise<void> => {
     if (signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
     const now = Date.now();
     const elapsed = now - lastLighterFetchAt;
     const wait = Math.max(0, LIGHTER_MIN_INTERVAL_MS - elapsed);
-    if (wait > 0) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
-    }
+    if (wait > 0) await sleep(wait, signal);
     if (signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
     lastLighterFetchAt = Date.now();
-    return task();
   };
   const next = lighterFetchQueue.then(run, run);
   // Keep the queue alive even if a task rejects, so subsequent callers
   // don't stall. Each caller still observes its own rejection.
   lighterFetchQueue = next.catch(() => undefined);
-  return next;
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    next.then(
+      () => { signal?.removeEventListener("abort", onAbort); resolve(); },
+      (error) => { signal?.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+  return task();
+}
+
+function retryAfterMs(response: Response): number | null {
+  const value = response.headers.get("retry-after");
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60_000, seconds * 1_000);
+  const date = Date.parse(value) - Date.now();
+  return Number.isFinite(date) ? Math.max(0, Math.min(60_000, date)) : null;
 }
 
 /**
@@ -53,32 +74,30 @@ async function throttleLighterFetch<T>(
  * All calls are routed through a global throttle to prevent bursts from
  * triggering 429 Too Many Requests.
  */
-export async function lighterFetch(endpoint: string, params: string = "", init?: RequestInit): Promise<Response> {
-  return throttleLighterFetch(async () => {
-    const paramPrefix = params ? `?${params}` : "";
-    const directUrl = `${LIGHTER_DIRECT_BASE}/${endpoint}${paramPrefix}`;
-    const proxyUrl = `${LIGHTER_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
-
-    // Try direct first
-    try {
-      const response = await fetch(directUrl, init);
-      if (response.ok) return response;
-      // If rate-limited, wait and retry direct once
+export async function lighterFetch(endpoint: string, params: string = "", init?: RequestInit, directTimeoutMs = LIGHTER_DIRECT_TIMEOUT_MS): Promise<Response> {
+  const signal = init?.signal ?? undefined;
+  const paramPrefix = params ? `?${params}` : "";
+  const directUrl = `${LIGHTER_DIRECT_BASE}/${endpoint}${paramPrefix}`;
+  const proxyUrl = `${LIGHTER_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
+  return runDirectFirst({
+    signal,
+    directTimeoutMs,
+    direct: async (directSignal) => {
+      const directInit = { ...init, signal: directSignal };
+      let response = await throttleLighterFetch(() => fetch(directUrl, directInit), directSignal);
       if (response.status === 429) {
-        console.warn(`[lighterFetch] Direct 429 for ${endpoint}, retrying in 1s...`);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        const retryResponse = await fetch(directUrl, init);
-        if (retryResponse.ok) return retryResponse;
-        console.warn(`[lighterFetch] Direct retry also failed (${retryResponse.status}), falling back to proxy`);
+        await sleep(retryAfterMs(response) ?? 1_000, directSignal);
+        throwIfAborted(directSignal);
+        response = await throttleLighterFetch(() => fetch(directUrl, directInit), directSignal);
       }
-    } catch (e) {
-      console.warn(`[lighterFetch] Direct fetch error for ${endpoint}:`, e);
-    }
-
-    // Fallback to proxy
-    console.warn(`[lighterFetch] Using proxy for ${endpoint}`);
-    return fetch(proxyUrl, { ...init, cache: "no-store" });
-  }, init?.signal ?? undefined);
+      return response;
+    },
+    proxy: () => {
+      throwIfAborted(signal);
+      return throttleLighterFetch(() => fetch(proxyUrl, { ...init, cache: "no-store" }), signal);
+    },
+    isProxyEligibleStatus,
+  });
 }
 
 // ==================== 类型定义 ====================

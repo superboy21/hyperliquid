@@ -308,6 +308,7 @@ describe("Bitget Reality token pricing", () => {
   });
 
   test("keeps weekday ticker BBO and non-Reality Bitget V2 behavior unchanged", async () => {
+    spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ data: [] }));
     const ticker = await fetchSpotDetail({ ...bitgetRow, isRealityToken: true }, undefined, "rpi", FRIDAY);
     expect(ticker.topSpreadSource).toBe("ticker-bbo");
 

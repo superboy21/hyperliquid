@@ -1,4 +1,5 @@
 import { isAbortLikeError, sleep, throwIfAborted } from "./utils/abort";
+import { runDirectFirst } from "./utils/direct-first";
 
 export interface FundingRate {
   coin: string;
@@ -73,51 +74,114 @@ interface AssetContext {
   dayBaseVlm: string;
 }
 
+const HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info";
+const HYPERLIQUID_PROXY_URL = "/api/hyperliquid";
+const DIRECT_TIMEOUT_MS = 10_000;
+
+function createDirectSignal(signal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(DIRECT_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+function hyperliquidHeaders(): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    Origin: "https://app.hyperliquid.xyz",
+    Referer: "https://app.hyperliquid.xyz/",
+  };
+}
+
+/**
+ * The direct leg owns retries for transient upstream responses. Keeping the
+ * final response (rather than throwing it) is important: runDirectFirst can
+ * then distinguish a final 429 (no proxy) from a final 5xx (proxy).
+ */
+async function fetchHyperliquidResponse(
+  body: Record<string, unknown>,
+  maxAttempts: number,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const serializedBody = JSON.stringify(body);
+  const init = {
+    method: "POST",
+    headers: hyperliquidHeaders(),
+    body: serializedBody,
+  } satisfies RequestInit;
+
+  const direct = async (): Promise<Response> => {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      throwIfAborted(signal);
+      const requestSignal = createDirectSignal(signal);
+
+      try {
+        const response = await fetch(HYPERLIQUID_INFO_URL, {
+          ...init,
+          signal: requestSignal,
+        });
+
+        if (
+          (response.status === 429 || response.status >= 500) &&
+          attempt < maxAttempts - 1
+        ) {
+          await sleep(250 * (attempt + 1), signal);
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        if (signal?.aborted) {
+          throwIfAborted(signal);
+        }
+
+        lastError = error;
+        if (attempt >= maxAttempts - 1) {
+          throw error;
+        }
+
+        // Preserve the old retry count for network and client-timeout errors.
+        await sleep(250 * (attempt + 1), signal);
+      }
+    }
+
+    throw lastError ?? new Error("Hyperliquid direct request failed");
+  };
+
+  return runDirectFirst({
+    signal,
+    direct,
+    proxy: () => fetch(HYPERLIQUID_PROXY_URL, { ...init, signal, cache: "no-store" }),
+  });
+}
+
 export async function fetchHyperliquidInfo<T>(
   body: Record<string, unknown>,
   maxAttempts: number = 3,
   signal?: AbortSignal,
 ): Promise<T | null> {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      throwIfAborted(signal);
-
-      const response = await fetch("https://api.hyperliquid.xyz/info", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://app.hyperliquid.xyz",
-          Referer: "https://app.hyperliquid.xyz/",
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-      if (response.ok) {
-        return (await response.json()) as T;
-      }
-
-      if ((response.status === 429 || response.status >= 500) && attempt < maxAttempts - 1) {
-        await sleep(250 * (attempt + 1), signal);
-        continue;
-      }
-
-      return null;
-    } catch (error) {
-      if (isAbortLikeError(error) || signal?.aborted) {
-        return null;
-      }
-
-      if (attempt >= maxAttempts - 1) {
-        console.error("Error fetching Hyperliquid info:", error);
-        return null;
-      }
-
-      await sleep(250 * (attempt + 1), signal);
-    }
+  if (maxAttempts <= 0) {
+    return null;
   }
 
-  return null;
+  try {
+    throwIfAborted(signal);
+    const response = await fetchHyperliquidResponse(body, maxAttempts, signal);
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (isAbortLikeError(error) || signal?.aborted) {
+      return null;
+    }
+
+    console.error("Error fetching Hyperliquid info:", error);
+    return null;
+  }
 }
 
 /**
@@ -362,22 +426,7 @@ export async function getFundingHistory(
       body.startTime = startTimeSeconds * 1000;
     }
 
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "https://app.hyperliquid.xyz",
-        Referer: "https://app.hyperliquid.xyz/",
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-
-    if (!response.ok) {
-      return [];
-    }
-
-    const data = await response.json();
+    const data = await fetchHyperliquidInfo<unknown[]>(body, 1, signal);
     if (!Array.isArray(data)) {
       return [];
     }
@@ -537,10 +586,8 @@ export async function getCandleSnapshot(
     const endTime = Date.now();
     const startTime = Math.max(0, endTime - days * 24 * 60 * 60 * 1000);
 
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const data = await fetchHyperliquidInfo<unknown[]>(
+      {
         type: "candleSnapshot",
         req: {
           coin,
@@ -548,15 +595,10 @@ export async function getCandleSnapshot(
           startTime,
           endTime,
         },
-      }),
+      },
+      1,
       signal,
-    });
-
-    if (!response.ok) {
-      return [];
-    }
-
-    const data = await response.json();
+    );
     if (!Array.isArray(data)) {
       return [];
     }
@@ -654,17 +696,10 @@ export async function getFundingAverages(
 
 export async function getMeta(): Promise<MarketInfo[]> {
   try {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "meta" }),
-    });
-
-    if (!response.ok) {
+    const data = await fetchHyperliquidInfo<{ universe?: MarketInfo[] }>({ type: "meta" }, 1);
+    if (!data) {
       throw new Error("Failed to fetch meta");
     }
-
-    const data = await response.json();
     return data.universe || [];
   } catch (error) {
     console.error("Error fetching meta:", error);

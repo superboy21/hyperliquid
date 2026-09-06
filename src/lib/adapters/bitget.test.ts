@@ -1,9 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
+  buildBitgetProxyUrl,
   buildBitgetUrl,
   computeBitgetBboSpread,
   computeBitgetImpactSpread,
   computeBitgetImpactSpreadDetail,
+  createBitgetRequest,
   createBitgetScheduler,
   fetchBitgetCandles,
   fetchBitgetCanonicalDetail,
@@ -18,6 +20,7 @@ import {
   normalizeBitgetRpiOrderBook,
   parseBitgetList,
   selectBitgetDetailCandles,
+  isBitgetProxyEligibleFailure,
   type BitgetRequest,
 } from "./bitget";
 import { computeOrderBookImpactDetail, computeOrderBookImpactSpread, resolvePerpImpactDepth } from "../order-book-impact";
@@ -665,6 +668,102 @@ describe("Bitget scheduler", () => {
   });
 });
 
+describe("Bitget direct-to-proxy transport fallback", () => {
+  test("falls back after a network failure and keeps the proxy as the terminal leg", async () => {
+    const calls: Array<{ url: string; priority?: string }> = [];
+    const request = createBitgetRequest({
+      fetchJson: async (url, _init, priority) => {
+        calls.push({ url, priority });
+        if (calls.length === 1) throw new Error("CORS blocked");
+        return [{ symbol: "BTCUSDT" }];
+      },
+    });
+
+    await expect(request("rpi-orderbook", {
+      symbol: "BTCUSDT", limit: "200", category: "caller-must-not-leak", ignored: "x",
+    }, undefined, { priority: "interactive" })).resolves.toEqual([{ symbol: "BTCUSDT" }]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toContain("https://api.bitget.com/api/v3/market/rpi-orderbook");
+    expect(calls[1]).toMatchObject({ url: "/api/bitget?action=rpi-orderbook&symbol=BTCUSDT&limit=200", priority: "interactive" });
+  });
+
+  test("classifies only transport failures as proxy eligible", () => {
+    expect(isBitgetProxyEligibleFailure(new Error("network failure"))).toBe(true);
+    expect(isBitgetProxyEligibleFailure(new DOMException("aborted", "AbortError"))).toBe(false);
+    expect(isBitgetProxyEligibleFailure(new TypeError("Malformed Bitget response envelope"))).toBe(false);
+    expect(isBitgetProxyEligibleFailure(new TypeError("Failed to fetch"))).toBe(true);
+  });
+
+  test.each([403, 451])("falls back on direct HTTP %i without retrying the proxy leg", async (status) => {
+    const urls: string[] = [];
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        urls.push(String(url));
+        return String(url).startsWith("/api/bitget")
+          ? Response.json({ code: "00000", msg: "ok", data: [] })
+          : new Response("blocked", { status });
+      }) as typeof fetch,
+    });
+    await expect(createBitgetRequest(scheduler)("tickers", {})).resolves.toEqual([]);
+    expect(urls).toEqual([`https://api.bitget.com/api/v3/market/tickers?category=USDT-FUTURES`, "/api/bitget?action=tickers"]);
+  });
+
+  test("falls back after the scheduler exhausts direct HTTP 5xx retries", async () => {
+    const urls: string[] = [];
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => {
+        urls.push(String(url));
+        return String(url).startsWith("/api/bitget")
+          ? Response.json({ code: "00000", msg: "ok", data: [] })
+          : new Response("upstream", { status: 503 });
+      }) as typeof fetch,
+    });
+    await expect(createBitgetRequest(scheduler)("orderbook", { symbol: "BTCUSDT" })).resolves.toEqual([]);
+    expect(urls).toHaveLength(4);
+    expect(urls.slice(0, 3).every((url) => url.startsWith("https://api.bitget.com/"))).toBe(true);
+    expect(urls[3]).toBe("/api/bitget?action=orderbook&symbol=BTCUSDT");
+  });
+
+  test.each([
+    ["business code mapped to 503", Response.json({ code: "25000", msg: "busy", data: null })],
+    ["HTTP 429", new Response("rate limited", { status: 429 })],
+  ])("does not proxy %s", async (_label, directResponse) => {
+    const urls: string[] = [];
+    const scheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => { urls.push(String(url)); return directResponse.clone(); }) as typeof fetch,
+    });
+    await expect(createBitgetRequest(scheduler)("current-fund-rate", {})).rejects.toBeDefined();
+    expect(urls.every((url) => url.startsWith("https://api.bitget.com/"))).toBe(true);
+    expect(urls).toHaveLength(3);
+  });
+
+  test("does not proxy malformed successful envelopes or caller aborts", async () => {
+    const malformedUrls: string[] = [];
+    const malformedScheduler = createBitgetScheduler({
+      random: () => 0,
+      sleep: async () => undefined,
+      fetch: (async (url) => { malformedUrls.push(String(url)); return Response.json({ nope: true }); }) as typeof fetch,
+    });
+    await expect(createBitgetRequest(malformedScheduler)("instruments", {})).rejects.toThrow("Malformed Bitget");
+    expect(malformedUrls).toHaveLength(1);
+
+    const abortUrls: string[] = [];
+    const controller = new AbortController();
+    controller.abort();
+    const abortScheduler = createBitgetScheduler({
+      fetch: (async (url) => { abortUrls.push(String(url)); return Response.json({ code: "00000", data: [] }); }) as typeof fetch,
+    });
+    await expect(createBitgetRequest(abortScheduler)("instruments", {}, controller.signal)).rejects.toHaveProperty("name", "AbortError");
+    expect(abortUrls).toHaveLength(0);
+  });
+});
+
 describe("Bitget direct API URLs", () => {
   test.each([
     ["instruments", "/api/v3/market/instruments"],
@@ -674,6 +773,7 @@ describe("Bitget direct API URLs", () => {
     ["candles", "/api/v3/market/candles"],
     ["history-candles", "/api/v3/market/history-candles"],
     ["orderbook", "/api/v3/market/orderbook"],
+    ["rpi-orderbook", "/api/v3/market/rpi-orderbook"],
   ] as const)("maps %s to the direct V3 path", (action, path) => {
     const url = new URL(buildBitgetUrl(action));
     expect(url.origin).toBe("https://api.bitget.com");
@@ -691,6 +791,15 @@ describe("Bitget direct API URLs", () => {
     const historyCandles = new URL(buildBitgetUrl("history-candles"));
     expect(Object.fromEntries(historyCandles.searchParams)).toMatchObject({ category: "USDT-FUTURES", type: "market", limit: "100" });
     expect(new URL(buildBitgetUrl("orderbook")).searchParams.get("limit")).toBe("100");
+  });
+
+  test("builds proxy URLs with only route-allowlisted action parameters", () => {
+    expect(buildBitgetProxyUrl("rpi-orderbook", {
+      symbol: "BTCUSDT", limit: "200", category: "wrong", action: "wrong", ignored: "x",
+    })).toBe("/api/bitget?action=rpi-orderbook&symbol=BTCUSDT&limit=200");
+    expect(buildBitgetProxyUrl("candles", {
+      symbol: "BTCUSDT", interval: "1Dutc", startTime: "1", endTime: "2", type: "market", limit: "100", category: "wrong",
+    })).toBe("/api/bitget?action=candles&symbol=BTCUSDT&interval=1Dutc&startTime=1&endTime=2&type=market&limit=100");
   });
 
   test("encodes caller parameters and always fixes the futures category", () => {

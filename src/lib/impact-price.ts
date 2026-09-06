@@ -10,6 +10,7 @@ import { fetchBitgetImpactSpread, fetchBitgetImpactSpreadDetail, fetchBitgetOrde
 import { fetchBybitImpactSpread, fetchBybitImpactSpreadDetail, fetchBybitOrderBook, type BybitRequest } from "./adapters/bybit";
 import { bookTopBbo, clampRpiDepth, type BookMode } from "./rpi-book";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
+import { getGateOrderBook, getGateTickers } from "./gateio";
 import {
   computeOrderBookImpactDetail,
   computeOrderBookImpactSpread,
@@ -147,14 +148,8 @@ async function fetchHyperliquidBook(
 
 async function getGateMultiplier(contract: string, signal?: AbortSignal): Promise<number | null> {
   try {
-    const response = await fetch(
-      `/api/gate/futures/usdt/tickers?contract=${encodeURIComponent(contract)}`,
-      { signal, cache: "no-store" },
-    );
-    if (!response.ok) return null;
-
-    const rows = (await response.json()) as Array<{ contract?: string; quanto_multiplier?: string }>;
-    const row = Array.isArray(rows) ? rows.find((item) => item.contract === contract) : null;
+    const rows = await getGateTickers(contract, signal);
+    const row = rows.find((item) => item.contract === contract);
     const multiplier = row?.quanto_multiplier ? Number.parseFloat(row.quanto_multiplier) : Number.NaN;
     if (!Number.isFinite(multiplier) || multiplier <= 0) {
       return null;
@@ -163,6 +158,7 @@ async function getGateMultiplier(contract: string, signal?: AbortSignal): Promis
     gateMultiplierCache.set(contract, multiplier);
     return multiplier;
   } catch {
+    if (signal?.aborted) throw signal.reason;
     return null;
   }
 }
@@ -194,19 +190,13 @@ async function fetchGateioBook(
   bookMode: BookMode = "normal",
 ): Promise<NormalizedOrderBook | "no_multiplier" | null> {
   try {
-    const rpi = bookMode === "rpi" ? "&rpi=1" : "";
-    const response = await fetch(
-      `/api/gate/futures/usdt/order_book?contract=${encodeURIComponent(contract)}&limit=${depthLimit}${rpi}`,
-      { signal, cache: "no-store" },
-    );
-
-    if (!response.ok) return null;
-
-    const data = (await response.json()) as GatePerpOrderBookPayload;
+    const data = await getGateOrderBook(contract, depthLimit, signal, bookMode === "rpi");
+    if (!data) return null;
 
     const multiplier = gateMultiplierCache.get(contract) ?? await getGateMultiplier(contract, signal);
     return normalizeGatePerpOrderBook(data, multiplier);
   } catch {
+    if (signal?.aborted) throw signal.reason;
     return null;
   }
 }

@@ -55,9 +55,10 @@ src/
 │   ├── spot-combo.ts       # 现货 K 线组合纯函数（未接入现货页面）
 │   ├── spot-perp-arbitrage/ # Spot/Perp 模型、查询、对齐组合与统计
 │   ├── symbol-mapping.ts   # API 名称与显示名称映射
-│   ├── adapters/           # 交易所适配器
+│   ├── adapters/           # 交易所适配器（全部浏览器 direct-first，传输失败回退同源代理）
 │   │   ├── binance.ts
 │   │   ├── bitget.ts       # Bitget 请求调度、标准化与历史数据适配
+│   │   ├── bybit.ts        # Bybit 请求调度、包络解析与缓存
 │   │   ├── gate.ts
 │   │   └── okx.ts
 │   └── utils/              # 通用工具函数
@@ -165,6 +166,7 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 - OKX
 - Lighter
 - Bitget
+- Bybit
 
 搜索首次加载七家交易所的基础市场列表；只有在输入搜索条件并产生结果后才渐进获取详情字段，K 线、历史资金费率及组合图表则在点击结果后按需加载。
 
@@ -208,15 +210,18 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
 
 ## API 集成
 
-项目使用以下公开市场 API，并按交易所的 CORS、限流和标准化需要选择直连或 Next.js 服务端代理：
-- Hyperliquid：`POST /info`（`metaAndAssetCtxs`、`fundingHistory`、`l2Book`）
-- Gate.io：前端通过 `/api/gate/futures/usdt/*` 服务端路由访问 USDT 永续合约公开端点
-- Binance：前端通过 `/api/binance`、`/api/binance/klines` 和 `/api/binance/ccxt` 服务端路由访问公开市场数据
-- OKX：前端通过 `/api/okx` 和 `/api/okx/ccxt` 服务端路由访问公开市场数据
-- Lighter：公开 API 采用限速直连，并在失败时回退到 `/api/lighter`；指数价格使用 `/api/lighter/index-prices`
-- Bitget：前端统一请求 `/api/bitget`，由白名单服务端代理访问 V3 UTA 公开市场端点；现货严格代理另允许 Bitget Reality 周末公共 V3 SPOT orderbook action
+项目对七家交易所统一采用浏览器 direct-first + 同源代理回退：浏览器先直连交易所公开 REST API，仅在网络/CORS/客户端超时、上游 HTTP 403/451 或最终 5xx 时回退一次到同源 Next.js 路由（`429` 只在直连侧按各交易所退避重试，绝不经代理绕过；普通 4xx、业务包络错误与用户取消不触发回退）。同源路由固定上游主机与白名单端点/参数，服务端可经 `PROXY_URL`（或 `HTTP(S)_PROXY`）出站：
 
-这些公开市场数据无需交易所认证，但并非所有浏览器请求都直接发往交易所；服务端代理用于处理 CORS、参数白名单、超时和上游错误映射。
+- Hyperliquid：浏览器直连 `POST https://api.hyperliquid.xyz/info`（`metaAndAssetCtxs`、`fundingHistory`、`candleSnapshot`、`l2Book`、`meta`），失败回退 `POST /api/hyperliquid`
+- Gate.io：浏览器直连 `https://api.gateio.ws/api/v4`，失败回退 `/api/gate/futures/usdt/*`（ticker/contracts 聚合 enrichment 在直连与代理两侧保持一致；批量最新结算按 50 个合约分片回退）
+- Binance：浏览器直连 `https://fapi.binance.com/fapi/v1/*`，失败回退 `/api/binance`、`/api/binance/klines`
+- OKX：浏览器直连 `https://www.okx.com/api/v5/*`（200ms 串行队列、Retry-After 退避、10s 快照缓存），失败回退 `/api/okx`
+- Lighter：浏览器直连并经 300ms 全局限流，失败回退 `/api/lighter`
+- Bitget：浏览器直连 `https://api.bitget.com/api/v3/market/*`（单并发调度器、完整 `{code,msg,data}` 包络校验），失败回退 `/api/bitget`（含 `rpi-orderbook`，代理同样返回完整包络）
+- Bybit：浏览器直连 `https://api.bybit.com/v5/*`（2 并发调度、完整 `{retCode,result}` 包络校验），失败回退 `/api/bybit`
+- 现货：七家统一经 `spotFetch` 直连优先，失败回退严格门面 `/api/spot/[exchange]`
+
+这些公开市场数据无需交易所认证；服务端代理用于处理 CORS/地区限制、参数白名单、超时和上游错误映射。项目不再包含任何 CCXT 运行时路径（路由、分支、开关与依赖均已移除）。
 
 ### 现货严格代理
 
@@ -233,7 +238,7 @@ Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券�
 ### Bitget V3 UTA
 
 - 市场范围限定为 `category=USDT-FUTURES` 中状态为 `online`、类型为 `perpetual` 的 USDT 永续合约。
-- `/api/bitget` 仅允许映射到 `/api/v3/market/instruments`、`tickers`、`current-fund-rate`、`history-fund-rate`、`candles`、`history-candles` 和 `orderbook` 的公开操作，并校验参数后由服务端代理转发。
+- `/api/bitget` 仅允许映射到 `/api/v3/market/instruments`、`tickers`、`current-fund-rate`、`history-fund-rate`、`candles`、`history-candles`、`orderbook` 和 `rpi-orderbook` 的公开操作，并校验参数后由服务端代理转发；成功时返回完整 `{code,msg,data}` 包络，与直连调度器的解析契约一致。
 - `src/lib/adapters/bitget.ts` 将列表、历史资金费率、K 线和订单簿统一为项目的标准数据结构；显示名称与请求所需的原始 `rawSymbol` 分开保存。
 - 资金结算周期不是固定值：适配器读取每个合约的实际 1、2、4 或 8 小时间隔，并据此计算周期费率与年化值。
 - 所有 Bitget 浏览器请求共享 FIFO 单并发调度器，请求启动至少间隔 250ms（附少量抖动），并对超时、HTTP 429 和 5xx 执行有上限的重试；取消信号会停止排队或进行中的请求。
@@ -246,6 +251,37 @@ Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券�
 - Netlify
 - Docker 容器
 - 任何 Node.js 托管平台
+
+### 出站代理（可选）
+
+服务端同源路由经 `src/lib/utils/proxy.ts` 出站，按以下优先级读取代理配置（仅 Node.js 运行时经 `undici.ProxyAgent` 生效，Edge 运行时自动降级为直连）：
+
+```text
+PROXY_URL > HTTP_PROXY > HTTPS_PROXY > http_proxy > https_proxy
+```
+
+配置代理后，代理请求失败会明确报错，绝不静默绕过代理直连。本地开发可在 `.env.local` 设置 `PROXY_URL=http://127.0.0.1:10808`；Docker 部署时显式透传：
+
+```yaml
+environment:
+  PROXY_URL: ${PROXY_URL:-}
+```
+
+注意：该变量只影响服务端路由出站，不影响浏览器直连；浏览器直连失败才会回退到同源代理。`.env*` 文件不会进入 Docker 构建上下文，生产配置请使用运行时环境变量。
+
+### Docker
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+冒烟检查（需服务已启动）：
+
+```powershell
+Invoke-WebRequest "http://localhost:3000/api/bybit?action=tickers"
+Invoke-WebRequest "http://localhost:3000/api/spot/binance?action=list"
+```
 
 ## 参与贡献
 
@@ -270,6 +306,12 @@ Bitget Reality Protocol 股票代币（rToken，如 RAAPLUSDT）的订单经券�
 - 所有贡献者
 
 ## 更新日志
+
+### v2026.09.06
+- 全交易所统一浏览器 direct-first + 同源代理回退：补齐 Hyperlink（新增严格 `POST /api/hyperliquid`）、Gate（直连优先 + enrichment 对齐 + 批量 50 分片）、Bitget（`rpi-orderbook` 代理与完整包络契约）三条缺失链路；Binance/OKX/Lighter/Bybit/Spot 收敛到同一失败分类（仅网络-CORS-超时/403/451/最终 5xx 回退；429 同侧退避；4xx-业务错误-取消不回退）
+- 服务端路由全部收紧为固定端点/参数白名单并统一经 `proxyFetch`（配置代理后失败不再静默直连）；`undici` 移入运行时依赖
+- 彻底移除 CCXT 运行时路径：删除 Binance/Gate/OKX 三条 `/ccxt` 路由、`exchange-flags.ts` 及开关、`ccxt` 依赖与 `next.config.ts` external 配置；`TransportMode` 收窄为 `"native"`；删除零引用的整个 `src/lib/normalizers/` 目录
+- 验证通过：590 项测试、TypeScript 类型检查、ESLint、Next.js 生产构建
 
 ### v2026.09.01
 - 组合图加权联动统计面板：波动率平价或自定义配比生效时，统计面板的比值/价差当前值、均值、±1σ/±2σ 区间及较均值百分比均按同一配比重算，公式为 Ratio `(wA×A)/(wB×B)`、Spread `wA×A−wB×B`，基于对齐后的原始双腿收盘价重建加权序列后再做去尾与总体标准差

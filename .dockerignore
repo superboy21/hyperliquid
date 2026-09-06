@@ -11,3 +11,4 @@ yarn-error.log*
 Dockerfile*
 README.local-backup.md
 tsconfig.tsbuildinfo
+.env*

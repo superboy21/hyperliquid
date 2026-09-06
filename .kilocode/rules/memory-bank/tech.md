@@ -22,10 +22,10 @@
 ```bash
 bun install        # Install dependencies
 bun dev            # Start dev server (http://localhost:3000)
-bun build          # Production build
-bun start          # Start production server
-bun lint           # Run ESLint
-bun typecheck      # Run TypeScript type checking
+bun test           # Run Bun test suite
+bun run typecheck  # Run TypeScript type checking
+bun run lint       # Run ESLint
+bun run build      # Production build (also: docker compose build / up -d)
 ```
 
 ## Project Configuration
@@ -57,11 +57,18 @@ bun typecheck      # Run TypeScript type checking
 
 ```json
 {
-  "next": "^16.1.3", // Framework
+  "next": "^16.2.6", // Framework
   "react": "^19.2.3", // UI library
-  "react-dom": "^19.2.3" // React DOM
+  "react-dom": "^19.2.3", // React DOM
+  "echarts": "^6.0.0", // Charts
+  "hyperliquid": "^1.7.7", // Hyperliquid SDK (spot/参考)
+  "protobufjs": "^8.5.0", // Binary parsing
+  "server-only": "^0.0.1", // Server-only guard
+  "undici": "^8.1.0" // Runtime fetch + ProxyAgent for server routes
 }
 ```
+
+No CCXT runtime dependency exists anymore (routes, adapter branches, flags, and config entry all removed; `TransportMode` is `"native"`).
 
 ### Dev Dependencies
 
@@ -138,6 +145,6 @@ bun typecheck      # Run TypeScript type checking
 
 ### Environment Variables
 
-- None required for base template
-- Add as needed for features
-- Use `.env.local` for local development
+- `PROXY_URL` (optional, server routes only): `PROXY_URL > HTTP_PROXY > HTTPS_PROXY > http_proxy > https_proxy`; Node-only `undici.ProxyAgent`, Edge degrades to direct; a configured-proxy failure errors loudly instead of silently going direct
+- No `NEXT_PUBLIC_*_TRANSPORT_MODE` flags exist anymore (CCXT modes removed)
+- Use `.env.local` for local development; `.env*` files are excluded from the Docker build context — production config goes through runtime environment (e.g. `PROXY_URL: ${PROXY_URL:-}` in `docker-compose.yml`)

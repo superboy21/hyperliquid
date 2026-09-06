@@ -2,16 +2,56 @@
 // Wraps globalThis.fetch with timeout and header defaults for API routes.
 // Works in both Node.js (dev) and Cloudflare Workers (production).
 //
-// HTTP CONNECT proxy support is available in Node.js development via
-// the PROXY_* environment variables. On edge runtimes, direct fetch is used.
+// HTTP CONNECT proxy support is available in Node.js via the PROXY_* environment
+// variables. The environment is read per request so callers can configure it
+// before invoking this helper (and so tests do not depend on module load order).
 
-const PROXY_URL =
-  process.env.PROXY_URL ||
-  process.env.HTTP_PROXY ||
-  process.env.HTTPS_PROXY ||
-  process.env.http_proxy ||
-  process.env.https_proxy ||
-  "";
+type ProxyAgent = import("undici").ProxyAgent;
+
+const proxyAgentCache = new Map<string, ProxyAgent>();
+
+function getProxyUrl(): string {
+  if (typeof process === "undefined") return "";
+
+  return (
+    process.env.PROXY_URL ||
+    process.env.HTTP_PROXY ||
+    process.env.HTTPS_PROXY ||
+    process.env.http_proxy ||
+    process.env.https_proxy ||
+    ""
+  );
+}
+
+function requestSignal(
+  callerSignal: AbortSignal | null | undefined,
+  timeout: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+    timeout,
+  );
+  const onCallerAbort = () => controller.abort(callerSignal?.reason);
+
+  if (callerSignal) {
+    if (callerSignal.aborted) onCallerAbort();
+    else callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+function withoutTimeout(init?: RequestInit & { timeout?: number }): RequestInit {
+  const { timeout: _, ...requestInit } = init ?? {};
+  return requestInit;
+}
 
 /**
  * Canonicalize request header names for Undici and add JSON defaults without
@@ -31,8 +71,9 @@ export function normalizeProxyHeaders(initHeaders?: HeadersInit): Record<string,
 
 /**
  * Server-side fetch with timeout and optional HTTP proxy support.
- * Falls back to direct globalThis.fetch if no proxy is configured,
- * or when running on edge runtimes where undici is unavailable.
+ * Uses direct globalThis.fetch only when no proxy is configured. If a proxy is
+ * configured, loading undici or making the proxied request is allowed to fail
+ * and that failure is propagated to the caller.
  *
  * Usage in API routes:
  *   import { proxyFetch } from "@/lib/utils/proxy";
@@ -43,50 +84,41 @@ export async function proxyFetch(
   init?: RequestInit & { timeout?: number },
 ): Promise<Response> {
   const timeout = init?.timeout ?? 10_000;
+  const proxyUrl = getProxyUrl();
+  const requestInit = withoutTimeout(init);
+  const cancellation = requestSignal(init?.signal, timeout);
 
   // No proxy configured — use direct fetch
-  if (!PROXY_URL) {
-    const { timeout: _, ...restInit } = init ?? {};
-    return globalThis.fetch(url, {
-      ...restInit,
-      signal: init?.signal ?? AbortSignal.timeout(timeout),
-    });
+  if (!proxyUrl) {
+    try {
+      return await globalThis.fetch(url, {
+        ...requestInit,
+        signal: cancellation.signal,
+      });
+    } finally {
+      cancellation.cleanup();
+    }
   }
 
-  // Proxy configured — attempt undici (Node.js only, may fail on edge)
+  // Proxy configured — a missing undici runtime is an explicit failure, not a
+  // reason to bypass the configured proxy.
   try {
-    // Dynamic import so bundlers can tree-shake the critical path.
-    // undici is a devDependency — in production (edge runtime) this
-    // import will fail and we gracefully fall back to direct fetch.
     const undici = await import("undici");
-    const dispatcher = new undici.ProxyAgent({ uri: PROXY_URL });
-
-    const {
-      timeout: _,
-      headers: initHeaders,
-      signal: initSignal,
-      method,
-      body,
-      ...restInit
-    } = init ?? {};
-
-    const headers = normalizeProxyHeaders(initHeaders);
+    let dispatcher = proxyAgentCache.get(proxyUrl);
+    if (!dispatcher) {
+      dispatcher = new undici.ProxyAgent({ uri: proxyUrl });
+      proxyAgentCache.set(proxyUrl, dispatcher);
+    }
 
     const response = await undici.fetch(url.toString(), {
-      method: method ?? "GET",
-      headers,
-      body: body as string | undefined,
+      ...requestInit,
+      headers: normalizeProxyHeaders(init?.headers),
       dispatcher,
-      signal: initSignal ?? AbortSignal.timeout(timeout),
-    });
+      signal: cancellation.signal,
+    } as Parameters<typeof undici.fetch>[1]);
 
     return response as unknown as Response;
-  } catch {
-    // undici unavailable (edge runtime / Cloudflare Workers) — direct fetch
-    const { timeout: _, ...restInit } = init ?? {};
-    return globalThis.fetch(url, {
-      ...restInit,
-      signal: init?.signal ?? AbortSignal.timeout(timeout),
-    });
+  } finally {
+    cancellation.cleanup();
   }
 }

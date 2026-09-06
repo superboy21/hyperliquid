@@ -21,7 +21,54 @@ afterEach(() => {
   clearOkxFundingSnapshotCache();
 });
 
-describe("okxFetch retries", () => {
+describe.serial("okxFetch retries", () => {
+  test.each([403, 451])("uses the proxy once for direct HTTP %i", async (status) => {
+    const proxy = response(200);
+    const fetchMock = mock()
+      .mockResolvedValueOnce(response(status))
+      .mockResolvedValueOnce(proxy);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(okxFetch("/api/okx", {}, [1, 1])).resolves.toBe(proxy);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("uses the proxy once after the final direct 5xx", async () => {
+    const proxy = response(200);
+    const fetchMock = mock()
+      .mockResolvedValueOnce(response(503))
+      .mockResolvedValueOnce(response(503))
+      .mockResolvedValueOnce(response(503))
+      .mockResolvedValueOnce(proxy);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(okxFetch("/api/okx", {}, [1, 1])).resolves.toBe(proxy);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  test("uses the proxy once for a direct network failure", async () => {
+    const proxy = response(200);
+    const fetchMock = mock().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce(proxy);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(okxFetch("/api/okx", {}, [1, 1])).resolves.toBe(proxy);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("uses the proxy once when the direct client leg hangs past its deadline", async () => {
+    const proxy = response(200);
+    let directSignal: AbortSignal | undefined;
+    const fetchMock = mock().mockImplementationOnce((_url: string, init?: RequestInit) => {
+      directSignal = init?.signal;
+      return new Promise<Response>(() => undefined);
+    }).mockResolvedValueOnce(proxy);
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await expect(okxFetch("/api/okx", {}, [1, 1], 500)).resolves.toBe(proxy);
+    expect(directSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test("retries a 429 with injected delays and returns the eventual success", async () => {
     const fetchMock = mock()
       .mockResolvedValueOnce(response(429))
@@ -72,20 +119,19 @@ describe("okxFetch retries", () => {
 
   test("rejects with AbortError and does not retry after abort", async () => {
     const controller = new AbortController();
+    const reason = new Error("caller cancelled");
     const fetchMock = mock(() => {
-      controller.abort();
+      controller.abort(reason);
       return Promise.resolve(response(429));
     });
     globalThis.fetch = fetchMock as typeof fetch;
 
-    await expect(okxFetch("/api/okx", { signal: controller.signal }, [1, 1])).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    await expect(okxFetch("/api/okx", { signal: controller.signal }, [1, 1])).rejects.toBe(reason);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("computeOkxRetryDelayMs", () => {
+describe.serial("computeOkxRetryDelayMs", () => {
   test("uses exponential defaults when the header is absent or invalid", () => {
     expect(computeOkxRetryDelayMs(null, 0)).toBe(1_000);
     expect(computeOkxRetryDelayMs(null, 1)).toBe(2_000);
@@ -100,7 +146,7 @@ describe("computeOkxRetryDelayMs", () => {
   });
 });
 
-describe("OKX funding snapshot cache", () => {
+describe.serial("OKX funding snapshot cache", () => {
   test("single-flights concurrent calls, reuses the TTL, and refreshes after expiry", async () => {
     const fetchMock = mock(() => Promise.resolve(response(200, undefined, {
       data: [{ instId: "BTC-USDT-SWAP", fundingRate: "0.001" }],

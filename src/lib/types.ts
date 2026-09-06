@@ -133,7 +133,7 @@ export interface NormalizedIntervalFundingRate {
   sampleCount: number;            // 样本数量
 }
 
-export type TransportMode = "native" | "ccxt";
+export type TransportMode = "native";
 
 export interface CanonicalFundingRateRow {
   exchange: ExchangeId;

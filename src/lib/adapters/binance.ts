@@ -3,8 +3,9 @@ import type {
   CanonicalFundingHistoryPoint,
   CanonicalFundingRateRow,
 } from "@/lib/types";
-import { getExchangeTransportFlags } from "@/lib/exchange-flags";
 import { BINANCE_DELISTED_SYMBOLS, getBinanceAssetCategory } from "@/lib/binance-metadata";
+import { runDirectFirst } from "@/lib/utils/direct-first";
+import { sleep, throwIfAborted } from "@/lib/utils/abort";
 
 export type BinanceChartInterval = "1d" | "4h" | "1h";
 
@@ -110,46 +111,55 @@ interface NativeCandleArray extends Array<number | string> {
 
 // ==================== Binance Fetch Helper ====================
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 const BINANCE_DIRECT_BASE = "https://fapi.binance.com/fapi/v1";
 const BINANCE_PROXY_BASE = "/api/binance";
 const BINANCE_KLINES_DIRECT_BASE = "https://fapi.binance.com/fapi/v1/klines";
 const BINANCE_KLINES_PROXY_BASE = "/api/binance/klines";
+export const BINANCE_DIRECT_TIMEOUT_MS = 10_000;
+
+function retryAfterMs(response: Response): number | null {
+  const value = response.headers.get("retry-after");
+  if (!value) return null;
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60_000, seconds * 1_000);
+
+  const date = Date.parse(value) - Date.now();
+  return Number.isFinite(date) ? Math.max(0, Math.min(60_000, date)) : null;
+}
+
+async function directBinanceFetch(
+  directUrl: string,
+  init: RequestInit | undefined,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const directInit = { ...init, signal };
+  let response = await fetch(directUrl, directInit);
+  if (response.status === 429) {
+    await sleep(retryAfterMs(response) ?? 1_000, signal);
+    throwIfAborted(signal);
+    response = await fetch(directUrl, directInit);
+  }
+  return response;
+}
 
 /**
  * Fetch from Binance with automatic fallback:
  * 1. Try direct connection first (faster, no server roundtrip)
  * 2. If direct fails (network/CORS), fall back to Next.js API proxy
  */
-export async function binanceFetch(endpoint: string, params: string, init?: RequestInit): Promise<Response> {
+export async function binanceFetch(endpoint: string, params: string, init?: RequestInit, directTimeoutMs = BINANCE_DIRECT_TIMEOUT_MS): Promise<Response> {
   const paramPrefix = params ? `?${params}` : "";
+  const signal = init?.signal ?? undefined;
   const directUrl = `${BINANCE_DIRECT_BASE}/${endpoint}${paramPrefix}`;
   const proxyUrl = `${BINANCE_PROXY_BASE}?endpoint=${encodeURIComponent(endpoint)}${params ? `&${params}` : ""}`;
 
-  // Try direct first
-  try {
-    const response = await fetch(directUrl, init);
-    if (response.ok) return response;
-    // If rate-limited, wait and retry direct once
-    if (response.status === 429) {
-      await sleep(1000);
-      const retryResponse = await fetch(directUrl, init);
-      if (retryResponse.ok) return retryResponse;
-    }
-  } catch (error) {
-    // An aborted request belongs to the caller's cancelled operation. Do not
-    // turn it into a proxy request, which could otherwise outlive a refresh.
-    if (init?.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-      throw error;
-    }
-    // Direct connection failed (CORS/network), fall through to proxy
-  }
-
-  // Fallback to proxy
-  return fetch(proxyUrl, { ...init, cache: "no-store" });
+  return runDirectFirst({
+    signal,
+    directTimeoutMs,
+    direct: (directSignal) => directBinanceFetch(directUrl, init, directSignal),
+    proxy: () => fetch(proxyUrl, { ...init, cache: "no-store" }),
+  });
 }
 
 /**
@@ -157,25 +167,17 @@ export async function binanceFetch(endpoint: string, params: string, init?: Requ
  * 1. Try direct connection first
  * 2. If direct fails, fall back to Next.js API proxy
  */
-export async function binanceKlinesFetch(symbol: string, interval: string, limit: string, init?: RequestInit): Promise<Response> {
+export async function binanceKlinesFetch(symbol: string, interval: string, limit: string, init?: RequestInit, directTimeoutMs = BINANCE_DIRECT_TIMEOUT_MS): Promise<Response> {
   const directUrl = `${BINANCE_KLINES_DIRECT_BASE}?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const proxyUrl = `${BINANCE_KLINES_PROXY_BASE}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`;
+  const signal = init?.signal ?? undefined;
 
-  // Try direct first
-  try {
-    const response = await fetch(directUrl, init);
-    if (response.ok) return response;
-    if (response.status === 429) {
-      await sleep(1000);
-      const retryResponse = await fetch(directUrl, init);
-      if (retryResponse.ok) return retryResponse;
-    }
-  } catch {
-    // Direct connection failed (CORS/network), fall through to proxy
-  }
-
-  // Fallback to proxy
-  return fetch(proxyUrl, { ...init, cache: "no-store" });
+  return runDirectFirst({
+    signal,
+    directTimeoutMs,
+    direct: (directSignal) => directBinanceFetch(directUrl, init, directSignal),
+    proxy: () => fetch(proxyUrl, { ...init, cache: "no-store" }),
+  });
 }
 
 // ==================== Symbol Filtering ====================
@@ -298,14 +300,6 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
   return results;
 }
 
-async function fetchCcxtRates(): Promise<CanonicalFundingRateRow[]> {
-  const response = await fetch("/api/binance/ccxt?mode=list", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Failed to fetch Binance CCXT list data");
-  }
-  return (await response.json()) as CanonicalFundingRateRow[];
-}
-
 async function fetchNativeDetail(symbol: string, interval: BinanceChartInterval, signal?: AbortSignal): Promise<CanonicalFundingDetail> {
   const [candleRes, fundingRes] = await Promise.all([
     binanceKlinesFetch(symbol, interval, "30", { signal }),
@@ -351,28 +345,8 @@ async function fetchNativeDetail(symbol: string, interval: BinanceChartInterval,
   };
 }
 
-async function fetchCcxtDetail(symbol: string, interval: BinanceChartInterval, signal?: AbortSignal): Promise<CanonicalFundingDetail> {
-  const response = await fetch(`/api/binance/ccxt?mode=detail&symbol=${encodeURIComponent(symbol)}&interval=${interval}`, {
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error("Failed to fetch Binance CCXT detail data");
-  }
-  return (await response.json()) as CanonicalFundingDetail;
-}
-
 export async function fetchBinanceCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
-  const mode = getExchangeTransportFlags().binance;
-  if (mode === "native") {
-    return fetchNativeRates();
-  }
-
-  try {
-    return await fetchCcxtRates();
-  } catch {
-    return fetchNativeRates();
-  }
+  return fetchNativeRates();
 }
 
 export async function fetchBinanceFundingMonitorRates(): Promise<BinanceFundingMonitorRow[]> {
@@ -384,16 +358,7 @@ export async function fetchBinanceSearchRates(): Promise<BinanceSearchRate[]> {
 }
 
 export async function fetchBinanceCanonicalDetail(symbol: string, interval: BinanceChartInterval, signal?: AbortSignal): Promise<CanonicalFundingDetail> {
-  const mode = getExchangeTransportFlags().binance;
-  if (mode === "native") {
-    return fetchNativeDetail(symbol, interval, signal);
-  }
-
-  try {
-    return await fetchCcxtDetail(symbol, interval, signal);
-  } catch {
-    return fetchNativeDetail(symbol, interval, signal);
-  }
+  return fetchNativeDetail(symbol, interval, signal);
 }
 
 export async function hydrateBinanceLatestSettlementRates(symbols: string[], signal?: AbortSignal): Promise<Map<string, number>> {

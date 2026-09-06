@@ -3,6 +3,7 @@ import type {
   CanonicalFundingHistoryPoint,
   CanonicalFundingRateRow,
 } from "@/lib/types";
+import { runDirectFirst } from "@/lib/utils/direct-first";
 
 export type OkxChartInterval = "1d" | "4h" | "1h" | "1m";
 
@@ -11,6 +12,7 @@ const OKX_MAX_ATTEMPTS = 3;
 const OKX_DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000] as const;
 const OKX_FUNDING_SNAPSHOT_TTL_MS = 10_000;
 const OKX_API_BASE = "https://www.okx.com/api/v5";
+export const OKX_DIRECT_TIMEOUT_MS = 10_000;
 
 let okxFetchQueue: Promise<unknown> = Promise.resolve();
 let lastOkxFetchAt = 0;
@@ -68,17 +70,17 @@ function rejectImmediatelyOnAbort<T>(promise: Promise<T>, signal?: AbortSignal):
 }
 
 async function throttleOkxFetch<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  const run = async (): Promise<T> => {
+  const run = async (): Promise<void> => {
     if (signal?.aborted) throw abortError();
     await waitWithSignal(Math.max(0, OKX_MIN_INTERVAL_MS - (Date.now() - lastOkxFetchAt)), signal);
     if (signal?.aborted) throw abortError();
     lastOkxFetchAt = Date.now();
-    return task();
   };
 
   const next = okxFetchQueue.then(run, run);
   okxFetchQueue = next.catch(() => undefined);
-  return rejectImmediatelyOnAbort(next, signal);
+  await rejectImmediatelyOnAbort(next, signal);
+  return task();
 }
 
 function parseOkxRetryAfterMs(retryAfterHeader: string | null): number | null {
@@ -118,42 +120,44 @@ function resolveOkxEndpoints(input: RequestInfo | URL): { direct: string; proxy:
   return { direct: `${OKX_API_BASE}/${endpoint}${suffix}`, proxy: raw };
 }
 
-/**
- * Fetch once for a resolved OKX request: try the direct URL first, and only
- * fall back to the proxy when the direct request throws (CORS/network).
- * Direct HTTP responses are authoritative so the retry loop sees the real
- * upstream status.
- */
-async function okxFetchOnce(direct: string, proxy: string, init: RequestInit): Promise<Response> {
-  try {
-    return await fetch(direct, init);
-  } catch (error) {
-    if (init.signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
-    return fetch(proxy, { ...init, cache: "no-store" });
-  }
-}
-
-/** Serialize and retry all OKX HTTP attempts to smooth client-side request bursts. */
+/** Gate all OKX HTTP attempt starts and retry direct responses. */
 export async function okxFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
   retryDelays: readonly number[] = OKX_DEFAULT_RETRY_DELAYS_MS,
+  directTimeoutMs = OKX_DIRECT_TIMEOUT_MS,
 ): Promise<Response> {
   const signal = init.signal ?? undefined;
   const { direct, proxy } = resolveOkxEndpoints(input);
 
-  for (let attempt = 0; attempt < OKX_MAX_ATTEMPTS; attempt += 1) {
-    const response = await throttleOkxFetch(() => okxFetchOnce(direct, proxy, init), signal);
-    if (!shouldRetryOkxResponse(response) || attempt === OKX_MAX_ATTEMPTS - 1) {
-      return response;
-    }
+  return runDirectFirst({
+    signal,
+    directTimeoutMs,
+    direct: async (directSignal) => {
+      for (let attempt = 0; attempt < OKX_MAX_ATTEMPTS; attempt += 1) {
+        const directInit = { ...init, signal: directSignal };
+        const response = await throttleOkxFetch(() => fetch(direct, directInit), directSignal);
 
-    const retryAfterDelay = parseOkxRetryAfterMs(response.headers.get("Retry-After"));
-    const delay = retryAfterDelay ?? retryDelays[attempt] ?? computeOkxRetryDelayMs(null, attempt);
-    await waitWithSignal(Math.max(0, delay), signal);
-  }
+        if (!shouldRetryOkxResponse(response) || attempt === OKX_MAX_ATTEMPTS - 1) {
+          return response;
+        }
 
-  throw new Error("OKX fetch exhausted unexpectedly");
+        const retryAfterDelay = parseOkxRetryAfterMs(response.headers.get("Retry-After"));
+        const delay = retryAfterDelay ?? retryDelays[attempt] ?? computeOkxRetryDelayMs(null, attempt);
+        await waitWithSignal(Math.max(0, delay), directSignal);
+        throwIfOkxAborted(directSignal);
+      }
+
+      throw new Error("OKX fetch exhausted unexpectedly");
+    },
+    // This is deliberately outside the direct retry loop: a direct 5xx, a
+    // network failure, or a client timeout can cause at most one proxy call.
+    proxy: () => throttleOkxFetch(() => fetch(proxy, { ...init, cache: "no-store" }), signal),
+  });
+}
+
+function throwIfOkxAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason ?? abortError();
 }
 
 export interface OkxFundingMonitorRow {

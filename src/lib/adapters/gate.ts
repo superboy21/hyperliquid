@@ -5,7 +5,6 @@ import {
   getCandleSnapshot,
   getFundingHistoryForDays,
 } from "@/lib/gateio";
-import { getExchangeTransportFlags } from "@/lib/exchange-flags";
 import { throwIfAborted } from "@/lib/utils/abort";
 import type {
   CanonicalFundingDetail,
@@ -14,13 +13,6 @@ import type {
 } from "@/lib/types";
 
 export type GateChartInterval = "1d" | "4h" | "1h";
-
-export function combineGateDetailSignals(
-  callerSignal: AbortSignal | undefined,
-  timeoutSignal: AbortSignal,
-): AbortSignal {
-  return callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
-}
 
 export interface GateFundingMonitorRow {
   symbol: string;
@@ -84,53 +76,8 @@ async function fetchNativeCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
   }));
 }
 
-async function fetchCcxtCanonicalBaseRates(): Promise<CanonicalFundingRateRow[]> {
-  const response = await fetch("/api/gate/futures/usdt/ccxt?mode=list", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Failed to fetch Gate CCXT base list data");
-  }
-  return (await response.json()) as CanonicalFundingRateRow[];
-}
-
-async function fetchCcxtCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
-  const [ccxtRows, nativeRows] = await Promise.all([
-    fetchCcxtCanonicalBaseRates(),
-    fetchNativeCanonicalRates(),
-  ]);
-
-  const ccxtBySymbol = new Map(ccxtRows.map((row) => [row.symbol, row]));
-
-  return nativeRows.map((native) => {
-    const ccxt = ccxtBySymbol.get(native.symbol);
-    if (!ccxt) {
-      return native;
-    }
-
-    return {
-      ...ccxt,
-      predictedFundingRate: native.predictedFundingRate,
-      fundingRate: native.fundingRate,
-      fundingIntervalSeconds: native.fundingIntervalSeconds,
-      assetCategory: native.assetCategory,
-      notionalValue: native.notionalValue,
-      openInterest: native.openInterest,
-      rawSymbol: native.rawSymbol,
-      marketKey: native.marketKey,
-    } satisfies CanonicalFundingRateRow;
-  });
-}
-
 export async function fetchGateCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
-  const mode = getExchangeTransportFlags().gateio;
-  if (mode === "native") {
-    return fetchNativeCanonicalRates();
-  }
-
-  try {
-    return await fetchCcxtCanonicalRates();
-  } catch {
-    return fetchNativeCanonicalRates();
-  }
+  return fetchNativeCanonicalRates();
 }
 
 export async function fetchGateFundingMonitorRates(): Promise<GateFundingMonitorRow[]> {
@@ -208,13 +155,15 @@ export async function fetchGateCanonicalDetail(
   bestAsk?: number,
   signal?: AbortSignal,
 ): Promise<CanonicalFundingDetail> {
-  // Keep the shared caller cancellation and the detail timeout active together.
-  const detailSignal = combineGateDetailSignals(signal, AbortSignal.timeout(8_000));
+  // requestGate applies a per-direct-leg client timeout and can then fall back
+  // through the proxy. Do not combine that timeout into the caller signal: an
+  // internal direct timeout must not look like caller cancellation to the
+  // direct-first transport policy.
   const [candles, history] = await Promise.all([
-    getCandleSnapshot(symbol, interval, 30, detailSignal),
-    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, detailSignal),
+    getCandleSnapshot(symbol, interval, 30, signal),
+    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal),
   ]);
-  throwIfAborted(detailSignal);
+  throwIfAborted(signal);
 
   const fundingHistory: CanonicalFundingHistoryPoint[] = history.map((item) => ({
     timestamp: item.time,

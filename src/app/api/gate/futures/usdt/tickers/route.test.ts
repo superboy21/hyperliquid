@@ -41,7 +41,7 @@ describe("Gate futures ticker route", () => {
     ]);
     for (const [, init] of proxyFetchMock.mock.calls) {
       expect(init).toMatchObject({ method: "GET", cache: "no-store", timeout: 10_000 });
-      expect(init?.signal).toBeUndefined();
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
     }
     expect(await response.json()).toEqual([
       {
@@ -73,4 +73,22 @@ describe("Gate futures ticker route", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "Tickers API failed: 503" });
   });
+
+  test("allows the impact-price contract filter and rejects duplicate or unknown queries", async () => {
+    proxyFetchMock.mockImplementation(async (url) => (
+      new URL(url.toString()).pathname.endsWith("/tickers")
+        ? Response.json([{ contract: "BTC_USDT" }])
+        : Response.json([])
+    ));
+    const compatible = await GET(requestWithUrl("http://localhost/api/gate/futures/usdt/tickers?contract=BTC_USDT"));
+    expect(compatible.status).toBe(200);
+    expect(new URL(proxyFetchMock.mock.calls[0][0].toString()).searchParams.get("contract")).toBe("BTC_USDT");
+
+    proxyFetchMock.mockClear();
+    const invalid = await GET(requestWithUrl("http://localhost/api/gate/futures/usdt/tickers?contract=BTC_USDT&contract=ETH_USDT"));
+    expect(invalid.status).toBe(400);
+    expect(proxyFetchMock).not.toHaveBeenCalled();
+  });
 });
+
+const requestWithUrl = (url: string) => new NextRequest(url);

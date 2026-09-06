@@ -21,6 +21,7 @@ import { requestBybit } from "./adapters/bybit";
 import { lighterFetch } from "./lighter";
 import { fetchHyperliquidInfo } from "./hyperliquid";
 import { computePremiumIndex, fetchImpactSpreadDetail } from "./impact-price";
+import { getGatePremiumIndex } from "./gateio";
 
 type OfficialPremiumRate = Pick<SearchExchangeRate, "exchange" | "symbol" | "rawSymbol" | "marketId">;
 
@@ -133,12 +134,7 @@ async function fetchBybitPremium(rawSymbol: string, signal?: AbortSignal): Promi
 }
 
 async function fetchGatePremium(rawSymbol: string, signal?: AbortSignal): Promise<number | null> {
-  const response = await fetch(
-    `/api/gate/futures/usdt/premium_index?contract=${encodeURIComponent(rawSymbol)}&limit=1`,
-    { signal, cache: "no-store" },
-  );
-  if (!response.ok) return null;
-  const rows = (await response.json()) as Array<{ c?: string }>;
+  const rows = await getGatePremiumIndex(rawSymbol, 1, signal);
   return parseOptionalNumber(rows?.[0]?.c);
 }
 
