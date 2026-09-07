@@ -2,9 +2,8 @@
 // Fetches candlestick data for all 6 exchanges with maximum history per interval.
 // Used by the search page chart component.
 
-import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryForDays as hlGetFundingHistoryForDays } from "./hyperliquid";
-import { getFundingHistoryAll as gateGetFundingHistoryAll } from "./gateio";
-import { getFundingHistoryAll as lighterGetFundingHistoryAll, lighterFetch } from "./lighter";
+import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryAll as hlGetFundingHistoryAll } from "./hyperliquid";
+import { lighterFetch } from "./lighter";
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical, okxFetch } from "./adapters/okx";
 import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget";
@@ -13,6 +12,7 @@ import { isAbortLikeError, throwIfAborted } from "./utils/abort";
 import { requestGate } from "./gate-upstream";
 import { requireBitgetRawSymbol, requireBybitRawSymbol, type SearchExchangeRate } from "./search";
 import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
+import { calculateHistoricalFundingStatistics } from "./funding-statistics";
 
 // ==================== Types ====================
 
@@ -37,6 +37,7 @@ export interface SearchCandlePoint {
 
 export interface FundingRatePoint {
   time: number;
+  /** Sum of settled funding rates in this candle interval (not an average). */
   rate: number;
   annualizedRate: number;
   sampleCount?: number;
@@ -244,24 +245,25 @@ export function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): 
 export function aggregateFundingRatesToCandles(
   rawHistory: { time: number; rate: number }[],
   candles: SearchCandlePoint[],
-  fundingIntervalSeconds: number,
+  /** @deprecated Historical annualization is based on the candle duration. */
+  _fundingIntervalSeconds?: number,
 ): FundingRatePoint[] {
-  if (rawHistory.length === 0 || candles.length === 0) return [];
-
-  const sortedHistory = [...rawHistory].sort((a, b) => a.time - b.time);
+  if (candles.length === 0) return [];
 
   return candles.map((candle) => {
-    const ratesInRange = sortedHistory.filter(
-      (h) => h.time >= candle.openTime && h.time < candle.closeTime,
+    const statistics = calculateHistoricalFundingStatistics(
+      rawHistory,
+      candle.openTime,
+      candle.closeTime,
+      candle.closeTime - candle.openTime,
     );
 
-    if (ratesInRange.length > 0) {
-      const avgRate = ratesInRange.reduce((sum, h) => sum + h.rate, 0) / ratesInRange.length;
+    if (statistics) {
       return {
         time: candle.openTime,
-        rate: avgRate,
-        annualizedRate: toAnnualizedRate(avgRate, fundingIntervalSeconds),
-        sampleCount: ratesInRange.length,
+        rate: statistics.settledReturn,
+        annualizedRate: statistics.annualizedRate,
+        sampleCount: statistics.sampleCount,
       };
     }
 
@@ -611,13 +613,48 @@ export async function fetchBybitSearchCandles(
 
 // ==================== Funding History Fetch Functions ====================
 
+export function parseSearchFundingRate(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function normalizeLighterSearchFundingRow(
+  item: { timestamp?: unknown; rate?: unknown; value?: unknown; direction?: unknown },
+  cutoffTime: number,
+): { time: number; rate: number } | null {
+  const timestampSeconds = Number(item.timestamp);
+  if (!Number.isFinite(timestampSeconds)) return null;
+  const time = timestampSeconds * 1000;
+  if (time < cutoffTime) return null;
+  const rawRate = item.rate !== undefined && item.rate !== null ? item.rate : item.value;
+  const unsignedRate = parseSearchFundingRate(rawRate);
+  if (unsignedRate === null) return null;
+  const signedRate = item.direction === "short" ? -unsignedRate : unsignedRate;
+  return { time, rate: signedRate / 100 };
+}
+
 async function fetchHyperliquidFundingHistory(
   symbol: string,
+  cutoffTime: number = Date.now() - 365 * 24 * 60 * 60 * 1000,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const history = await hlGetFundingHistoryForDays(symbol, 365, signal);
-    return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
+    const now = Date.now();
+    // Hyperliquid settles hourly and its paged funding history reaches the
+    // venue genesis. Walk the full retained history instead of clamping to a
+    // days window so chart overlays receive every settlement still available
+    // (soft coverage: funding simply starts wherever the venue history does).
+    const history = await hlGetFundingHistoryAll(symbol, signal);
+    return history.flatMap((h) => {
+      const time = Number(h.time);
+      const rate = parseSearchFundingRate(h.fundingRate);
+      return Number.isFinite(time) && rate !== null && time >= cutoffTime && time < now
+        ? [{ time, rate }]
+        : [];
+    });
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] Hyperliquid funding history failed:", error);
@@ -627,19 +664,23 @@ async function fetchHyperliquidFundingHistory(
 
 async function fetchBinanceFundingHistory(
   symbol: string,
+  cutoffTime: number = 0,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
     const allData: { time: number; rate: number }[] = [];
     const seen = new Set<number>();
-    let currentEndTime = Date.now();
-    const maxLoops = 20;
+    const now = Date.now();
+    let currentEndTime = now;
     const batchMs = 90 * 24 * 60 * 60 * 1000; // 每次请求最多 90 天的数据，避免超过 1000 条限制
+    const maxLoops = cutoffTime > 0
+      ? Math.max(20, Math.ceil((now - cutoffTime) / batchMs) + 2)
+      : 20;
 
     for (let i = 0; i < maxLoops; i++) {
       throwIfAborted(signal);
 
-      const startTime = Math.max(0, currentEndTime - batchMs);
+      const startTime = Math.max(cutoffTime, currentEndTime - batchMs);
       const response = await binanceFetch("fundingRate", `symbol=${encodeURIComponent(symbol)}&limit=1000&startTime=${startTime}&endTime=${currentEndTime}`, { signal });
       if (!response.ok) break;
 
@@ -649,23 +690,28 @@ async function fetchBinanceFundingHistory(
       let newCount = 0;
       for (const item of data) {
         const time = Number(item.fundingTime);
-        if (!seen.has(time)) {
-          seen.add(time);
-          allData.push({ time, rate: Number(item.fundingRate) });
-          newCount++;
-        }
+        const rate = parseSearchFundingRate(item.fundingRate);
+        if (!Number.isFinite(time) || rate === null || seen.has(time)) continue;
+        seen.add(time);
+        allData.push({ time, rate });
+        newCount++;
       }
 
       if (newCount === 0) break;
 
       // 继续获取更早的数据
       const earliestTime = Math.min(...data.map((d: any) => Number(d.fundingTime)));
+      if (!Number.isFinite(earliestTime)) return [];
       currentEndTime = earliestTime - 1;
 
-      if (currentEndTime <= 0) break;
+      // The walk reached the requested cutoff (or the API's retention edge
+      // returned no older rows); either way this page budget is done.
+      if (earliestTime <= cutoffTime || currentEndTime <= cutoffTime) break;
     }
 
-    return allData.sort((a, b) => a.time - b.time);
+    return allData
+      .filter((item) => item.time >= cutoffTime && item.time < now)
+      .sort((a, b) => a.time - b.time);
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] Binance funding history failed:", error);
@@ -675,12 +721,54 @@ async function fetchBinanceFundingHistory(
 
 async function fetchGateFundingHistory(
   symbol: string,
-  fundingIntervalSeconds: number,
+  cutoffTime: number = 0,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const history = await gateGetFundingHistoryAll(symbol, fundingIntervalSeconds, signal);
-    return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) }));
+    const contract = `${symbol}_USDT`;
+    const pageSize = 1000;
+    const pageWindowSeconds = 90 * 24 * 60 * 60;
+    const cutoffSeconds = Math.floor(cutoffTime / 1000);
+    let currentTo = Math.floor(Date.now() / 1000);
+    const history: { time: number; rate: number }[] = [];
+    const seen = new Set<number>();
+    const maxLoops = cutoffTime > 0
+      ? Math.max(1, Math.ceil((Date.now() - cutoffTime) / (pageWindowSeconds * 1000)) + 2)
+      : 30;
+
+    for (let page = 0; page < maxLoops && currentTo > cutoffSeconds; page += 1) {
+      throwIfAborted(signal);
+      const currentFrom = Math.max(cutoffSeconds, currentTo - pageWindowSeconds);
+      const response = await requestGate("funding-rate", {
+        contract,
+        limit: String(pageSize),
+        from: String(currentFrom),
+        to: String(currentTo),
+      }, signal);
+      if (!response.ok) break;
+      const data = await response.json();
+      if (!Array.isArray(data) || data.length === 0) break;
+
+      let earliestTime = Number.POSITIVE_INFINITY;
+      for (const item of data as Array<{ t: number; r: string | number }>) {
+        const time = Number(item.t) * 1000;
+        if (!Number.isFinite(time)) continue;
+        earliestTime = Math.min(earliestTime, time);
+        const rate = parseSearchFundingRate(item.r);
+        if (time < cutoffTime || rate === null || seen.has(time)) continue;
+        seen.add(time);
+        history.push({ time, rate });
+      }
+      if (!Number.isFinite(earliestTime)) return [];
+      // Reached the requested cutoff, or Gate's 180-day retention edge returned
+      // nothing older; both end the page walk with the data collected so far.
+      if (earliestTime <= cutoffTime) break;
+      const nextTo = Math.floor(earliestTime / 1000) - 1;
+      if (nextTo >= currentTo) break;
+      currentTo = nextTo;
+    }
+
+    return history.sort((a, b) => a.time - b.time);
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] Gate.io funding history failed:", error);
@@ -691,11 +779,22 @@ async function fetchGateFundingHistory(
 async function fetchOkxFundingHistory(
   rawSymbol: string,
   fundingIntervalSeconds: number,
+  cutoffTime: number = Date.now() - 365 * 24 * 60 * 60 * 1000,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const history = await fetchOkxFundingHistoryCanonical(rawSymbol, fundingIntervalSeconds, signal, 365);
-    return history.map((h) => ({ time: h.timestamp, rate: h.fundingRate }));
+    const now = Date.now();
+    const days = Math.max(1, Math.ceil((now - cutoffTime) / (24 * 60 * 60 * 1000)) + 1);
+    const history = await fetchOkxFundingHistoryCanonical(
+      rawSymbol,
+      fundingIntervalSeconds,
+      signal,
+      days,
+      cutoffTime,
+      false,
+    );
+    const mapped = history.map((h) => ({ time: h.timestamp, rate: h.fundingRate }));
+    return mapped.filter((h) => h.time >= cutoffTime && h.time < now);
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] OKX funding history failed:", error);
@@ -706,6 +805,7 @@ async function fetchOkxFundingHistory(
 async function fetchLighterFundingHistory(
   marketId: number | undefined,
   symbol: string,
+  cutoffTime: number = Date.now() - 365 * 24 * 60 * 60 * 1000,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
@@ -724,10 +824,57 @@ async function fetchLighterFundingHistory(
     }
     if (resolvedMarketId === null) return [];
 
-    const history = await lighterGetFundingHistoryAll(resolvedMarketId, signal);
-    // Lighter fundingRate is in percentage points (e.g., 0.01 = 0.01%).
-    // Divide by 100 to convert to decimal for consistent annualization.
-    return history.map((h) => ({ time: h.time, rate: Number(h.fundingRate) / 100 }));
+    const batchSize = 500;
+    const intervalSeconds = 60 * 60;
+    const launchSeconds = Math.floor(new Date("2024-01-01T00:00:00Z").getTime() / 1000);
+    let currentEndSeconds = Math.floor(Date.now() / 1000);
+    const cutoffSeconds = Math.floor(cutoffTime / 1000);
+    const history: { time: number; rate: number }[] = [];
+    const seen = new Set<number>();
+    const maxLoops = cutoffTime > 0
+      ? Math.max(1, Math.ceil((Date.now() - cutoffTime) / (batchSize * intervalSeconds * 1000)) + 2)
+      : 20;
+
+    // The adapter's all-history helper has a fixed page cap.  This local walk
+    // instead stops at the returned candle cutoff so long weekly chart ranges
+    // are not silently truncated. Coverage is soft: if the venue's retained
+    // hourly settlements end before the candle cutoff, the overlay simply
+    // starts at the oldest settlement actually returned.
+    for (let page = 0; page < maxLoops && currentEndSeconds > cutoffSeconds; page += 1) {
+      throwIfAborted(signal);
+      const startSeconds = Math.max(launchSeconds, cutoffSeconds, currentEndSeconds - batchSize * intervalSeconds);
+      const response = await lighterFetch(
+        "fundings",
+        `market_id=${resolvedMarketId}&resolution=1h&start_timestamp=${startSeconds}&end_timestamp=${currentEndSeconds}&count_back=${batchSize}`,
+        { signal },
+      );
+      if (!response.ok) break;
+      const data = await response.json();
+      const rows = data?.fundings ?? data;
+      if (!Array.isArray(rows) || rows.length === 0) break;
+
+      let earliestSeconds = Number.POSITIVE_INFINITY;
+      for (const item of rows as Array<{ timestamp: number; rate?: string | number; value?: string | number; direction?: string }>) {
+        const timestampSeconds = Number(item.timestamp);
+        if (!Number.isFinite(timestampSeconds)) continue;
+        earliestSeconds = Math.min(earliestSeconds, timestampSeconds);
+        const point = normalizeLighterSearchFundingRow(item, cutoffTime);
+        if (!point || seen.has(point.time)) continue;
+        seen.add(point.time);
+        // Lighter's source value is hourly percentage points; preserve the
+        // existing decimal contract used by chart funding overlays.
+        history.push(point);
+      }
+      if (!Number.isFinite(earliestSeconds)) return [];
+      if (earliestSeconds * 1000 <= cutoffTime || earliestSeconds <= launchSeconds) {
+        break;
+      }
+      const nextEndSeconds = Math.floor(earliestSeconds) - 1;
+      if (nextEndSeconds >= currentEndSeconds) break;
+      currentEndSeconds = nextEndSeconds;
+    }
+
+    return history.sort((a, b) => a.time - b.time);
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
     console.error("[SearchCandles] Lighter funding history failed:", error);
@@ -741,14 +888,18 @@ export async function fetchBitgetSearchFundingHistory(
   signal?: AbortSignal,
   fetchFundingHistory: typeof fetchBitgetFundingHistory = fetchBitgetFundingHistory,
 ): Promise<{ time: number; rate: number }[]> {
-  const history = await fetchFundingHistory(rawSymbol, { cutoffTime, signal, priority: "interactive" });
+  const history = await fetchFundingHistory(rawSymbol, {
+    cutoffTime,
+    signal,
+    priority: "interactive",
+  });
   return history.map((item) => ({ time: item.timestamp, rate: item.fundingRate }));
 }
 
 export async function fetchBybitSearchFundingHistory(
   rawSymbol: string,
   cutoffTime: number,
-  options: { signal?: AbortSignal; windowMs?: number; maxPages?: number } = {},
+  options: { signal?: AbortSignal; windowMs?: number; maxPages?: number; requireCutoffCoverage?: boolean } = {},
   fetchFundingHistory: typeof fetchBybitFundingHistory = fetchBybitFundingHistory,
 ): Promise<{ time: number; rate: number }[]> {
   const history = await fetchFundingHistory(rawSymbol, {
@@ -756,7 +907,8 @@ export async function fetchBybitSearchFundingHistory(
     signal: options.signal,
     ...(options.windowMs === undefined ? {} : { windowMs: options.windowMs }),
     ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
-  });
+    requireCutoffCoverage: options.requireCutoffCoverage,
+  } as Parameters<typeof fetchBybitFundingHistory>[1] & { requireCutoffCoverage?: boolean });
   return history.map((item) => ({ time: item.timestamp, rate: item.fundingRate }));
 }
 
@@ -813,19 +965,19 @@ const BYBIT_SEARCH_CHART_DEPENDENCIES: BybitSearchChartDependencies = {
   fetchFundingHistory: fetchBybitSearchFundingHistory,
 };
 
-/** Funding overlay horizon: at most the latest 90 days of the chart window. */
+/** @deprecated Retained for consumers that imported the former overlay cap. */
 export const BYBIT_SEARCH_FUNDING_HORIZON_MS = 90 * 24 * 60 * 60 * 1000;
 /** One full V5 funding-history page (200 rows), matching the adapter default. */
 export const BYBIT_SEARCH_FUNDING_PAGE_SIZE = 200;
+/** Strict adapter request budget; coverage is proven by the timestamp cutoff. */
+export const BYBIT_SEARCH_FUNDING_MAX_PAGES = 100;
 
 /**
- * Candle-first Bybit chart flow. The full price-candle range (up to the
- * adapter's 1000-candle API cap) is preserved, but the funding overlay fetch
- * horizon is capped at the latest 90 days of the chart window: funding data
- * older than that stays unavailable (sampleCount 0) rather than fabricated.
- * The history request uses an interval-aware windowMs and a bounded maxPages
- * (90d / windowMs) so 4h/1d/1w selections cannot trigger tens or hundreds of
- * sequential funding-history calls (8h funding ≈ 2 requests, 4h ≈ 3, 1h ≈ 11).
+ * Candle-first Bybit chart flow. The funding request covers the complete
+ * returned candle range. `windowMs` remains interval-aware because it is the
+ * duration of one API page, but maxPages is a strict adapter budget independent
+ * of the current funding interval. Cutoff coverage is required before the
+ * adapter result can be used as a complete overlay.
  */
 export async function fetchBybitSearchChart(
   rate: SearchExchangeRate,
@@ -839,13 +991,16 @@ export async function fetchBybitSearchChart(
   if (candles.length === 0) return { candles: [], fundingRates: [] };
 
   const oldestCandleTime = Math.min(...candles.map((candle) => candle.openTime));
-  const newestCandleTime = Math.max(...candles.map((candle) => candle.openTime));
-  const cutoffTime = Math.max(oldestCandleTime, newestCandleTime - BYBIT_SEARCH_FUNDING_HORIZON_MS);
+  const cutoffTime = oldestCandleTime;
 
   const resolveWindowMs = dependencies.resolveFundingWindowMs ?? resolveBybitFundingHistoryWindowMs;
   const windowMs = resolveWindowMs(rate.fundingInterval, BYBIT_SEARCH_FUNDING_PAGE_SIZE);
-  const maxPages = Math.max(1, Math.ceil(BYBIT_SEARCH_FUNDING_HORIZON_MS / windowMs));
+  const maxPages = BYBIT_SEARCH_FUNDING_MAX_PAGES;
 
+  // Soft coverage: the walk paginates until the cutoff is reached or the API
+  // stops returning older rows, then returns every settlement collected. A
+  // chart overlay does not need the funding history to reach the oldest
+  // candle; it simply starts where the retained funding history starts.
   const fundingHistory = await dependencies.fetchFundingHistory(rawSymbol, cutoffTime, {
     signal,
     windowMs,
@@ -881,44 +1036,49 @@ export async function fetchSearchCandles(
   switch (rate.exchange) {
     case "Hyperliquid": {
       const hlSymbol = rate.rawSymbol ?? rate.symbol;
-      const [candles, fundingHistory] = await Promise.all([
-        fetchHyperliquidCandles(hlSymbol, interval, signal, purpose),
-        fetchHyperliquidFundingHistory(hlSymbol, signal),
-      ]);
+      const candles = await fetchHyperliquidCandles(hlSymbol, interval, signal, purpose);
+      const cutoffTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const fundingHistory = candles.length > 0
+        ? await fetchHyperliquidFundingHistory(hlSymbol, cutoffTime, signal)
+        : [];
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
     }
     case "Gate.io": {
-      const [candles, fundingHistory] = await Promise.all([
-        fetchGateCandles(rate.symbol, interval, signal),
-        fetchGateFundingHistory(rate.symbol, rate.fundingInterval, signal),
-      ]);
+      const candles = await fetchGateCandles(rate.symbol, interval, signal);
+      const cutoffTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const fundingHistory = candles.length > 0
+        ? await fetchGateFundingHistory(rate.symbol, cutoffTime, signal)
+        : [];
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
     }
     case "Binance": {
       const rawSymbol = rate.rawSymbol || `${rate.symbol}USDT`;
-      const [candles, fundingHistory] = await Promise.all([
-        fetchBinanceCandles(rawSymbol, interval, signal),
-        fetchBinanceFundingHistory(rawSymbol, signal),
-      ]);
+      const candles = await fetchBinanceCandles(rawSymbol, interval, signal);
+      const cutoffTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const fundingHistory = candles.length > 0
+        ? await fetchBinanceFundingHistory(rawSymbol, cutoffTime, signal)
+        : [];
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
     }
     case "OKX": {
       const rawSymbol = rate.rawSymbol || `${rate.symbol}-USDT-SWAP`;
-      const [candles, fundingHistory] = await Promise.all([
-        fetchOkxCandles(rawSymbol, interval, signal),
-        fetchOkxFundingHistory(rawSymbol, rate.fundingInterval, signal),
-      ]);
+      const candles = await fetchOkxCandles(rawSymbol, interval, signal);
+      const cutoffTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const fundingHistory = candles.length > 0
+        ? await fetchOkxFundingHistory(rawSymbol, rate.fundingInterval, cutoffTime, signal)
+        : [];
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
     }
     case "Lighter": {
-      const [candles, fundingHistory] = await Promise.all([
-        fetchLighterCandles(rate.marketId, rate.symbol, interval, signal, purpose),
-        fetchLighterFundingHistory(rate.marketId, rate.symbol, signal),
-      ]);
+      const candles = await fetchLighterCandles(rate.marketId, rate.symbol, interval, signal, purpose);
+      const cutoffTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const fundingHistory = candles.length > 0
+        ? await fetchLighterFundingHistory(rate.marketId, rate.symbol, cutoffTime, signal)
+        : [];
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
     }

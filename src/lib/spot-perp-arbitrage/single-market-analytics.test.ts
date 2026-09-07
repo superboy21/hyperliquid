@@ -53,7 +53,7 @@ describe("single-market analytics", () => {
   });
 
   test("uses actual funding observations, retaining observed zero but excluding sampleCount zero gaps", () => {
-    const result = singleMarketAnalytics([], [
+    const result = singleMarketAnalytics([candle(0, 7, 1, 1)], [
       { time: 1, rate: 0, annualizedRate: 0, sampleCount: 1 },
       { time: 2, rate: 1, annualizedRate: 100, sampleCount: 0 },
       { time: 3, rate: "0.002", annualizedRate: "0.2", sampleCount: 3 },
@@ -62,13 +62,56 @@ describe("single-market analytics", () => {
       { time: 6, annualizedRate: 0.3, sampleCount: 1 },
     ]);
 
-    expect(result.fundingRate).toEqual({ mean: 0.001, count: 2 });
-    expect(result.fundingAnnualized).toEqual({ mean: 1 / 6, count: 3 });
+    expect(result.fundingRate).toEqual({ mean: 0.002, count: 4 });
+    // Retained settlements start at time 1, so annualization covers the
+    // funding-covered sub-window [1, 7) instead of the full candle span.
+    expect(result.fundingAnnualized.mean).toBeCloseTo(0.002 * ANALYTICS_YEAR_MS / 6);
+    expect(result.fundingCoverageStartTime).toBe(1);
+    expect(result.fundingAnnualized.count).toBe(4);
     // sampleCount: 3 remains one time bucket rather than three observations.
-    expect(singleMarketAnalytics([], []).fundingAnnualized).toEqual({ mean: null, count: 0 });
+    expect(singleMarketAnalytics([candle(0, 1, 1, 1)], []).fundingAnnualized).toEqual({ mean: null, count: 0 });
     expect(singleMarketAnalytics([], []).fundingRate).toEqual({ mean: null, count: 0 });
     expect(singleMarketAnalytics([]).fundingAnnualized).toBeNull();
     expect(singleMarketAnalytics([]).fundingRate).toBeNull();
+  });
+
+  test("annualizes the same cumulative return identically for 8h and 1h buckets", () => {
+    const hour = 60 * 60 * 1000;
+    const eightHour = singleMarketAnalytics([candle(0, 8 * hour, 1, 1)], [
+      { time: 0, rate: 0.012, annualizedRate: 0.012, sampleCount: 1 },
+    ]);
+    const oneHour = singleMarketAnalytics(
+      Array.from({ length: 8 }, (_, index) => candle(index * hour, (index + 1) * hour, 1, 1)),
+      [
+        { time: 0, rate: 0.003, annualizedRate: 0.003, sampleCount: 1 },
+        { time: 2 * hour, rate: 0.004, annualizedRate: 0.004, sampleCount: 1 },
+        { time: 5 * hour, rate: 0.005, annualizedRate: 0.005, sampleCount: 1 },
+      ],
+    );
+
+    expect(eightHour.fundingRate).toEqual({ mean: 0.012, count: 1 });
+    expect(oneHour.fundingRate).toEqual({ mean: 0.012, count: 3 });
+    expect(oneHour.fundingAnnualized.mean).toBeCloseTo(eightHour.fundingAnnualized.mean!);
+  });
+
+  test("empty buckets do not amplify cumulative funding and a real zero remains actual", () => {
+    const result = singleMarketAnalytics([candle(0, 4, 1, 1)], [
+      { time: 0, rate: 0.01, annualizedRate: 1, sampleCount: 1 },
+      { time: 1, rate: 99, annualizedRate: 99, sampleCount: 0 },
+      { time: 2, rate: 0, annualizedRate: 0, sampleCount: 1 },
+      { time: 3, rate: 99, annualizedRate: 99, sampleCount: 0 },
+    ]);
+
+    expect(result.fundingRate).toEqual({ mean: 0.01, count: 2 });
+    expect(result.fundingAnnualized.mean).toBeCloseTo(0.01 * ANALYTICS_YEAR_MS / 4);
+  });
+
+  test("returns unavailable annualization when the candle window has no positive duration", () => {
+    const result = singleMarketAnalytics([{ openTime: 10, closeTime: 10, close: 1, volume: 1 }], [
+      { time: 10, rate: 0.01, annualizedRate: 1, sampleCount: 1 },
+    ]);
+    expect(result.fundingRate).toEqual({ mean: null, count: 0 });
+    expect(result.fundingAnnualized).toEqual({ mean: null, count: 0 });
   });
 
   test("rejects non-positive or blank closes from price metrics and turnover estimates", () => {

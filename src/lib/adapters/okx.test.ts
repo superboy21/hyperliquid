@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   clearOkxFundingSnapshotCache,
   computeOkxRetryDelayMs,
+  fetchOkxCanonicalDetail,
+  fetchOkxFundingHistory,
   fetchNativeFundingSnapshot,
   okxFetch,
 } from "./okx";
 
 const originalFetch = globalThis.fetch;
+const originalDateNow = Date.now;
 
 function response(status: number, headers?: HeadersInit, body: unknown = { data: [] }): Response {
   return new Response(JSON.stringify(body), { status, headers });
@@ -18,6 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  Date.now = originalDateNow;
   clearOkxFundingSnapshotCache();
 });
 
@@ -187,5 +191,126 @@ describe.serial("OKX funding snapshot cache", () => {
     const refreshed = await fetchNativeFundingSnapshot(undefined, 20);
     expect(refreshed.get("BTC-USDT-SWAP")?.fundingRate).toBe("0.001");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe.serial("OKX funding history pagination", () => {
+  test("covers an hourly window even when the current interval is 8h", async () => {
+    const now = Date.now();
+    const hour = 60 * 60 * 1000;
+    const cutoff = now - 400 * hour;
+    const pages = [
+      Array.from({ length: 400 }, (_, index) => ({
+        fundingTime: String(now - index * hour),
+        realizedRate: String(index),
+      })),
+      [{ fundingTime: String(cutoff), realizedRate: "400" }],
+    ];
+    const urls: string[] = [];
+    let calls = 0;
+    globalThis.fetch = mock(async (url) => {
+      urls.push(String(url));
+      return response(200, undefined, { data: pages[calls++] });
+    }) as typeof fetch;
+
+    const history = await fetchOkxFundingHistory("BTC-USDT-SWAP", 8 * 60 * 60, undefined, 30, cutoff, true);
+
+    expect(history).toHaveLength(401);
+    expect(history[0].timestamp).toBe(cutoff);
+    expect(history.at(-1)?.timestamp).toBe(now);
+    expect(calls).toBe(2);
+    expect(new URL(urls[1]).searchParams.get("after")).toBe(String(now - 399 * hour));
+  });
+
+  test("filters records older than the cutoff and stops at that boundary", async () => {
+    const now = Date.now();
+    const cutoff = now - 10 * 60 * 60 * 1000;
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      return response(200, undefined, {
+        data: Array.from({ length: 400 }, (_, index) => ({
+          fundingTime: String(now - index * 60 * 60 * 1000),
+          fundingRate: "0.1",
+        })),
+      });
+    }) as typeof fetch;
+
+    const history = await fetchOkxFundingHistory("BTC-USDT-SWAP", undefined, undefined, 30, cutoff);
+
+    expect(history).toHaveLength(11);
+    expect(history.every((item) => item.timestamp >= cutoff)).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  test("rejects missing and blank rates but retains an observed zero", async () => {
+    const now = Date.now();
+    globalThis.fetch = mock(async () => response(200, undefined, {
+      data: [
+        { fundingTime: String(now), fundingRate: "" },
+        { fundingTime: String(now - 60 * 60 * 1000) },
+        { fundingTime: String(now - 2 * 60 * 60 * 1000), fundingRate: "0" },
+      ],
+    })) as typeof fetch;
+
+    await expect(fetchOkxFundingHistory(
+      "BTC-USDT-SWAP",
+      undefined,
+      undefined,
+      1,
+      now - 3 * 60 * 60 * 1000,
+    )).resolves.toEqual([
+      { timestamp: now - 2 * 60 * 60 * 1000, fundingRate: 0 },
+    ]);
+  });
+
+  test("deduplicates a repeated cursor boundary and honors abort", async () => {
+    const now = Date.now();
+    const page = Array.from({ length: 400 }, (_, index) => ({
+      fundingTime: String(now - index * 60 * 60 * 1000),
+      fundingRate: "0.1",
+    }));
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      return response(200, undefined, { data: page });
+    }) as typeof fetch;
+
+    const history = await fetchOkxFundingHistory("BTC-USDT-SWAP", undefined, undefined, 30, now - 1_000 * 60 * 60 * 1000);
+    expect(history).toHaveLength(400);
+    expect(calls).toBe(2);
+
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled", "AbortError");
+    controller.abort(reason);
+    await expect(fetchOkxFundingHistory("BTC-USDT-SWAP", undefined, controller.signal, 30, undefined, true)).rejects.toBe(reason);
+  });
+
+  test("fails closed on uncovered short pages but preserves partial non-strict history", async () => {
+    const now = Date.now();
+    globalThis.fetch = mock(async () => response(200, undefined, {
+      data: [{ fundingTime: String(now), fundingRate: "0.1" }],
+    })) as typeof fetch;
+
+    await expect(fetchOkxFundingHistory("BTC-USDT-SWAP", undefined, undefined, 30, now - 30 * 24 * 60 * 60 * 1000, true))
+      .resolves.toEqual([]);
+    await expect(fetchOkxFundingHistory("BTC-USDT-SWAP", undefined, undefined, 30, now - 30 * 24 * 60 * 60 * 1000))
+      .resolves.toEqual([{ timestamp: now, fundingRate: 0.1 }]);
+  });
+
+  test("canonical detail requires cutoff coverage", async () => {
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("history-candles")) return response(200, undefined, { data: [] });
+      if (text.includes("funding-rate-history")) {
+        return response(200, undefined, {
+          data: [{ fundingTime: String(Date.now()), fundingRate: "0.1" }],
+        });
+      }
+      return response(200, undefined, { data: [] });
+    }) as typeof fetch;
+
+    const detail = await fetchOkxCanonicalDetail("BTC-USDT-SWAP", "1d", 8 * 60 * 60);
+    expect(detail.fundingHistory).toEqual([]);
   });
 });

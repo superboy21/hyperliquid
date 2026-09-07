@@ -276,13 +276,16 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
     const markPrice = Number.parseFloat(premium.markPrice || "0");
     const quoteVolume = Number.parseFloat(ticker?.quoteVolume || "0");
 
+    const fundingRate = parseBinanceLiveFundingRate(premium.lastFundingRate);
+    if (fundingRate === null) continue;
+
     results.push({
       exchange: "binance",
       transportMode: "native",
       symbol,
       rawSymbol: symbol,
       marketKey: symbol,
-      fundingRate: Number.parseFloat(premium.lastFundingRate || "0"),
+      fundingRate,
       predictedFundingRate: null,
       lastSettlementRate: latestSettledMap.get(symbol) ?? null,
       markPrice,
@@ -301,6 +304,14 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
   }
 
   return results;
+}
+
+export function parseBinanceLiveFundingRate(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 async function fetchNativeDetail(symbol: string, interval: BinanceChartInterval, signal?: AbortSignal): Promise<CanonicalFundingDetail> {

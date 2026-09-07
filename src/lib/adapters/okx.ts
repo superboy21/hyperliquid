@@ -347,41 +347,64 @@ function toOkxBar(interval: OkxChartInterval): string {
   return "1Dutc";
 }
 
-function getRequiredOkxFundingHistoryRows(fundingIntervalSeconds?: number, days?: number): number {
-  const interval = fundingIntervalSeconds && fundingIntervalSeconds > 0 ? fundingIntervalSeconds : 8 * 60 * 60;
-  const targetDays = days && days > 0 ? days : 30;
-  return Math.ceil((targetDays * 24 * 60 * 60) / interval) + 1;
-}
+export const OKX_FUNDING_HISTORY_PAGE_SIZE = 400;
+export const OKX_FUNDING_HISTORY_MAX_PAGES = 100;
+const DEFAULT_OKX_FUNDING_HISTORY_DAYS = 30;
 
 export async function fetchOkxFundingHistory(
   rawSymbol: string,
   fundingIntervalSeconds?: number,
   signal?: AbortSignal,
   days?: number,
+  cutoffTimestampMs?: number,
+  requireCutoffCoverage = false,
 ): Promise<CanonicalFundingHistoryPoint[]> {
-  const pageSize = 400;
-  const requiredRows = getRequiredOkxFundingHistoryRows(fundingIntervalSeconds, days);
-  const pagesNeeded = Math.max(1, Math.ceil(requiredRows / pageSize));
+  // Keep the interval argument for call-site compatibility, but history
+  // coverage must be based on elapsed time. A symbol can change from 8h to 1h
+  // funding without the detail request changing its shape.
+  void fundingIntervalSeconds;
+  const targetDays = days && days > 0 ? days : DEFAULT_OKX_FUNDING_HISTORY_DAYS;
+  const requestStartedAt = Date.now();
+  const cutoff = Number.isFinite(cutoffTimestampMs)
+    ? (cutoffTimestampMs as number)
+    : requestStartedAt - targetDays * 24 * 60 * 60 * 1000;
   const collected = new Map<number, number>();
   let cursor: string | null = null;
+  let previousOldestTimestamp: number | null = null;
+  let reachedCutoff = false;
 
-  for (let page = 0; page < pagesNeeded; page += 1) {
+  for (let page = 0; page < OKX_FUNDING_HISTORY_MAX_PAGES; page += 1) {
     const search = new URLSearchParams({
       endpoint: "public/funding-rate-history",
       instId: rawSymbol,
-      limit: String(pageSize),
+      limit: String(OKX_FUNDING_HISTORY_PAGE_SIZE),
     });
 
     if (cursor) {
       search.set("after", cursor);
     }
 
-    const response = await okxFetch(`/api/okx?${search.toString()}`, { cache: "no-store", signal });
+    let response: Response;
+    try {
+      response = await okxFetch(`/api/okx?${search.toString()}`, { cache: "no-store", signal });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (requireCutoffCoverage) return [];
+      throw error;
+    }
     if (!response.ok) {
+      if (requireCutoffCoverage) return [];
       throw new Error("Failed to fetch OKX funding history");
     }
 
-    const payload = (await response.json()) as { data?: OkxNativeHistoryEntry[] };
+    let payload: { data?: OkxNativeHistoryEntry[] };
+    try {
+      payload = (await response.json()) as { data?: OkxNativeHistoryEntry[] };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (requireCutoffCoverage) return [];
+      throw error;
+    }
     const rows = Array.isArray(payload.data) ? payload.data : [];
     if (rows.length === 0) {
       break;
@@ -400,19 +423,42 @@ export async function fetchOkxFundingHistory(
       }
 
       if (!collected.has(timestamp)) {
-        const rate = parseOptionalNumber(item.realizedRate) ?? parseOptionalNumber(item.fundingRate) ?? 0;
+        const rate = parseOptionalNumber(item.realizedRate) ?? parseOptionalNumber(item.fundingRate);
+        if (rate === null) continue;
         collected.set(timestamp, rate);
       }
     }
 
-    if (rows.length < pageSize || oldestTimestamp === null) {
+    if (oldestTimestamp !== null && oldestTimestamp <= cutoff) {
+      reachedCutoff = true;
+      break;
+    }
+
+    if (oldestTimestamp === null) {
+      break;
+    }
+
+    // Gate/OKX-style cursor endpoints can return the boundary row again. If
+    // the cursor did not move, stop rather than spending the whole page budget
+    // on identical responses.
+    if (previousOldestTimestamp !== null && oldestTimestamp >= previousOldestTimestamp) {
+      break;
+    }
+    previousOldestTimestamp = oldestTimestamp;
+
+    if (rows.length < OKX_FUNDING_HISTORY_PAGE_SIZE) {
       break;
     }
 
     cursor = String(oldestTimestamp);
   }
 
+  if (requireCutoffCoverage && !reachedCutoff) {
+    return [];
+  }
+
   return Array.from(collected.entries())
+    .filter(([timestamp]) => timestamp >= cutoff && timestamp <= requestStartedAt)
     .map(([timestamp, fundingRate]) => ({ timestamp, fundingRate }))
     .sort((a, b) => a.timestamp - b.timestamp);
 }
@@ -530,7 +576,11 @@ async function fetchNativeRates(signal?: AbortSignal): Promise<CanonicalFundingR
   ]);
 
   return Array.from(fundingSnapshot.entries())
-    .filter(([instId, row]) => instId.endsWith("-USDT-SWAP") && row.instType === "SWAP")
+    .filter(([instId, row]) => (
+      instId.endsWith("-USDT-SWAP")
+      && row.instType === "SWAP"
+      && parseOptionalNumber(row.fundingRate) !== null
+    ))
     .map(([instId, funding]) => {
       const instrument = instruments.get(instId);
       const ticker = tickers.get(instId);
@@ -549,7 +599,7 @@ async function fetchNativeRates(signal?: AbortSignal): Promise<CanonicalFundingR
         rawSymbol: instId,
         marketKey: instId,
         settlementHydrationKey: `okx:${instId}`,
-        fundingRate: parseOptionalNumber(funding.fundingRate) ?? 0,
+        fundingRate: parseOptionalNumber(funding.fundingRate) as number,
         predictedFundingRate: parseOptionalNumber(funding.nextFundingRate),
         lastSettlementRate: funding.settState === "settled" ? parseOptionalNumber(funding.settFundingRate) : null,
         markPrice,
@@ -613,7 +663,7 @@ export async function fetchOkxCanonicalDetail(
   signal?: AbortSignal,
 ): Promise<CanonicalFundingDetail> {
   const [fundingHistory, candlesRes, snapshot] = await Promise.all([
-    fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal),
+    fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal, 30, undefined, true),
     okxFetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store", signal }),
     fetchNativeFundingSnapshot(signal),
   ]);

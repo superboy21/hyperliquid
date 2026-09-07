@@ -313,6 +313,7 @@ export function parseBitgetList<T extends object>(payload: unknown): T[] {
 
 function numberOrNull(value: unknown): number | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -350,6 +351,8 @@ export function normalizeBitgetFundingRows(
     const ticker = tickers.get(instrument.symbol);
     const funding = fundings.get(instrument.symbol);
     if (!ticker || !funding) continue;
+    const fundingRate = numberOrNull(funding.fundingRate);
+    if (fundingRate === null) continue;
     const markPrice = numberOrZero(ticker.markPrice);
     const lastPrice = numberOrNull(ticker.lastPr ?? ticker.lastPrice) ?? markPrice;
     const open = numberOrNull(ticker.open24h ?? ticker.openPrice24h);
@@ -361,7 +364,7 @@ export function normalizeBitgetFundingRows(
       symbol: instrument.baseCoin,
       rawSymbol: instrument.symbol,
       marketKey: instrument.symbol,
-      fundingRate: numberOrZero(funding.fundingRate),
+      fundingRate,
       predictedFundingRate: null,
       lastSettlementRate: null,
       markPrice,
@@ -493,15 +496,19 @@ export function latestBitgetFundingPoint(history: CanonicalFundingHistoryPoint[]
   return history.reduce<CanonicalFundingHistoryPoint | null>((latest, point) => !latest || point.timestamp > latest.timestamp ? point : latest, null);
 }
 
+/** Hard request budget for a bounded cursor walk; the cutoff, not current interval metadata, ends a successful walk. */
+const MAX_FUNDING_HISTORY_PAGES = 100;
+
 export async function fetchBitgetFundingHistory(
   rawSymbol: string,
-  options: { cutoffTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; request?: BitgetRequest; priority?: BitgetRequestPriority } = {},
+  options: { cutoffTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; request?: BitgetRequest; priority?: BitgetRequestPriority; requireCutoffCoverage?: boolean } = {},
 ): Promise<CanonicalFundingHistoryPoint[]> {
   const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 100));
-  const maxPages = Math.max(1, Math.min(100, Math.trunc(options.maxPages ?? 100)));
+  const maxPages = Math.max(1, Math.min(MAX_FUNDING_HISTORY_PAGES, Math.trunc(options.maxPages ?? MAX_FUNDING_HISTORY_PAGES)));
   const request = options.request ?? requestBitget;
   const collected = new Map<number, number>();
   let previousOldest = Number.POSITIVE_INFINITY;
+  let reachedCutoff = options.cutoffTime === undefined;
   for (let cursor = 1; cursor <= maxPages; cursor += 1) {
     throwIfAborted(options.signal);
     const payload = await request("history-fund-rate", { symbol: rawSymbol, cursor: String(cursor), limit: String(pageSize) }, options.signal, { priority: options.priority });
@@ -509,10 +516,14 @@ export async function fetchBitgetFundingHistory(
     const rows = normalizeBitgetFundingHistory(payload);
     for (const row of rows) if (options.cutoffTime === undefined || row.timestamp >= options.cutoffTime) collected.set(row.timestamp, row.fundingRate);
     const oldest = rows.length ? rows[0].timestamp : Number.POSITIVE_INFINITY;
+    if (options.cutoffTime !== undefined && oldest <= options.cutoffTime) {
+      reachedCutoff = true;
+      break;
+    }
     if (!rawRows.length || rawRows.length < pageSize || oldest >= previousOldest) break;
-    if (options.cutoffTime !== undefined && oldest <= options.cutoffTime) break;
     previousOldest = oldest;
   }
+  if (options.requireCutoffCoverage && !reachedCutoff) return [];
   return Array.from(collected, ([timestamp, fundingRate]) => ({ timestamp, fundingRate })).sort((a, b) => a.timestamp - b.timestamp);
 }
 
@@ -732,12 +743,11 @@ export async function fetchBitgetCanonicalDetail(
 ): Promise<CanonicalFundingDetail> {
   const now = options.now ?? Date.now();
   const cutoffTime = now - 30 * 86_400_000;
-  const settlementCount = Math.ceil((now - cutoffTime) / row.fundingIntervalSeconds) + 1;
-  const maxHistoryPages = Math.max(1, Math.min(100, Math.ceil(settlementCount / 100)));
   const [fundingHistory, candles] = await Promise.all([
     fetchBitgetFundingHistory(row.rawSymbol, {
       cutoffTime,
-      maxPages: maxHistoryPages,
+      maxPages: MAX_FUNDING_HISTORY_PAGES,
+      requireCutoffCoverage: true,
       signal: options.signal,
       request: options.request,
       priority: options.priority,

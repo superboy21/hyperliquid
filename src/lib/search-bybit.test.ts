@@ -15,6 +15,7 @@ import {
   fetchBybitSearchChart,
   fetchBybitSearchFundingHistory,
   BYBIT_SEARCH_FUNDING_HORIZON_MS,
+  BYBIT_SEARCH_FUNDING_MAX_PAGES,
   type SearchCandlePoint,
 } from "./search-candles";
 import { fetchBybitCandles, resolveBybitFundingHistoryWindowMs, type BybitRequest } from "./adapters/bybit";
@@ -141,14 +142,14 @@ describe("Bybit exact symbol detail dispatch", () => {
       }),
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       lastSettlementRate: 0.001,
-      avgFundingRate2d: 0.001,
       historicalVolatility: null,
       bidAskSpread: 2,
-      avgFundingRate7d: 0.001,
-      avgFundingRate30d: 0.001,
     });
+    expect(result.avgFundingRate2d).toBeCloseTo(0.001 / 6, 6);
+    expect(result.avgFundingRate7d).toBeCloseTo(0.001 / 21, 6);
+    expect(result.avgFundingRate30d).toBeCloseTo(0.001 / 90, 6);
   });
 });
 
@@ -264,7 +265,31 @@ describe("Bybit chart flow", () => {
     expect(actions).toEqual([`candles:${RAW}`, `funding:${RAW}:100`]);
     expect(result.candles[0].quoteVolume).toBe("17");
     expect(result.candles[1].quoteVolume).toBeUndefined();
-    expect(result.fundingRates.find((point) => point.time === 100)?.annualizedRate).toBeCloseTo(0.001 * 12 * 365);
+    expect(result.fundingRates.find((point) => point.time === 100)?.annualizedRate)
+      .toBeCloseTo(0.001 * 365 * 24 * 60 * 60 * 1000 / 99);
+  });
+
+  test("accepts a strict adapter result whose first returned point is at the cutoff", async () => {
+    const result = await fetchBybitSearchChart(rate({ fundingInterval: 8 * 3600 }), "1h", undefined, {
+      fetchCandles: async () => [{
+        openTime: 950,
+        closeTime: 1050,
+        open: "1",
+        high: "1",
+        low: "1",
+        close: "1",
+        volume: "1",
+      }],
+      // Strict adapter output is filtered to timestamp >= cutoff.
+      fetchFundingHistory: async () => [{ time: 1000, rate: 0.001 }],
+    });
+
+    expect(result.fundingRates).toEqual([{
+      time: 950,
+      rate: 0.001,
+      annualizedRate: 0.001 * 365 * 24 * 60 * 60 * 1000 / 100,
+      sampleCount: 1,
+    }]);
   });
 
   test("skips funding entirely for a legitimate empty candle response", async () => {
@@ -337,23 +362,27 @@ describe("Bybit search chart funding overlay horizon", () => {
     });
   }
 
-  test("caps the funding cutoff at the newest candle minus 90 days, not the oldest candle", async () => {
+  test("uses the earliest candle as the funding coverage cutoff", async () => {
     const candles = dailyCandles(120); // oldest candle is 119 days back
-    const captured: Array<{ cutoff: number; windowMs?: number; maxPages?: number }> = [];
+    const captured: Array<{ cutoff: number; windowMs?: number; maxPages?: number; requireCutoffCoverage?: boolean }> = [];
     await fetchBybitSearchChart(rate({ fundingInterval: 8 * 3600 }), "1d", undefined, {
       fetchCandles: async () => candles,
       fetchFundingHistory: async (rawSymbol, cutoff, options) => {
         expect(rawSymbol).toBe(RAW);
-        captured.push({ cutoff, windowMs: options.windowMs, maxPages: options.maxPages });
+        captured.push({ cutoff, windowMs: options.windowMs, maxPages: options.maxPages, requireCutoffCoverage: options.requireCutoffCoverage });
         return [];
       },
     });
     expect(captured).toHaveLength(1);
-    expect(captured[0].cutoff).toBe(NEWEST_OPEN - 90 * DAY_MS);
-    expect(captured[0].cutoff).not.toBe(NEWEST_OPEN - 119 * DAY_MS);
+    expect(captured[0].cutoff).toBe(NEWEST_OPEN - 119 * DAY_MS);
+    expect(captured[0].maxPages).toBe(BYBIT_SEARCH_FUNDING_MAX_PAGES);
+    // Chart overlays use soft coverage: the walk still targets the candle
+    // cutoff but a venue retention limit ends the walk with partial data
+    // instead of failing the whole overlay.
+    expect(captured[0].requireCutoffCoverage).toBeUndefined();
   });
 
-  test("derives interval-aware windowMs and bounded maxPages for the 90-day overlay", async () => {
+  test("derives interval-aware page spans and maxPages for the candle range", async () => {
     const candles = dailyCandles(5);
     const captured: Array<{ windowMs?: number; maxPages?: number }> = [];
     const fetchFundingHistory = async (_rawSymbol: string, _cutoff: number, options: { windowMs?: number; maxPages?: number }) => {
@@ -366,9 +395,9 @@ describe("Bybit search chart funding overlay horizon", () => {
     await fetchBybitSearchChart(rate({ fundingInterval: 3600 }), "1d", undefined, { fetchCandles: async () => candles, fetchFundingHistory });
 
     expect(captured).toEqual([
-      { windowMs: 5_760_000_000, maxPages: 2 }, // 8h × 200 rows = 66.7 days → ceil(90 / 66.7) = 2
-      { windowMs: 2_880_000_000, maxPages: 3 }, // 4h × 200 rows = 33.3 days → ceil(90 / 33.3) = 3
-      { windowMs: 720_000_000, maxPages: 11 },  // 1h × 200 rows = 8.3 days → ceil(90 / 8.3) = 11
+      { windowMs: 5_760_000_000, maxPages: BYBIT_SEARCH_FUNDING_MAX_PAGES },
+      { windowMs: 2_880_000_000, maxPages: BYBIT_SEARCH_FUNDING_MAX_PAGES },
+      { windowMs: 720_000_000, maxPages: BYBIT_SEARCH_FUNDING_MAX_PAGES },
     ]);
   });
 
@@ -381,23 +410,25 @@ describe("Bybit search chart funding overlay horizon", () => {
     expect(resolveBybitFundingHistoryWindowMs(0)).toBe(60_000 * 200); // interval clamps to >= 1 minute
   });
 
-  test("preserves the full 1000-candle range while the funding overlay stays capped at 90 days", async () => {
+  test("preserves the full 1000-candle range for the funding overlay", async () => {
     const candles = dailyCandles(1000); // oldest candle is 999 days back
     let fundingCutoff: number | null = null;
     const result = await fetchBybitSearchChart(rate({ fundingInterval: 8 * 3600 }), "1d", undefined, {
       fetchCandles: async () => candles,
       fetchFundingHistory: async (_rawSymbol, cutoff) => {
         fundingCutoff = cutoff;
-        return [{ time: NEWEST_OPEN - 89 * DAY_MS, rate: 0.0001 }];
+        return [
+          { time: NEWEST_OPEN - 89 * DAY_MS, rate: 0.0001 },
+        ];
       },
     });
     expect(result.candles).toHaveLength(1000);
     expect(result.candles[0].openTime).toBe(NEWEST_OPEN - 999 * DAY_MS);
-    expect(fundingCutoff).toBe(NEWEST_OPEN - 90 * DAY_MS);
+    expect(fundingCutoff).toBe(NEWEST_OPEN - 999 * DAY_MS);
     expect(result.fundingRates).toHaveLength(1000);
   });
 
-  test("funding older than the 90-day horizon is unavailable, never fabricated", async () => {
+  test("funding missing from a candle remains unavailable, never fabricated", async () => {
     const candles = dailyCandles(120);
     const horizonStart = NEWEST_OPEN - 90 * DAY_MS;
     const result = await fetchBybitSearchChart(rate({ fundingInterval: 8 * 3600 }), "1d", undefined, {
@@ -409,13 +440,15 @@ describe("Bybit search chart funding overlay horizon", () => {
     expect(result.fundingRates).toHaveLength(120);
     const sampled = result.fundingRates.filter((point) => point.sampleCount === 1);
     const unavailable = result.fundingRates.filter((point) => point.sampleCount === 0);
-    expect(sampled).toEqual([{ time: horizonStart, rate: 0.0001, annualizedRate: 0.0001 * 3 * 365, sampleCount: 1 }]);
+    expect(sampled).toHaveLength(1);
+    expect(sampled[0]).toMatchObject({ time: horizonStart, rate: 0.0001, sampleCount: 1 });
+    expect(sampled[0].annualizedRate).toBeCloseTo(0.0001 * 365, 8);
     expect(unavailable).toHaveLength(119);
     // The oldest bucket is a numeric-zero gap, not a fabricated rate.
     expect(unavailable[0]).toEqual({ time: NEWEST_OPEN - 119 * DAY_MS, rate: 0, annualizedRate: 0, sampleCount: 0 });
   });
 
-  test("funding within the horizon still reaches buckets when candles predate the 90-day overlay", async () => {
+  test("funding reaches buckets across a candle range", async () => {
     const candles = dailyCandles(120);
     const horizonStart = NEWEST_OPEN - 90 * DAY_MS;
     const result = await fetchBybitSearchChart(rate({ fundingInterval: 8 * 3600 }), "1d", undefined, {
@@ -436,7 +469,7 @@ describe("Bybit search chart funding overlay horizon", () => {
     expect(result.fundingRates.filter((point) => point.sampleCount === 0)).toHaveLength(118);
   });
 
-  test("window propagation is capped by the 90-day horizon for 1w and 1d intervals", async () => {
+  test("window propagation covers the candle range for 1w and 1d intervals", async () => {
     const candles = dailyCandles(120);
     const captured: Array<{ cutoff: number; maxPages?: number }> = [];
     const fetchFundingHistory = async (_rawSymbol: string, cutoff: number, options: { maxPages?: number }) => {
@@ -444,7 +477,7 @@ describe("Bybit search chart funding overlay horizon", () => {
       return [];
     };
     await fetchBybitSearchChart(rate({ fundingInterval: 8 * 3600 }), "1w", undefined, { fetchCandles: async () => candles, fetchFundingHistory });
-    expect(captured[0]).toEqual({ cutoff: NEWEST_OPEN - 90 * DAY_MS, maxPages: 2 });
+    expect(captured[0]).toEqual({ cutoff: NEWEST_OPEN - 119 * DAY_MS, maxPages: BYBIT_SEARCH_FUNDING_MAX_PAGES });
     expect(BYBIT_SEARCH_FUNDING_HORIZON_MS).toBe(90 * DAY_MS);
   });
 });

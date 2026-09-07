@@ -58,6 +58,43 @@ function fundingMeanTone(value: number | null): string {
   return value > 0 ? "bg-emerald-400/10 text-emerald-300" : "bg-red-400/10 text-red-300";
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function utcDate(value: number): string {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+/**
+ * Partial-coverage disclosure for combo dashboards. Both legs of a combo can
+ * retain different amounts of funding history; the funded difference is only
+ * meaningful from the shared coverage start onward, and the card should tell
+ * the user where retained funding actually begins.
+ */
+function fundingPartialNote(
+  coverageStartTime: number | null,
+  windowStartTime: number | null,
+  windowEndTime: number | null,
+): string | null {
+  if (
+    coverageStartTime === null || windowStartTime === null || windowEndTime === null
+    || coverageStartTime <= windowStartTime || windowEndTime <= coverageStartTime
+  ) return null;
+  const coveredDays = Math.ceil((windowEndTime - coverageStartTime) / DAY_MS);
+  return `资金费率仅覆盖最近 ${coveredDays} 天（自 ${utcDate(coverageStartTime)} UTC 起）`;
+}
+
+function visibleFundingWindow(result: Props["result"]): { startTime: number; endTime: number } | null {
+  const rows = "candles" in result
+    ? result.candles.map((point) => ({ openTime: Number(point.openTime), closeTime: Number(point.closeTime) }))
+    : result.points.map((point) => ({ openTime: point.openTime, closeTime: point.closeTime }));
+  const valid = rows.filter((row) => Number.isFinite(row.openTime) && Number.isFinite(row.closeTime) && row.closeTime > row.openTime);
+  if (valid.length === 0) return null;
+  return {
+    startTime: Math.min(...valid.map((row) => row.openTime)),
+    endTime: Math.max(...valid.map((row) => row.closeTime)),
+  };
+}
+
 interface PrimaryMetricCard {
   label: string;
   value: string;
@@ -95,6 +132,12 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
     return { kind: "pair" as const, dashboard: visiblePairDashboardAnalytics(result, range, tailTrim, weights).dashboard };
   }, [range, result, tailTrim, weights]);
   const { dashboard } = analysis;
+  const fundingVisibleWindow = visibleFundingWindow(result);
+  const fundingPartial = fundingPartialNote(
+    dashboard.fundingCoverageStartTime,
+    fundingVisibleWindow?.startTime ?? null,
+    fundingVisibleWindow?.endTime ?? null,
+  );
   const distribution = dashboard.derivedClose;
   const totalDerived = distribution.retainedCount + distribution.removedCount;
   const mode = result.mode === "ratio" ? "ratio" : "spread";
@@ -129,7 +172,7 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
       {
         label: "年化资金费率均值",
         value: funding.mean === null ? "--" : `${funding.mean >= 0 ? "+" : ""}${(funding.mean * 100).toFixed(2)}%`,
-        note: `${funding.count} 个可用样本`,
+        note: `${funding.count} 个可用样本${fundingPartial ? ` · ${fundingPartial}` : ""}`,
         tone: funding.mean === null ? "text-gray-500" : funding.mean >= 0 ? "text-emerald-300" : "text-red-300",
       },
       {
@@ -149,10 +192,11 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
     const funding = analysis.dashboard.fundingAnnualized;
     if (funding) {
       cards.push({
-        label: "年化资金费率差均值",
+        label: "年化资金费率差",
         value: annualizedFundingLabel(funding.mean),
         note: (
           <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            {fundingPartial && <span className="rounded-sm bg-amber-400/10 px-1 text-amber-200">{fundingPartial}</span>}
             <span className="rounded-sm bg-violet-400/10 px-1 text-violet-200">腿1加权 {leg1}</span>
             <span className={`rounded-sm px-1 font-mono font-medium ${fundingMeanTone(analysis.dashboard.fundingLeg1?.mean ?? null)}`}>
               {annualizedFundingLabel(analysis.dashboard.fundingLeg1?.mean ?? null)}
@@ -210,7 +254,7 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
             {composition === "mixed"
               ? "资金费率不剔尾；分布统计仅对组合收盘值做对称剔尾。"
               : composition === "perp-perp"
-                ? "4h/1h/5m 从首个双腿真实结算桶开始，分别平均两腿实际结算；1d/1w/1m 保持双腿对齐口径，不剔尾；分布统计仅对组合收盘值做对称剔尾。"
+                ? "按可见 K 线实际窗口累计两腿各自真实结算费率，并以 365 天 ÷ 窗口时长年化后按 A/B 权重相减；两腿无需同桶结算，不剔尾；分布统计仅对组合收盘值做对称剔尾。"
                 : "分布统计仅对组合收盘值做对称剔尾；现货组合不含资金费率。"}
           </p>
         </div>
@@ -264,7 +308,7 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
             <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>只统计真实观测样本；Perp 在腿1时按 A 权重保持正号，在腿2时按 B 权重取负号，再对年化值做算术平均，不参与剔尾。</li>
           )}
           {composition === "perp-perp" && (
-            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>{result.interval === "4h" || result.interval === "1h" || result.interval === "5m" ? "从首个双腿真实结算桶起，腿1与腿2分别纳入之后各自真实结算桶，按 A/B 权重缩放后计算年化均值差；卡片显示各腿样本数与双腿起始后对齐样本数。" : "仅在两腿同一时间桶都有真实样本时，计算“A 权重 × 腿1年化资金费率 − B 权重 × 腿2年化资金费率”，再做算术平均；方向与价差或比值操作符无关。"}</li>
+            <li><span aria-hidden="true">💰</span> <span className="font-medium text-gray-400">资金费率：</span>按可见 K 线的实际窗口 [最早开盘，最晚收盘) 累计两腿各自真实结算的 bucket rate，再按窗口时长年化；结果为“A 权重 × 腿1 − B 权重 × 腿2”，两腿无需同一时间桶结算。卡片显示各腿实际结算样本数与对齐桶数；方向与价差或比值操作符无关。</li>
           )}
           <li className="md:col-span-2"><span aria-hidden="true">💹</span> <span className="font-medium text-gray-400">平均成交额：</span>每条腿分别对可见、对齐 K 线中的 quote turnover 做算术平均；缺失值不按 0，真实 0 参与。这是当前 K 线周期下平均每根 K 线成交额，不是统一折算的日均成交额。{turnoverSourceNote}</li>
           <li><span aria-hidden="true">🔢</span> <span className="font-medium text-gray-400">样本数：</span>卡片显示该指标实际参与计算的有效样本数；不同指标因缺失值或真实样本条件不同，样本数可能不一致。</li>

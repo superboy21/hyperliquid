@@ -3,6 +3,7 @@ import {
   fetchHyperliquidInfo,
   fetchL2Book,
   getCandleSnapshot,
+  getAllFundingRates,
   getFundingHistory,
   getMeta,
 } from "./hyperliquid";
@@ -190,6 +191,21 @@ describe("Hyperliquid direct-first transport", () => {
       await fetchL2Book("BTC");
       await getMeta();
       expect(bodies).toEqual(["fundingHistory", "candleSnapshot", "l2Book", "meta"]);
+    } finally {
+      restore();
+    }
+  });
+
+  test("retains a valid zero live funding rate but drops missing funding", async () => {
+    const restore = mockFetch(async () => jsonResponse([
+      { universe: [{ name: "BTC" }, { name: "ETH" }] },
+      [{ funding: "0" }, { funding: "" }],
+    ]));
+
+    try {
+      await expect(getAllFundingRates()).resolves.toEqual([
+        expect.objectContaining({ coin: "BTC", fundingRate: "0" }),
+      ]);
     } finally {
       restore();
     }

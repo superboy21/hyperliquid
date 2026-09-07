@@ -109,7 +109,7 @@ describe("visible mixed dashboard", () => {
     expect(dashboard).toEqual(dashboardAnalytics(visible, 10));
     expect(dashboard.derivedClose).toMatchObject({ mean: 51, retainedCount: 2, removedCount: 0 });
     expect(dashboard.fundingAnnualized.count).toBe(2);
-    expect(dashboard.fundingAnnualized.mean).toBeCloseTo(0.15);
+    expect(dashboard.fundingAnnualized.mean).toBeCloseTo(0.03 * 365);
     expect(dashboard.perpTurnover).toEqual({ mean: 15, count: 2 });
     expect(dashboard.spotTurnover).toEqual({ mean: 30, count: 2 });
   });
@@ -122,6 +122,60 @@ describe("visible mixed dashboard", () => {
     expect(dashboard.fundingAnnualized).toEqual({ mean: 0, count: 1 });
     expect(dashboard.perpTurnover).toEqual({ mean: null, count: 0 });
     expect(dashboard.spotTurnover).toEqual({ mean: null, count: 0 });
+  });
+
+  test("uses settled bucket rates and does not let an empty bucket amplify the return", () => {
+    const visible = result([0, 10]);
+    visible.funding = [
+      { time: 0, rate: 0.01, annualizedRate: 999, sampleCount: 1, perpLeg: 1 },
+      { time: 10, rate: 100, annualizedRate: -999, sampleCount: 0, perpLeg: 1 },
+    ];
+    expect(dashboardAnalytics(visible, 0).fundingAnnualized).toEqual({
+      mean: 0.01 * 365 * 24 * 60 * 60 * 1000 / 20,
+      count: 1,
+    });
+  });
+
+  test("uses the actual duration of unequal and incomplete visible candles", () => {
+    const visible = result([100, 160]);
+    visible.points[0].closeTime = 160;
+    visible.points[1].closeTime = 250;
+    visible.funding = [
+      { time: 100, rate: 0.01, annualizedRate: 1, sampleCount: 1, perpLeg: 1 },
+      { time: 200, rate: 0.02, annualizedRate: 2, sampleCount: 1, perpLeg: 1 },
+    ];
+    const funding = dashboardAnalytics(visible, 0).fundingAnnualized;
+    expect(funding.mean).toBeCloseTo(0.03 * 365 * 24 * 60 * 60 * 1000 / 150);
+    expect(funding.count).toBe(2);
+  });
+
+  test("preserves the signed second-perp-leg rate and applies its weight once", () => {
+    const visible = { ...result([0, 10]), leg1: spot, leg2: perp } as MixedCombinationResult;
+    visible.funding = [
+      { time: 0, rate: -0.01, annualizedRate: 500, sampleCount: 1, perpLeg: 2 },
+    ];
+    const funding = dashboardAnalytics(visible, 0, { first: 7, second: 3 }).fundingAnnualized;
+    expect(funding.mean).toBeCloseTo(-0.03 * 365 * 24 * 60 * 60 * 1000 / 20);
+    expect(funding.count).toBe(1);
+  });
+
+  test("counts observed zero and legacy settlement samples without using annualizedRate", () => {
+    const visible = result([0, 10]);
+    visible.funding = [
+      { time: 0, rate: 0, annualizedRate: 123, sampleCount: 3, perpLeg: 1 },
+      { time: 10, rate: 0, annualizedRate: -456, perpLeg: 1 },
+      { time: 10, rate: 0, annualizedRate: 789, sampleCount: null, perpLeg: 1 },
+    ] as unknown as MixedCombinationResult["funding"];
+    expect(dashboardAnalytics(visible, 0).fundingAnnualized).toEqual({ mean: 0, count: 5 });
+  });
+
+  test("returns an unavailable mean when no valid funding sample remains", () => {
+    const visible = result([0, 10]);
+    visible.funding = [
+      { time: 0, rate: 1, annualizedRate: 1, sampleCount: 0, perpLeg: 1 },
+      { time: 10, rate: Number.NaN, annualizedRate: 1, sampleCount: 1, perpLeg: 1 },
+    ];
+    expect(dashboardAnalytics(visible, 0).fundingAnnualized).toEqual({ mean: null, count: 0 });
   });
 
   test("current close comes from greatest finite closeTime, not array or distribution order", () => {
@@ -229,7 +283,7 @@ describe("legacy combo range", () => {
 });
 
 describe("two-leg dashboard analytics", () => {
-  test("perp pair averages actual funding differences and each leg turnover independently", () => {
+  test("perp pair annualizes cumulative legacy funding over the visible candle window", () => {
     const combo: ComboCandleResult = {
       candles: [
         { openTime: 10, closeTime: 20, open: "1", high: "", low: "", close: "2", volume: "1", quoteVolume: "20" },
@@ -253,14 +307,16 @@ describe("two-leg dashboard analytics", () => {
     };
 
     const dashboard = pairDashboardAnalytics(combo, 0);
-    expect(dashboard.fundingAnnualized).toEqual({ mean: 0.04, count: 2 });
+    expect(dashboard.fundingAnnualized).toEqual({ mean: 0.008 * 365 * 24 * 60 * 60 * 1000 / 20, count: 2 });
     expect(dashboard.leg1Turnover).toEqual({ mean: 50, count: 2 });
     expect(dashboard.leg2Turnover).toEqual({ mean: 20, count: 1 });
   });
 
-  test("intraday perp pairs start at the first both-actual bucket, then average each leg independently", () => {
+  test("perp pair accumulates each leg independently, including offset settlements", () => {
     const combo: ComboCandleResult = {
-      candles: [],
+      candles: [
+        { openTime: 0, closeTime: 60, open: "1", high: "", low: "", close: "1", volume: "1" },
+      ],
       fundingRates: [
         { time: 10, rate: 0.01, annualizedRate: 1, firstFunding: { rate: 0.01, annualizedRate: 1 }, secondFunding: null },
         { time: 20, rate: -0.02, annualizedRate: -2, firstFunding: null, secondFunding: { rate: 0.02, annualizedRate: 2 } },
@@ -276,15 +332,46 @@ describe("two-leg dashboard analytics", () => {
     };
 
     const dashboard = pairDashboardAnalytics(combo, 0);
-    expect(dashboard.fundingLeg1).toEqual({ mean: 2.5, count: 2 });
-    expect(dashboard.fundingLeg2).toEqual({ mean: 3, count: 2 });
-    expect(dashboard.fundingAnnualized).toEqual({ mean: -0.5, count: 1 });
+    const yearMs = 365 * 24 * 60 * 60 * 1000;
+    // Each leg annualizes over its own retained coverage: leg1 starts at 10
+    // (50 units), leg2 starts at 20 (40 units). The funded difference is
+    // accumulated over the shared window [20, 60) so it is not skewed by
+    // settlements only one leg reports.
+    expect(dashboard.fundingLeg1.mean).toBeCloseTo(0.06 * yearMs / 50);
+    expect(dashboard.fundingLeg1.count).toBe(3);
+    expect(dashboard.fundingLeg2.mean).toBeCloseTo(0.08 * yearMs / 40);
+    expect(dashboard.fundingLeg2.count).toBe(3);
+    expect(dashboard.fundingAnnualized.mean).toBeCloseTo((0.05 - 0.08) * yearMs / 40);
+    expect(dashboard.fundingAnnualized.count).toBe(1);
     expect(dashboard.fundingAlignedCount).toBe(1);
   });
 
-  test("non-intraday perp pairs use only strict both-actual funding metadata", () => {
+  test("does not fabricate a zero leg from missing metadata or sampleCount zero", () => {
     const combo: ComboCandleResult = {
-      candles: [],
+      candles: [{ openTime: 0, closeTime: 40, open: "1", high: "", low: "", close: "1", volume: "1" }],
+      fundingRates: [
+        { time: 0, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 0 }, secondFunding: null },
+        { time: 10, rate: 0, annualizedRate: 0, firstFunding: { rate: 0.1, annualizedRate: 0 }, secondFunding: null },
+        { time: 20, rate: 0, annualizedRate: 0, sampleCount: 0, firstFunding: null, secondFunding: null },
+      ],
+      dashboardFundingRates: [], firstQuoteTurnover: [], secondQuoteTurnover: [],
+      interval: "1h", exchange: "Binance", symbol: "BTC-ETH", mode: "spread",
+      firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+      legProvenance: [] as never,
+    };
+
+    const dashboard = pairDashboardAnalytics(combo, 0);
+    expect(dashboard.fundingLeg1).toMatchObject({ mean: 0.1 * 365 * 24 * 60 * 60 * 1000 / 40, count: 2 });
+    expect(dashboard.fundingLeg2).toEqual({ mean: null, count: 0 });
+    expect(dashboard.fundingAnnualized).toEqual({ mean: null, count: 0 });
+    expect(dashboard.fundingAlignedCount).toBe(0);
+  });
+
+  test("perp pair uses actual metadata at every interval, not strict bucket alignment", () => {
+    const combo: ComboCandleResult = {
+      candles: [
+        { openTime: 0, closeTime: 50, open: "1", high: "", low: "", close: "1", volume: "1" },
+      ],
       fundingRates: [
         { time: 10, rate: 0.0075, annualizedRate: 0.75, firstFunding: { rate: 0.01, annualizedRate: 1 }, secondFunding: { rate: 0.0025, annualizedRate: 0.25 } },
         { time: 20, rate: 0.03, annualizedRate: 3, firstFunding: { rate: 0.03, annualizedRate: 3 }, secondFunding: null },
@@ -298,18 +385,25 @@ describe("two-leg dashboard analytics", () => {
     };
 
     const dashboard = pairDashboardAnalytics(combo, 0);
-    expect(dashboard.fundingLeg1).toEqual({ mean: 3, count: 2 });
-    expect(dashboard.fundingLeg2).toEqual({ mean: 0.625, count: 2 });
-    expect(dashboard.fundingAnnualized).toEqual({ mean: 2.375, count: 2 });
-    expect(dashboard.fundingAnnualized.mean).toBe(
+    const yearMs = 365 * 24 * 60 * 60 * 1000;
+    // Both legs retain settlements from time 10 onward, so each leg and the
+    // shared difference annualize over the funding-covered window of 40 units.
+    expect(dashboard.fundingLeg1.mean).toBeCloseTo(0.09 * yearMs / 40);
+    expect(dashboard.fundingLeg1.count).toBe(3);
+    expect(dashboard.fundingLeg2.mean).toBeCloseTo(0.0225 * yearMs / 40);
+    expect(dashboard.fundingLeg2.count).toBe(3);
+    expect(dashboard.fundingAnnualized.mean).toBeCloseTo((0.09 - 0.0225) * yearMs / 40);
+    expect(dashboard.fundingAnnualized.count).toBe(2);
+    expect(dashboard.fundingAnnualized.mean).toBeCloseTo(
       dashboard.fundingLeg1!.mean! - dashboard.fundingLeg2!.mean!,
+      4,
     );
     expect(dashboard.fundingAlignedCount).toBe(2);
   });
 
-  test.each(["1d", "1w", "1m"] as const)("%s perp pairs retain strict aligned funding behavior", (interval) => {
+  test.each(["1d", "1w", "1m"] as const)("%s perp pairs use legacy cumulative funding", (interval) => {
     const combo: ComboCandleResult = {
-      candles: [], fundingRates: [],
+      candles: [{ openTime: 0, closeTime: 50, open: "1", high: "", low: "", close: "1", volume: "1" }], fundingRates: [],
       dashboardFundingRates: [
         { time: 10, rate: 0.01, annualizedRate: 1 },
         { time: 20, rate: 0.02, annualizedRate: 3 },
@@ -318,7 +412,11 @@ describe("two-leg dashboard analytics", () => {
       firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
       legProvenance: [] as never,
     };
-    expect(pairDashboardAnalytics(combo, 0).fundingAnnualized).toEqual({ mean: 2, count: 2 });
+    const funding = pairDashboardAnalytics(combo, 0).fundingAnnualized;
+    // Legacy cumulative funding annualizes over the funding-covered window
+    // starting at the oldest retained settlement (time 10 → 40 units).
+    expect(funding.mean).toBeCloseTo(0.03 * 365 * 24 * 60 * 60 * 1000 / 40);
+    expect(funding.count).toBe(2);
   });
 
   test("spot pair has no funding metric and keeps true-zero turnover without filling missing values", () => {
@@ -407,31 +505,36 @@ describe("two-leg dashboard analytics", () => {
   test("weights Perp/Perp funding difference while retaining actual-sample semantics", () => {
     const combo = weightedLegacy("spread");
     combo.fundingRates = [
-      { time: 0, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 1 }, secondFunding: { rate: 0, annualizedRate: 0.25 } },
-      { time: 10, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 3 }, secondFunding: { rate: 0, annualizedRate: 1 } },
-      { time: 20, rate: 0, annualizedRate: 0, firstFunding: { rate: 0, annualizedRate: 4 }, secondFunding: null },
+      { time: 0, rate: 0, annualizedRate: 0, firstFunding: { rate: 0.01, annualizedRate: 1 }, secondFunding: { rate: 0.002, annualizedRate: 0.25 } },
+      { time: 10, rate: 0, annualizedRate: 0, firstFunding: { rate: 0.03, annualizedRate: 3 }, secondFunding: { rate: 0.004, annualizedRate: 1 } },
+      { time: 20, rate: 0, annualizedRate: 0, firstFunding: { rate: 0.05, annualizedRate: 4 }, secondFunding: null },
     ];
     combo.interval = "1d";
     const dashboard = pairDashboardAnalytics(combo, 0, { first: 2, second: 0.5 });
-    expect(dashboard.fundingAnnualized).toEqual({ mean: (2 - 0.125 + 6 - 0.5) / 2, count: 2 });
-    expect(dashboard.fundingLeg1).toEqual({ mean: 4, count: 2 });
-    expect(dashboard.fundingLeg2).toEqual({ mean: 0.3125, count: 2 });
+    const annualization = 365 * 24 * 60 * 60 * 1000 / 25;
+    expect(dashboard.fundingAnnualized).toEqual({ mean: (0.18 - 0.003) * annualization, count: 2 });
+    expect(dashboard.fundingLeg1).toEqual({ mean: 0.18 * annualization, count: 3 });
+    expect(dashboard.fundingLeg2).toEqual({ mean: 0.003 * annualization, count: 2 });
   });
 
   test("weights mixed funding with the correct leg sign and keeps Spot/Spot funding unavailable", () => {
     const mixedA = result([10, 20]);
     mixedA.funding = [
-      { time: 10, rate: 0, annualizedRate: 1, sampleCount: 1, perpLeg: 1 },
-      { time: 20, rate: 0, annualizedRate: 2, sampleCount: 1, perpLeg: 1 },
+      { time: 10, rate: 0.01, annualizedRate: 1, sampleCount: 1, perpLeg: 1 },
+      { time: 20, rate: 0.02, annualizedRate: 2, sampleCount: 1, perpLeg: 1 },
     ];
-    expect(dashboardAnalytics(mixedA, 0, { first: 2, second: 7 }).fundingAnnualized).toEqual({ mean: 3, count: 2 });
+    const mixedAFunding = dashboardAnalytics(mixedA, 0, { first: 2, second: 7 }).fundingAnnualized;
+    expect(mixedAFunding.mean).toBeCloseTo(0.06 * 365 * 24 * 60 * 60 * 1000 / 20);
+    expect(mixedAFunding.count).toBe(2);
 
     const mixedB = { ...result([10, 20]), leg1: spot, leg2: perp } as MixedCombinationResult;
     mixedB.funding = [
-      { time: 10, rate: 0, annualizedRate: -1, sampleCount: 1, perpLeg: 2 },
-      { time: 20, rate: 0, annualizedRate: -2, sampleCount: 1, perpLeg: 2 },
+      { time: 10, rate: -0.01, annualizedRate: -1, sampleCount: 1, perpLeg: 2 },
+      { time: 20, rate: -0.02, annualizedRate: -2, sampleCount: 1, perpLeg: 2 },
     ];
-    expect(dashboardAnalytics(mixedB, 0, { first: 7, second: 2 }).fundingAnnualized).toEqual({ mean: -3, count: 2 });
+    const mixedBFunding = dashboardAnalytics(mixedB, 0, { first: 7, second: 2 }).fundingAnnualized;
+    expect(mixedBFunding.mean).toBeCloseTo(-0.06 * 365 * 24 * 60 * 60 * 1000 / 20);
+    expect(mixedBFunding.count).toBe(2);
 
     const spotPair = pairDashboardAnalytics({
       kind: "spot-containing", composition: "spot-spot", mode: "ratio", interval: "1h", leg1: spot, leg2: secondSpot,

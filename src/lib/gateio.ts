@@ -39,7 +39,7 @@ export interface GateTicker {
 export interface GateFundingHistoryItem {
   contract: string;                    // 合约名称
   t: number;                           // 时间戳（秒）
-  r: string;                           // 资金费率
+  r: string | number;                  // 资金费率
 }
 
 export interface GateBatchFundingRatesResponseItem {
@@ -178,7 +178,8 @@ export async function getAllGateTickers(signal?: AbortSignal): Promise<GateTicke
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   const tickers = await getAllGateTickers();
 
-  return tickers.map((ticker) => {
+  return tickers.flatMap((ticker) => {
+    if (!isValidLiveFundingRate(ticker.funding_rate)) return [];
     const totalSize = parseFloat(ticker.total_size) || 0;
     const markPrice = parseFloat(ticker.mark_price) || 0;
     const multiplier = parseFloat(ticker.quanto_multiplier) || 1;
@@ -193,10 +194,10 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
       ? String((parseFloat(bestBid) + parseFloat(bestAsk)) / 2) 
       : "0";
 
-    return {
+    return [{
       coin: formatContractName(ticker.contract),
-      fundingRate: ticker.funding_rate || "0",
-      fundingRateIndicative: ticker.funding_rate_indicative || "0",
+      fundingRate: String(ticker.funding_rate),
+      fundingRateIndicative: String(ticker.funding_rate_indicative),
       markPrice: ticker.mark_price || "0",
       indexPrice: ticker.index_price || "0",
       openInterest: ticker.total_size || "0",
@@ -209,8 +210,14 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
       bestBid,
       bestAsk,
       midPrice,
-    };
+    }];
   });
+}
+
+function isValidLiveFundingRate(value: unknown): value is string | number {
+  if (typeof value === "string" && value.trim() === "") return false;
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  return Number.isFinite(Number(value));
 }
 
 /**
@@ -241,7 +248,7 @@ export async function getFundingHistory(
 
     return data.map((item: GateFundingHistoryItem) => ({
       time: item.t * 1000, // 转换为毫秒
-      fundingRate: item.r,
+      fundingRate: String(item.r),
     }));
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) {
@@ -269,18 +276,26 @@ export async function getBatchFundingHistory(
   return fetchGateBatchFundingHistory(contracts, signal);
 }
 
+function parseGateFundingRate(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function normalizeFundingHistoryPayload(payload: unknown): FundingHistoryItem[] | null {
   if (!Array.isArray(payload)) return null;
   if (!payload.every((item) => {
     if (!item || typeof item !== "object") return false;
     const row = item as Partial<GateFundingHistoryItem>;
-    return typeof row.t === "number" && Number.isFinite(row.t) && typeof row.r === "string";
+    return typeof row.t === "number" && Number.isFinite(row.t) && parseGateFundingRate(row.r) !== null;
   })) {
     return null;
   }
   return payload.map((item) => {
     const row = item as GateFundingHistoryItem;
-    return { time: row.t * 1000, fundingRate: row.r };
+    return { time: row.t * 1000, fundingRate: String(row.r) };
   });
 }
 
@@ -379,11 +394,119 @@ export async function getFundingHistoryForDays(
   days: number = 30,
   fundingIntervalSeconds: number = 28800,
   signal?: AbortSignal,
+  strict = false,
 ): Promise<FundingHistoryItem[]> {
   const contract = toContractName(coin);
-  const settlementsPerDay = 86400 / fundingIntervalSeconds;
-  const limit = Math.min(Math.ceil(days * settlementsPerDay), 1000);
-  return getFundingHistory(contract, limit, signal);
+  // Keep the interval argument for compatibility with existing callers. It
+  // must not determine the requested history span: Gate symbols may move
+  // between 8h and 1h settlement schedules while their detail request stays
+  // the same.
+  void fundingIntervalSeconds;
+
+  const targetDays = Number.isFinite(days) && days > 0 ? days : 30;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cutoffSeconds = nowSeconds - Math.ceil(targetDays * 24 * 60 * 60);
+  const pageSize = 1000;
+  const windowSeconds = 90 * 24 * 60 * 60;
+  const maxPages = 30;
+  const collected = new Map<number, FundingHistoryItem>();
+  let currentTo = nowSeconds;
+  let previousEarliest: number | null = null;
+  let reachedCutoff = false;
+  let coverageProof: FundingHistoryItem | null = null;
+  for (let page = 0; page < maxPages; page += 1) {
+    throwIfAborted(signal);
+    // Do not clamp the request to the arbitrary cutoff. Gate can align its
+    // returned settlements to the request window, so a range that starts at
+    // the cutoff may contain no row at/before that cutoff to prove coverage.
+    const currentFrom = Math.max(0, currentTo - windowSeconds);
+    let response: Response;
+    try {
+      response = await requestGate("funding-rate", {
+        contract,
+        limit: String(pageSize),
+        from: String(currentFrom),
+        to: String(currentTo),
+      }, signal);
+    } catch (error) {
+      if (signal?.aborted || isAbortLikeError(error)) {
+        throwIfAborted(signal);
+        throw error;
+      }
+      if (strict) return [];
+      throw error;
+    }
+    throwIfAborted(signal);
+
+    if (!response.ok) {
+      if (strict) return [];
+      break;
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (signal?.aborted || isAbortLikeError(error)) {
+        throwIfAborted(signal);
+        throw error;
+      }
+      if (strict) return [];
+      throw error;
+    }
+    throwIfAborted(signal);
+    if (!Array.isArray(payload) || payload.length === 0) {
+      if (strict && collected.size === 0) return [];
+      break;
+    }
+
+    const rows = (payload as GateFundingHistoryItem[]).filter((item) => (
+      item && Number.isFinite(item.t) && parseGateFundingRate(item.r) !== null
+    ));
+    if (rows.length === 0) {
+      if (strict && collected.size === 0) return [];
+      break;
+    }
+
+    const earliest = Math.min(...rows.map((item) => item.t));
+    for (const item of rows) {
+      const time = item.t * 1000;
+      if (item.t >= cutoffSeconds && item.t <= nowSeconds && !collected.has(time)) {
+        collected.set(time, { time, fundingRate: String(item.r) });
+      } else if (strict && item.t < cutoffSeconds && (!coverageProof || item.t > coverageProof.time / 1000)) {
+        coverageProof = { time, fundingRate: String(item.r) };
+      }
+    }
+
+    // The API can include the boundary item in both pages. A non-moving
+    // boundary is a terminal condition, not a reason to issue duplicate
+    // requests forever.
+    if (earliest <= cutoffSeconds) {
+      reachedCutoff = true;
+      break;
+    }
+    if (rows.length < pageSize) {
+      break;
+    }
+    if (previousEarliest !== null && earliest >= previousEarliest) {
+      break;
+    }
+    previousEarliest = earliest;
+
+    currentTo = earliest - 1;
+    if (currentTo <= cutoffSeconds || currentTo <= 0) {
+      if (strict && currentTo <= 0) return [];
+      break;
+    }
+  }
+
+  if (strict && !reachedCutoff) return [];
+
+  if (strict && coverageProof) {
+    collected.set(coverageProof.time, coverageProof);
+  }
+
+  return Array.from(collected.values()).sort((a, b) => a.time - b.time);
 }
 
 /**
@@ -429,7 +552,7 @@ export async function getFundingHistoryAll(
       const time = item.t * 1000;
       if (!seen.has(time)) {
         seen.add(time);
-        allHistory.push({ time, fundingRate: item.r });
+        allHistory.push({ time, fundingRate: String(item.r) });
         newCount++;
       }
     }

@@ -158,8 +158,8 @@ describe("strategy recommendations", () => {
   });
 
   test("attaches per-leg funding rates from sources and computes 组合资金费率 (buy − sell, spot = 0)", () => {
-    const buy = perp("Binance", "BTC", { fundingRate: 0.0001, avgFundingRate2d: 0.0001, avgFundingRate7d: 0.00012, avgFundingRate30d: 0.00009, lastSettlementRate: 0.00008 });
-    const sell = perp("OKX", "BTC", { fundingRate: -0.00005, avgFundingRate2d: -0.00005, avgFundingRate7d: -0.00004, avgFundingRate30d: -0.00006, lastSettlementRate: -0.00007 });
+    const buy = perp("Binance", "BTC", { fundingRate: 0.0001, predictedFundingRate: 0.0001, avgFundingRate2d: 0.0001, avgFundingRate7d: 0.00012, avgFundingRate30d: 0.00009, lastSettlementRate: 0.00008 });
+    const sell = perp("OKX", "BTC", { fundingRate: -0.00005, predictedFundingRate: -0.00005, avgFundingRate2d: -0.00005, avgFundingRate7d: -0.00004, avgFundingRate30d: -0.00006, lastSettlementRate: -0.00007 });
     const spotBuy = spot("Binance", "ETH");
     const markets = [buy, sell, spotBuy];
     const impact = results(markets, [[100, 90], [100, 101], [100, 99]]);
@@ -214,6 +214,7 @@ describe("strategy recommendations", () => {
       avgFundingRate7d: 0.011,
       avgFundingRate30d: 0.0105,
       lastSettlementRate: 0.0001,
+      predictedFundingRate: 0.0001,
     });
     const binance = perp("Binance", "BTC", {
       fundingRate: 0.0001,

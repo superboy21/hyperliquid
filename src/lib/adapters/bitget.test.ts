@@ -15,6 +15,7 @@ import {
   fetchLatestBitgetSettlement,
   latestBitgetFundingPoint,
   normalizeBitgetCandles,
+  normalizeBitgetFundingHistory,
   normalizeBitgetFundingRows,
   normalizeBitgetOrderBook,
   normalizeBitgetRpiOrderBook,
@@ -60,9 +61,35 @@ describe("Bitget successful-payload parsing and list normalization", () => {
     expect(rows.map((row) => row.assetCategory)).toEqual(["股票/指数", "商品", "其他"]);
     expect(rows[0].change24h).toBe(10);
   });
+
+  test("retains an observed zero live rate but drops missing and non-finite rates", () => {
+    const instruments = [
+      { symbol: "ZEROUSDT", baseCoin: "ZERO", type: "perpetual", status: "online" },
+      { symbol: "MISSINGUSDT", baseCoin: "MISSING", type: "perpetual", status: "online" },
+      { symbol: "BADUSDT", baseCoin: "BAD", type: "perpetual", status: "online" },
+    ];
+    const tickers = instruments.map(({ symbol }) => ({ symbol, markPrice: "10" }));
+    const rows = normalizeBitgetFundingRows(instruments, tickers, [
+      { symbol: "ZEROUSDT", fundingRate: "0" },
+      { symbol: "MISSINGUSDT" },
+      { symbol: "BADUSDT", fundingRate: "NaN" },
+    ]);
+
+    expect(rows.map((row) => [row.symbol, row.fundingRate])).toEqual([["ZERO", 0]]);
+  });
 });
 
 describe("Bitget funding history", () => {
+  const hour = 3_600_000;
+
+  test("rejects missing and blank rates while retaining string zero", () => {
+    expect(normalizeBitgetFundingHistory({ resultList: [
+      { fundingRateTimestamp: "100", fundingRate: "" },
+      { fundingRateTimestamp: "200" },
+      { fundingRateTimestamp: "300", fundingRate: "0" },
+    ] })).toEqual([{ timestamp: 300, fundingRate: 0 }]);
+  });
+
   test("accepts the official resultList/fundingRateTimestamp shape and counts resultList for pagination", async () => {
     const calls: number[] = [];
     const request: BitgetRequest = async (_action, params) => {
@@ -86,6 +113,91 @@ describe("Bitget funding history", () => {
     };
     await fetchBitgetFundingHistory("BTCUSDT", { request });
     expect(calls).toBe(2);
+  });
+
+  test("honors the explicit page budget while cursor timestamps keep progressing", async () => {
+    let calls = 0;
+    const request: BitgetRequest = async (_action, params) => {
+      calls += 1;
+      const page = Number(params.cursor);
+      return {
+        resultList: Array.from({ length: 100 }, (_, index) => ({
+          fundingRateTimestamp: String(100_000 - (page * 100 + index)),
+          fundingRate: "0.1",
+        })),
+      };
+    };
+    await fetchBitgetFundingHistory("BTCUSDT", { cutoffTime: 0, maxPages: 3, request });
+    expect(calls).toBe(3);
+  });
+
+  test("current 8h metadata does not truncate historical 1h funding before the cutoff", async () => {
+    const now = Date.UTC(2026, 6, 15);
+    const cutoffTime = now - 30 * 86_400_000;
+    let fundingCalls = 0;
+    const request: BitgetRequest = async (action, params) => {
+      if (action === "history-fund-rate") {
+        fundingCalls += 1;
+        const page = Number(params.cursor);
+        const end = now - (page - 1) * 100 * hour;
+        return {
+          resultList: Array.from({ length: 100 }, (_, index) => ({
+            fundingRateTimestamp: String(end - index * hour),
+            fundingRate: "0.0001",
+          })),
+        };
+      }
+      return [];
+    };
+    const detail = await fetchBitgetCanonicalDetail({
+      symbol: "BTC", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
+      fundingIntervalSeconds: 8 * 3600, bestBid: 99, bestAsk: 101,
+    }, "1d", { now, request });
+
+    expect(fundingCalls).toBe(8);
+    expect(detail.fundingHistory.at(0)?.timestamp).toBeGreaterThanOrEqual(cutoffTime);
+    expect(detail.fundingHistory.at(-1)?.timestamp).toBe(now);
+  });
+
+  test("strict cutoff coverage fail-closes a page-capped partial result while non-strict keeps it", async () => {
+    const request: BitgetRequest = async () => ({
+      resultList: Array.from({ length: 100 }, (_, index) => ({
+        fundingRateTimestamp: String(1000 - index), fundingRate: "0.1",
+      })),
+    });
+    const strict = await fetchBitgetFundingHistory("BTCUSDT", {
+      cutoffTime: 500, maxPages: 1, request, requireCutoffCoverage: true,
+    });
+    const partial = await fetchBitgetFundingHistory("BTCUSDT", {
+      cutoffTime: 500, maxPages: 1, request,
+    });
+    expect(strict).toEqual([]);
+    expect(partial).toHaveLength(100);
+  });
+
+  test("strict cutoff coverage rejects empty or short pages before the cutoff", async () => {
+    const cutoffTime = 500;
+    await expect(fetchBitgetFundingHistory("BTCUSDT", {
+      cutoffTime, request: async () => ({ resultList: [] }), requireCutoffCoverage: true,
+    })).resolves.toEqual([]);
+    await expect(fetchBitgetFundingHistory("BTCUSDT", {
+      cutoffTime,
+      request: async () => ({ resultList: [{ fundingRateTimestamp: "999", fundingRate: "0.1" }] }),
+      requireCutoffCoverage: true,
+    })).resolves.toEqual([]);
+  });
+
+  test("strict cutoff coverage returns window points once a valid oldest row reaches it", async () => {
+    await expect(fetchBitgetFundingHistory("BTCUSDT", {
+      cutoffTime: 950,
+      request: async () => ({
+        resultList: [
+          { fundingRateTimestamp: "1000", fundingRate: "0.1" },
+          { fundingRateTimestamp: "900", fundingRate: "0.2" },
+        ],
+      }),
+      requireCutoffCoverage: true,
+    })).resolves.toEqual([{ timestamp: 1000, fundingRate: 0.1 }]);
   });
 
   test("latest settlement helper issues exactly cursor=1/limit=1 once", async () => {
@@ -313,7 +425,12 @@ describe("Bitget canonical detail degradation", () => {
     const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     const request: BitgetRequest = async (action) => {
       if (action === "history-fund-rate") {
-        return { resultList: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] };
+        return {
+          resultList: [
+            { fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" },
+            { fundingRateTimestamp: String(now - 31 * 86_400_000), fundingRate: "0" },
+          ],
+        };
       }
       throw candleFailure;
     };
@@ -348,6 +465,15 @@ describe("Bitget canonical detail degradation", () => {
     };
 
     await expect(fetchBitgetCanonicalDetail(row, "1d", { now, request })).rejects.toBe(fundingFailure);
+  });
+
+  test("canonical detail requires complete funding cutoff coverage", async () => {
+    const request: BitgetRequest = async (action) => action === "history-fund-rate"
+      ? { resultList: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] }
+      : [];
+    const detail = await fetchBitgetCanonicalDetail(row, "1d", { now, request });
+    expect(detail.fundingHistory).toEqual([]);
+    expect(detail.lastSettlementRate).toBeNull();
   });
 });
 

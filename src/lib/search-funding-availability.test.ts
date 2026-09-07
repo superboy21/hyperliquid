@@ -35,7 +35,7 @@ describe("funding observation availability", () => {
     expect(fundingRates[0]).toEqual({ time: 0, rate: 0, annualizedRate: 0, sampleCount: 1 });
     expect(fundingRates[1]).toEqual({ time: HOUR_MS, rate: 0, annualizedRate: 0, sampleCount: 0 });
     expect(fundingRates[2]).toMatchObject({ time: 2 * HOUR_MS, sampleCount: 2 });
-    expect(fundingRates[2].rate).toBeCloseTo(0.0002, 12);
-    expect(fundingRates[2].annualizedRate).toBeCloseTo(0.219, 12);
+    expect(fundingRates[2].rate).toBeCloseTo(0.0004, 12);
+    expect(fundingRates[2].annualizedRate).toBeCloseTo(0.0004 * 365 * 24, 12);
   });
 });

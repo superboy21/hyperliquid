@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, resolvePerpCandleSource, toOkxBar } from "./search-candles";
+import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, normalizeLighterSearchFundingRow, parseSearchFundingRate, resolvePerpCandleSource, toOkxBar } from "./search-candles";
 import { createCandleSourceProvenance } from "./candle-provenance";
 
 const originalFetch = globalThis.fetch;
@@ -17,6 +17,19 @@ test("Gate search candles prefer the direct URL before the proxy", async () => {
 
   await expect(fetchGateCandles("BTC", "1h")).resolves.toMatchObject([{ openTime: 1000, close: "1.5" }]);
   expect(urls).toEqual(["https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=BTC_USDT&interval=1h&limit=2000"]);
+});
+
+test("Lighter search funding rejects missing/blank rates but retains zero", () => {
+  const cutoff = 1_700_000_000_000 - 60 * 60 * 1000;
+  expect(parseSearchFundingRate(undefined)).toBeNull();
+  expect(parseSearchFundingRate("")).toBeNull();
+  expect(parseSearchFundingRate("not-a-number")).toBeNull();
+  expect(normalizeLighterSearchFundingRow({ timestamp: (cutoff + 1) / 1000, rate: "" }, cutoff)).toBeNull();
+  expect(normalizeLighterSearchFundingRow({ timestamp: (cutoff + 2) / 1000 }, cutoff)).toBeNull();
+  expect(normalizeLighterSearchFundingRow({ timestamp: (cutoff + 3) / 1000, rate: "0" }, cutoff)).toEqual({
+    time: cutoff + 3,
+    rate: 0,
+  });
 });
 
 describe("perp weekly candle source policy", () => {
@@ -64,9 +77,42 @@ describe("perp weekly candle source policy", () => {
 
     expect(funding).toEqual([{
       time: monday,
-      rate: 0.02,
-      annualizedRate: 175.2,
+      rate: 0.04,
+      annualizedRate: 0.04 * 365 / 7,
       sampleCount: 2,
     }]);
+  });
+
+  test("sums settlements and annualizes each candle by its own duration", () => {
+    const hour = 60 * 60 * 1000;
+    const day = 24 * hour;
+    const candles = [
+      { openTime: 0, closeTime: hour, open: "1", high: "1", low: "1", close: "1", volume: "0" },
+      { openTime: hour, closeTime: hour + 4 * hour, open: "1", high: "1", low: "1", close: "1", volume: "0" },
+      { openTime: 5 * hour, closeTime: 5 * hour + day, open: "1", high: "1", low: "1", close: "1", volume: "0" },
+    ];
+    const funding = aggregateFundingRatesToCandles([
+      { time: 10 * 60 * 1000, rate: 0.01 },
+      { time: hour + 10 * 60 * 1000, rate: 0.02 },
+      { time: hour + 20 * 60 * 1000, rate: 0.03 },
+      { time: 5 * hour + 10 * 60 * 1000, rate: 0 },
+    ], candles, 8 * 3600);
+
+    expect(funding[0]).toEqual({ time: 0, rate: 0.01, annualizedRate: 0.01 * 365 * 24, sampleCount: 1 });
+    expect(funding[1]).toEqual({ time: hour, rate: 0.05, annualizedRate: 0.05 * 365 * 24 / 4, sampleCount: 2 });
+    expect(funding[2]).toEqual({ time: 5 * hour, rate: 0, annualizedRate: 0, sampleCount: 1 });
+  });
+
+  test("keeps empty candle buckets as explicit gaps", () => {
+    const funding = aggregateFundingRatesToCandles([], [{
+      openTime: 0,
+      closeTime: 60 * 60 * 1000,
+      open: "1",
+      high: "1",
+      low: "1",
+      close: "1",
+      volume: "0",
+    }], 3600);
+    expect(funding).toEqual([{ time: 0, rate: 0, annualizedRate: 0, sampleCount: 0 }]);
   });
 });

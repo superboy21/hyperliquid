@@ -8,7 +8,7 @@ import { asPerpMarket, asSpotMarket, toTableRow, type ArbitrageTableRow } from "
 
 function perp(exchange: "Binance" | "Lighter", fundingInterval: number, fundingRate: number) {
   return asPerpMarket({
-    exchange, exchangeColor: "yellow", symbol: "BTC", fundingRate, markPrice: 1,
+    exchange, exchangeColor: "yellow", symbol: "BTC", fundingRate, predictedFundingRate: fundingRate, markPrice: 1,
     indexPrice: 1, lastPrice: 1, change24h: 0, quoteVolume: 0, openInterest: 0,
     notionalValue: 0, fundingInterval, assetCategory: "Crypto",
   });

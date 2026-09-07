@@ -100,6 +100,23 @@ describe("Bybit successful-payload parsing and list normalization", () => {
     expect(rows[0].notionalValue).toBe(210);
     expect(rows[0].change24h).toBe(10);
   });
+
+  test("retains an observed zero live rate but drops missing and non-finite rates", () => {
+    const instruments = [
+      { symbol: "ZEROUSDT", baseCoin: "ZERO", contractType: "LinearPerpetual", status: "Trading", settleCoin: "USDT" },
+      { symbol: "MISSINGUSDT", baseCoin: "MISSING", contractType: "LinearPerpetual", status: "Trading", settleCoin: "USDT" },
+      { symbol: "BADUSDT", baseCoin: "BAD", contractType: "LinearPerpetual", status: "Trading", settleCoin: "USDT" },
+    ];
+    const rows = normalizeBybitFundingRows(instruments, {
+      list: [
+        { symbol: "ZEROUSDT", markPrice: "10", fundingRate: "0" },
+        { symbol: "MISSINGUSDT", markPrice: "10" },
+        { symbol: "BADUSDT", markPrice: "10", fundingRate: "Infinity" },
+      ],
+    });
+
+    expect(rows.map((row) => [row.symbol, row.fundingRate])).toEqual([["ZERO", 0]]);
+  });
 });
 
 describe("Bybit funding interval normalization", () => {
@@ -316,6 +333,70 @@ describe("Bybit funding history", () => {
     expect(calls).toBe(2);
   });
 
+  test("honors the explicit page budget even when timestamps keep progressing", async () => {
+    let calls = 0;
+    const request: BybitRequest = async (_action, params) => {
+      calls += 1;
+      const end = Number(params.endTime);
+      return {
+        list: [
+          { fundingRateTimestamp: String(end), fundingRate: "0.1" },
+          { fundingRateTimestamp: String(end - 1), fundingRate: "0.1" },
+        ],
+      };
+    };
+    await fetchBybitFundingHistory("BTCUSDT", {
+      cutoffTime: 1,
+      pageSize: 2,
+      maxPages: 3,
+      request,
+      cache: null,
+    });
+    expect(calls).toBe(3);
+  });
+
+  test("strict cutoff coverage fail-closes a page-capped partial result while non-strict keeps it", async () => {
+    const request: BybitRequest = async () => ({
+      list: [
+        { fundingRateTimestamp: "1000", fundingRate: "0.1" },
+        { fundingRateTimestamp: "999", fundingRate: "0.1" },
+      ],
+    });
+    const strict = await fetchBybitFundingHistory("BTCUSDT", {
+      cutoffTime: 500, endTime: 1000, maxPages: 1, request, cache: null, requireCutoffCoverage: true,
+    });
+    const partial = await fetchBybitFundingHistory("BTCUSDT", {
+      cutoffTime: 500, endTime: 1000, maxPages: 1, request, cache: null,
+    });
+    expect(strict).toEqual([]);
+    expect(partial).toEqual([{ timestamp: 999, fundingRate: 0.1 }, { timestamp: 1000, fundingRate: 0.1 }]);
+  });
+
+  test("strict cutoff coverage rejects empty or short pages before the cutoff", async () => {
+    const cutoffTime = 500;
+    await expect(fetchBybitFundingHistory("BTCUSDT", {
+      cutoffTime, endTime: 1000, request: async () => ({ list: [] }), cache: null, requireCutoffCoverage: true,
+    })).resolves.toEqual([]);
+    await expect(fetchBybitFundingHistory("BTCUSDT", {
+      cutoffTime, endTime: 1000,
+      request: async () => ({ list: [{ fundingRateTimestamp: "999", fundingRate: "0.1" }] }),
+      cache: null, requireCutoffCoverage: true,
+    })).resolves.toEqual([]);
+  });
+
+  test("strict cutoff coverage returns window points once a valid oldest row reaches it", async () => {
+    await expect(fetchBybitFundingHistory("BTCUSDT", {
+      cutoffTime: 950, endTime: 1000,
+      request: async () => ({
+        list: [
+          { fundingRateTimestamp: "1000", fundingRate: "0.1" },
+          { fundingRateTimestamp: "900", fundingRate: "0.2" },
+        ],
+      }),
+      cache: null, requireCutoffCoverage: true,
+    })).resolves.toEqual([{ timestamp: 1000, fundingRate: 0.1 }]);
+  });
+
   test("latest settlement helper issues exactly one limit=1 request", async () => {
     const calls: Array<{ action: string; params: Record<string, string> }> = [];
     const request: BybitRequest = async (action, params) => {
@@ -422,6 +503,35 @@ describe("Bybit detail funding request counts", () => {
     expect(calls.filter((call) => call === "funding")).toHaveLength(4);
     expect(calls.filter((call) => call === "candles")).toHaveLength(1);
   });
+
+  test("current 8h metadata does not truncate historical 1h funding at the page budget", async () => {
+    const cutoffTime = now - 30 * day;
+    const fundingEnds: number[] = [];
+    let fundingCalls = 0;
+    const request: BybitRequest = async (action, params) => {
+      if (action === "funding-history") {
+        fundingCalls += 1;
+        const end = Number(params.endTime);
+        fundingEnds.push(end);
+        return {
+          list: Array.from({ length: 200 }, (_, index) => ({
+            fundingRateTimestamp: String(end - index * hour),
+            fundingRate: "0.0001",
+          })),
+        };
+      }
+      return { list: [] };
+    };
+    const detail = await fetchBybitCanonicalDetail({
+      symbol: "BTC", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
+      fundingIntervalSeconds: 8 * 3600, bestBid: 99, bestAsk: 101,
+    }, "1d", { now, request, fundingCache: null, candleCache: null });
+
+    expect(fundingCalls).toBe(4);
+    expect(Math.min(...fundingEnds)).toBeGreaterThan(cutoffTime);
+    expect(detail.fundingHistory.at(0)?.timestamp).toBeGreaterThanOrEqual(cutoffTime);
+    expect(detail.fundingHistory.at(-1)?.timestamp).toBe(now);
+  });
 });
 
 describe("Bybit funding-history cache", () => {
@@ -488,6 +598,27 @@ describe("Bybit funding-history cache", () => {
     await fetchBybitFundingHistory("BTCUSDT", options);
     expect(calls()).toBe(before + 5); // nothing was cached
     expect(cache.get("BTCUSDT", endTime - 30 * day, endTime)).toBeNull(); // and nothing was written
+  });
+
+  test("does not cache a near-end partial walk as complete cutoff coverage", async () => {
+    const cache = createBybitFundingHistoryCache();
+    let calls = 0;
+    const request: BybitRequest = async (_action, params) => {
+      calls += 1;
+      const end = Number(params.endTime);
+      return {
+        list: Array.from({ length: 200 }, (_, index) => ({
+          fundingRateTimestamp: String(end - index * hour),
+          fundingRate: "0.0001",
+        })),
+      };
+    };
+    const options = { cutoffTime: endTime - 30 * day, endTime, request, cache, maxPages: 1 };
+    await fetchBybitFundingHistory("BTCUSDT", options);
+    expect(cache.get("BTCUSDT", options.cutoffTime, endTime)).toBeNull();
+    const before = calls;
+    await fetchBybitFundingHistory("BTCUSDT", { ...options, maxPages: 100 });
+    expect(calls).toBeGreaterThan(before);
   });
 
   test("aborted fetches neither return nor poison the cache", async () => {
@@ -819,7 +950,12 @@ describe("Bybit canonical detail degradation", () => {
     const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     const request: BybitRequest = async (action) => {
       if (action === "funding-history") {
-        return { list: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] };
+        return {
+          list: [
+            { fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" },
+            { fundingRateTimestamp: String(now - 31 * 86_400_000), fundingRate: "0" },
+          ],
+        };
       }
       throw candleFailure;
     };
@@ -854,6 +990,17 @@ describe("Bybit canonical detail degradation", () => {
     };
 
     await expect(fetchBybitCanonicalDetail(row, "1d", { now, request, fundingCache: null, candleCache: null })).rejects.toBe(fundingFailure);
+  });
+
+  test("canonical detail requires complete funding cutoff coverage", async () => {
+    const request: BybitRequest = async (action) => action === "funding-history"
+      ? { list: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] }
+      : { list: [] };
+    const detail = await fetchBybitCanonicalDetail(row, "1d", {
+      now, request, fundingCache: null, candleCache: null,
+    });
+    expect(detail.fundingHistory).toEqual([]);
+    expect(detail.lastSettlementRate).toBeNull();
   });
 
   test("selects the 30-day candle budget per interval", () => {
@@ -1341,5 +1488,13 @@ describe("Bybit funding history fixtures", () => {
       { timestamp: 200, fundingRate: 0.002 },
     ]);
     expect(latestBybitFundingPoint(rows)?.timestamp).toBe(200);
+  });
+
+  test("rejects missing and blank rates while retaining string zero", () => {
+    expect(normalizeBybitFundingHistory({ list: [
+      { fundingRateTimestamp: "100", fundingRate: "" },
+      { fundingRateTimestamp: "200" },
+      { fundingRateTimestamp: "300", fundingRate: "0" },
+    ] })).toEqual([{ timestamp: 300, fundingRate: 0 }]);
   });
 });

@@ -1,6 +1,7 @@
 import type { ComboFundingLegObservation, ComboFundingRatePoint, ComboCandleResult } from "../combo";
 import type { MixedCombinationResult, SpotContainingCombinationResult, SpotSpotCombinationResult } from "./combine";
 import { combineWeightedPrice, type CombinationWeights } from "../combo-weighting";
+import { ANALYTICS_YEAR_MS } from "./single-market-analytics";
 
 export type ArbitrageChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
 export type TailTrimPercent = 0 | 1 | 2.5 | 5 | 10;
@@ -48,6 +49,13 @@ export interface MixedDashboardAnalytics {
   derivedClose: DistributionAnalytics;
   currentDerivedClose: ValueWithRelativeGap;
   fundingAnnualized: AverageAnalytics;
+  /**
+   * Oldest retained perp settlement inside the visible window, or null when no
+   * funding is available. When venue retention is shorter than the candle
+   * range this is later than the window start; annualization already uses the
+   * funding-covered sub-window and the UI should disclose the gap.
+   */
+  fundingCoverageStartTime: number | null;
   spotTurnover: AverageAnalytics;
   perpTurnover: AverageAnalytics;
 }
@@ -59,11 +67,11 @@ export interface PairDashboardAnalytics {
   fundingLeg1: AverageAnalytics | null;
   fundingLeg2: AverageAnalytics | null;
   fundingAlignedCount: number | null;
+  /** Oldest settlement where both legs retain funding (shared window start). */
+  fundingCoverageStartTime: number | null;
   leg1Turnover: AverageAnalytics;
   leg2Turnover: AverageAnalytics;
 }
-
-const INTRADAY_PERP_PAIR_INTERVALS = new Set(["4h", "1h", "5m"]);
 
 export type PairDashboardResult = ComboCandleResult | SpotSpotCombinationResult;
 
@@ -187,10 +195,32 @@ function derivedCloseRows(
   return { values: rows.map((row) => row.value), latest };
 }
 
+interface FundingWindow {
+  startTime: number;
+  endTime: number;
+}
+
+function visibleFundingWindow(points: ReadonlyArray<{ openTime: number; closeTime: number }>): FundingWindow | null {
+  const valid = points.filter((point) => (
+    Number.isFinite(point.openTime)
+    && Number.isFinite(point.closeTime)
+    && point.closeTime > point.openTime
+  ));
+  if (valid.length === 0) return null;
+  const startTime = Math.min(...valid.map((point) => point.openTime));
+  const endTime = Math.max(...valid.map((point) => point.closeTime));
+  return endTime > startTime ? { startTime, endTime } : null;
+}
+
+function fundingSampleCount(value: unknown): number | null {
+  if (value === undefined || value === null) return 1;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function actualLegFunding(
   point: ComboFundingRatePoint,
   observation: ComboFundingLegObservation | null | undefined,
-): ComboFundingLegObservation | null {
+): { rate: number; count: number } | null {
   if (
     point.sampleCount !== undefined
     && (!Number.isFinite(point.sampleCount) || point.sampleCount <= 0)
@@ -198,18 +228,100 @@ function actualLegFunding(
   if (
     observation == null
     || !Number.isFinite(observation.rate)
-    || !Number.isFinite(observation.annualizedRate)
   ) return null;
-  return observation;
+  const observationRecord = observation as ComboFundingLegObservation & { sampleCount?: unknown };
+  const count = fundingSampleCount(
+    observationRecord.sampleCount === undefined ? point.sampleCount : observationRecord.sampleCount,
+  );
+  return count === null ? null : { rate: observation.rate, count };
+}
+
+interface CumulativeLegFunding {
+  total: number | null;
+  count: number;
+  actualPointCount: number;
+  /** Oldest retained settlement inside the queried window, or null when empty. */
+  firstTime: number | null;
+}
+
+function cumulativeLegFunding(
+  points: readonly ComboFundingRatePoint[],
+  leg: "firstFunding" | "secondFunding",
+  window: FundingWindow | null,
+): CumulativeLegFunding {
+  let total = 0;
+  let count = 0;
+  let actualPointCount = 0;
+  let firstTime: number | null = null;
+  for (const point of points) {
+    if (window === null || point.time < window.startTime || point.time >= window.endTime) continue;
+    const actual = actualLegFunding(point, point[leg]);
+    if (!actual) continue;
+    total += actual.rate;
+    count += actual.count;
+    actualPointCount += 1;
+    if (firstTime === null || point.time < firstTime) firstTime = point.time;
+  }
+  return { total: actualPointCount === 0 ? null : total, count, actualPointCount, firstTime };
+}
+
+interface CoveredFundingAnalytics {
+  mean: number | null;
+  count: number;
+  /** Oldest retained settlement driving the annualization window. */
+  coverageStartTime: number | null;
+}
+
+function mixedFundingAnalytics(
+  visible: MixedCombinationResult,
+  weights: CombinationWeights,
+): CoveredFundingAnalytics {
+  const window = visibleFundingWindow(visible.points);
+  if (window === null) return { mean: null, count: 0, coverageStartTime: null };
+
+  let weightedSettledReturn = 0;
+  let count = 0;
+  let actualPointCount = 0;
+  let firstTime: number | null = null;
+  for (const point of visible.funding) {
+    if (
+      !Number.isFinite(point.time)
+      || point.time < window.startTime
+      || point.time >= window.endTime
+      || !Number.isFinite(point.rate)
+    ) continue;
+    const sampleCount = fundingSampleCount(point.sampleCount);
+    if (sampleCount === null || (point.perpLeg !== 1 && point.perpLeg !== 2)) continue;
+    weightedSettledReturn += point.rate * (point.perpLeg === 1 ? weights.first : weights.second);
+    count += sampleCount;
+    actualPointCount += 1;
+    if (firstTime === null || point.time < firstTime) firstTime = point.time;
+  }
+
+  // Annualize over [first retained settlement, window end). A venue that
+  // retains less funding history than the visible candle range must not have
+  // its cumulative return diluted by uncovered candles.
+  const fundingDurationMs = firstTime === null || window.endTime <= firstTime
+    ? null
+    : window.endTime - firstTime;
+  return {
+    mean: actualPointCount === 0 || fundingDurationMs === null || fundingDurationMs <= 0
+      ? null
+      : weightedSettledReturn * ANALYTICS_YEAR_MS / fundingDurationMs,
+    count,
+    coverageStartTime: firstTime,
+  };
 }
 
 function perpPairFundingAnalytics(visible: ComboCandleResult, weights: CombinationWeights): Pick<
   PairDashboardAnalytics,
-  "fundingAnnualized" | "fundingLeg1" | "fundingLeg2" | "fundingAlignedCount"
+  "fundingAnnualized" | "fundingLeg1" | "fundingLeg2" | "fundingAlignedCount" | "fundingCoverageStartTime"
 > {
   const points = [...visible.fundingRates].sort((a, b) => a.time - b.time);
+  const window = visibleFundingWindow(visible.candles);
   // Legacy hand-built results may not carry per-leg metadata. Preserve their
-  // established aligned dashboard metric; production combo results always do.
+  // dashboard funding lane, but use cumulative bucket rates over the visible
+  // candle window rather than averaging bucket annualized rates.
   if (points.length === 0 || points.every((point) => point.firstFunding === undefined && point.secondFunding === undefined)) {
     if (!isOneToOne(weights)) {
       return {
@@ -217,63 +329,104 @@ function perpPairFundingAnalytics(visible: ComboCandleResult, weights: Combinati
         fundingLeg1: null,
         fundingLeg2: null,
         fundingAlignedCount: 0,
+        fundingCoverageStartTime: null,
       };
     }
-    const funding = average((visible.dashboardFundingRates ?? []).map((point) => point.annualizedRate));
-    return { fundingAnnualized: funding, fundingLeg1: null, fundingLeg2: null, fundingAlignedCount: funding.count };
-  }
-
-  if (!INTRADAY_PERP_PAIR_INTERVALS.has(visible.interval)) {
-    const alignedPoints = points.filter((point) => (
-      actualLegFunding(point, point.firstFunding)
-      && actualLegFunding(point, point.secondFunding)
-    ));
-    const fundingLeg1 = average(alignedPoints.map((point) => weights.first * point.firstFunding!.annualizedRate));
-    const fundingLeg2 = average(alignedPoints.map((point) => weights.second * point.secondFunding!.annualizedRate));
+    const legacy = (visible.dashboardFundingRates ?? []).filter((point) => (
+      window !== null
+      && Number.isFinite(point.time)
+      && point.time >= window.startTime
+      && point.time < window.endTime
+      && (point.sampleCount === undefined || (Number.isFinite(point.sampleCount) && point.sampleCount > 0))
+      && Number.isFinite(point.rate)
+    )).sort((a, b) => a.time - b.time);
+    const total = legacy.reduce((sum, point) => sum + point.rate, 0);
+    const count = legacy.reduce((sum, point) => sum + (point.sampleCount === undefined ? 1 : point.sampleCount), 0);
+    // Annualize from the oldest retained settlement so a venue retention
+    // limit (funding history shorter than the candle range) does not dilute
+    // the return with uncovered candles.
+    const firstTime = legacy.length === 0 ? null : legacy[0].time;
+    const fundingDurationMs = window !== null && firstTime !== null && window.endTime > firstTime
+      ? window.endTime - firstTime
+      : null;
     return {
       fundingAnnualized: {
-        mean: average(alignedPoints.map((point) => weights.first * point.firstFunding!.annualizedRate - weights.second * point.secondFunding!.annualizedRate)).mean,
-        count: alignedPoints.length,
+        mean: legacy.length === 0 || fundingDurationMs === null || fundingDurationMs <= 0
+          ? null
+          : total * ANALYTICS_YEAR_MS / fundingDurationMs,
+        count,
       },
+      fundingLeg1: null,
+      fundingLeg2: null,
+      fundingAlignedCount: legacy.length,
+      fundingCoverageStartTime: firstTime,
+    };
+  }
+
+  // Both legs expose per-settlement rows. Each leg's own annualized lane is
+  // based on its own retained coverage ([leg.firstTime, window end)) so a leg
+  // whose funding history starts later is not diluted. The funded difference
+  // can only be stated over the shared window where BOTH legs retain
+  // settlements, so it is accumulated from the later of the two starts.
+  const alignedCount = points.filter((point) => (
+    window !== null
+    && point.time >= window.startTime
+    && point.time < window.endTime
+    && actualLegFunding(point, point.firstFunding)
+    && actualLegFunding(point, point.secondFunding)
+  )).length;
+  const leg1Window = cumulativeLegFunding(points, "firstFunding", window);
+  const leg2Window = cumulativeLegFunding(points, "secondFunding", window);
+  const legAnnualized = (leg: CumulativeLegFunding, weight: number): AverageAnalytics => {
+    const durationMs = window !== null && leg.firstTime !== null && window.endTime > leg.firstTime
+      ? window.endTime - leg.firstTime
+      : null;
+    return {
+      mean: leg.total === null || durationMs === null || durationMs <= 0
+        ? null
+        : weight * leg.total * ANALYTICS_YEAR_MS / durationMs,
+      count: leg.count,
+    };
+  };
+  const fundingLeg1 = legAnnualized(leg1Window, weights.first);
+  const fundingLeg2 = legAnnualized(leg2Window, weights.second);
+  if (
+    window === null || leg1Window.total === null || leg2Window.total === null
+    || leg1Window.firstTime === null || leg2Window.firstTime === null
+  ) {
+    return {
+      fundingAnnualized: { mean: null, count: alignedCount },
       fundingLeg1,
       fundingLeg2,
-      fundingAlignedCount: alignedPoints.length,
+      fundingAlignedCount: alignedCount,
+      fundingCoverageStartTime: leg1Window.firstTime !== null && leg2Window.firstTime !== null
+        ? Math.max(leg1Window.firstTime, leg2Window.firstTime)
+        : null,
     };
   }
-
-  const startIndex = points.findIndex((point) => (
-    actualLegFunding(point, point.firstFunding)
-    && actualLegFunding(point, point.secondFunding)
-  ));
-  if (startIndex === -1) {
+  const commonStartTime = Math.max(leg1Window.firstTime, leg2Window.firstTime);
+  const commonWindow: FundingWindow = { startTime: commonStartTime, endTime: window.endTime };
+  const leg1 = cumulativeLegFunding(points, "firstFunding", commonWindow);
+  const leg2 = cumulativeLegFunding(points, "secondFunding", commonWindow);
+  const commonDurationMs = window.endTime - commonStartTime;
+  if (leg1.total === null || leg2.total === null || commonDurationMs <= 0) {
     return {
-      fundingAnnualized: { mean: null, count: 0 },
-      fundingLeg1: { mean: null, count: 0 },
-      fundingLeg2: { mean: null, count: 0 },
-      fundingAlignedCount: 0,
+      fundingAnnualized: { mean: null, count: alignedCount },
+      fundingLeg1,
+      fundingLeg2,
+      fundingAlignedCount: alignedCount,
+      fundingCoverageStartTime: commonStartTime,
     };
   }
-
-  const leg1Values: number[] = [];
-  const leg2Values: number[] = [];
-  let alignedCount = 0;
-  for (const point of points.slice(startIndex)) {
-    const leg1 = actualLegFunding(point, point.firstFunding);
-    const leg2 = actualLegFunding(point, point.secondFunding);
-    if (leg1) leg1Values.push(weights.first * leg1.annualizedRate);
-    if (leg2) leg2Values.push(weights.second * leg2.annualizedRate);
-    if (leg1 && leg2) alignedCount += 1;
-  }
-  const fundingLeg1 = average(leg1Values);
-  const fundingLeg2 = average(leg2Values);
   return {
     fundingAnnualized: {
-      mean: fundingLeg1.mean === null || fundingLeg2.mean === null ? null : fundingLeg1.mean - fundingLeg2.mean,
+      mean: (weights.first * leg1.total - weights.second * leg2.total) * ANALYTICS_YEAR_MS / commonDurationMs,
       count: alignedCount,
     },
     fundingLeg1,
     fundingLeg2,
     fundingAlignedCount: alignedCount,
+    fundingCoverageStartTime: commonStartTime,
   };
 }
 
@@ -445,15 +598,12 @@ export function dashboardAnalytics(
       (leg.market.kind === "spot" ? spotTurnovers : perpTurnovers).push(leg.turnover.value);
     }
   }
+  const mixedFunding = mixedFundingAnalytics(visible, weights);
   return {
     derivedClose,
     currentDerivedClose: valueWithRelativeGap(derived?.latest ?? null, derivedClose.mean),
-    fundingAnnualized: average(visible.funding
-      .filter((point) => point.sampleCount === null || point.sampleCount === undefined || point.sampleCount > 0)
-      // combineSpotContaining stores leg-2 observations with the already
-      // applied negative combination sign. Scale that signed observation once;
-      // do not negate it a second time here.
-      .map((point) => (point.perpLeg === 1 ? weights.first : weights.second) * point.annualizedRate)),
+    fundingAnnualized: { mean: mixedFunding.mean, count: mixedFunding.count },
+    fundingCoverageStartTime: mixedFunding.coverageStartTime,
     spotTurnover: average(spotTurnovers),
     perpTurnover: average(perpTurnovers),
   };
@@ -485,6 +635,7 @@ export function pairDashboardAnalytics(
     fundingLeg1: null,
     fundingLeg2: null,
     fundingAlignedCount: null,
+    fundingCoverageStartTime: null,
     leg1Turnover: average(visible.points.flatMap((point) => point.leg1Turnover ? [point.leg1Turnover.value] : [])),
     leg2Turnover: average(visible.points.flatMap((point) => point.leg2Turnover ? [point.leg2Turnover.value] : [])),
   };

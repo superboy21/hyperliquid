@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { CanonicalFundingRateRow } from "./types";
 import {
   batchFetchDetails,
+  buildLighterDetailQueries,
   fetchDetailForSymbol,
+  LIGHTER_DETAIL_FUNDING_COUNT,
   mapBitgetSearchRate,
   partitionProgressiveDetailRates,
   type DetailResult,
@@ -120,16 +122,128 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
       }),
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       lastSettlementRate: 0.001,
-      avgFundingRate2d: 0.001,
       historicalVolatility: null,
       bidAskSpread: 2,
-      avgFundingRate7d: 0.001,
-      avgFundingRate30d: 0.001,
     });
+    expect(result.avgFundingRate2d).toBeCloseTo(0.001 / 6, 6);
+    expect(result.avgFundingRate7d).toBeCloseTo(0.001 / 21, 6);
+    expect(result.avgFundingRate30d).toBeCloseTo(0.001 / 90, 6);
   });
 
+});
+
+describe("Lighter detail query units", () => {
+  test("uses milliseconds for candles and seconds for fundings", () => {
+    const now = Date.UTC(2026, 0, 31, 12, 34, 56, 789);
+    const queries = buildLighterDetailQueries(7, now);
+
+    expect(queries.candles).toBe(
+      `market_id=7&resolution=1d&start_timestamp=${now - 30 * 24 * 60 * 60 * 1000}&end_timestamp=${now}&count_back=30`,
+    );
+    expect(queries.fundings).toBe(
+      `market_id=7&resolution=1h&start_timestamp=${Math.floor((now - 30 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000) / 1000)}&end_timestamp=${Math.floor(now / 1000)}&count_back=${LIGHTER_DETAIL_FUNDING_COUNT}`,
+    );
+  });
+
+  test("keeps latest settlement but fails closed when history has no window boundaries", async () => {
+    const now = Date.UTC(2026, 0, 31, 12, 34, 56, 789);
+    const calls: Array<[string, string]> = [];
+    const fetchLighter = async (endpoint: string, params: string): Promise<Response> => {
+      calls.push([endpoint, params]);
+      if (endpoint === "candles") return Response.json({ c: [{ c: "100" }] });
+      if (endpoint === "fundings") {
+        return Response.json({ fundings: [
+          { timestamp: Math.floor(now / 1000) - 7200, rate: "0.05", direction: "long" },
+          { timestamp: Math.floor(now / 1000) - 3600, rate: "0.10", direction: "long" },
+        ] });
+      }
+      return Response.json({ asks: [{ price: "101" }], bids: [{ price: "99" }] });
+    };
+
+    const result = await fetchDetailForSymbol(rate({ exchange: "Lighter", marketId: 7 }), undefined, {
+      fetchLighter,
+      now: () => now,
+    } as SearchDetailDependencies);
+
+    expect(calls[0]).toEqual(["candles", buildLighterDetailQueries(7, now).candles]);
+    expect(calls[1]).toEqual(["fundings", buildLighterDetailQueries(7, now).fundings]);
+    expect(result.lastSettlementRate).toBe(0.1 / 12.5);
+    expect(result.avgFundingRate2d).toBeNull();
+    expect(result.avgFundingRate7d).toBeNull();
+    expect(result.avgFundingRate30d).toBeNull();
+  });
+
+  test("only reports windows whose boundary is covered", async () => {
+    const now = Date.UTC(2026, 0, 31, 12, 34, 56, 789);
+    const nowSeconds = Math.floor(now / 1000);
+    const fetchLighter = async (endpoint: string): Promise<Response> => {
+      if (endpoint === "candles") return Response.json({ c: [{ c: "100" }] });
+      if (endpoint === "fundings") return Response.json({ fundings: [
+        { timestamp: nowSeconds - 3600, rate: "0.10", direction: "long" },
+        { timestamp: Math.floor((now - 2 * 24 * 60 * 60 * 1000) / 1000) - 1, rate: "0.05", direction: "long" },
+      ] });
+      return Response.json({ asks: [{ price: "101" }], bids: [{ price: "99" }] });
+    };
+
+    const result = await fetchDetailForSymbol(rate({ exchange: "Lighter", marketId: 7 }), undefined, {
+      fetchLighter,
+      now: () => now,
+    } as SearchDetailDependencies);
+
+    expect(result.avgFundingRate2d).toBeCloseTo(0.10 / 48, 12);
+    expect(result.avgFundingRate7d).toBeNull();
+    expect(result.avgFundingRate30d).toBeNull();
+  });
+
+  test("detail mapping rejects missing/blank/non-finite funding but retains zero", async () => {
+    const now = Date.UTC(2026, 0, 31, 12, 34, 56, 789);
+    const nowSeconds = Math.floor(now / 1000);
+    const fetchLighter = async (endpoint: string): Promise<Response> => {
+      if (endpoint === "candles") return Response.json({ c: [{ c: "100" }] });
+      if (endpoint === "fundings") return Response.json({ fundings: [
+        { timestamp: nowSeconds - 3600, rate: "" },
+        { timestamp: nowSeconds - 7200 },
+        { timestamp: nowSeconds - 10800, rate: "NaN" },
+        { timestamp: nowSeconds - 14400, rate: "0", direction: "long" },
+        { timestamp: Math.floor((now - 2 * 24 * 60 * 60 * 1000) / 1000) - 1, rate: "0.05", direction: "long" },
+      ] });
+      return Response.json({ asks: [{ price: "101" }], bids: [{ price: "99" }] });
+    };
+
+    const result = await fetchDetailForSymbol(rate({ exchange: "Lighter", marketId: 7 }), undefined, {
+      fetchLighter,
+      now: () => now,
+    } as SearchDetailDependencies);
+
+    expect(result.lastSettlementRate).toBe(0);
+    expect(result.avgFundingRate2d).toBe(0);
+  });
+
+  test("uses an extra hourly boundary to calculate all covered windows", async () => {
+    const now = Date.UTC(2026, 0, 31, 12, 34, 56, 789);
+    const nowHourSeconds = Math.floor(now / (60 * 60 * 1000)) * 3600;
+    const fetchLighter = async (endpoint: string): Promise<Response> => {
+      if (endpoint === "candles") return Response.json({ c: [{ c: "100" }] });
+      if (endpoint === "fundings") return Response.json({ fundings: Array.from({ length: LIGHTER_DETAIL_FUNDING_COUNT }, (_, index) => ({
+        timestamp: nowHourSeconds - index * 3600,
+        rate: "0.001",
+        direction: "long",
+      })) });
+      return Response.json({ asks: [{ price: "101" }], bids: [{ price: "99" }] });
+    };
+
+    const result = await fetchDetailForSymbol(rate({ exchange: "Lighter", marketId: 7 }), undefined, {
+      fetchLighter,
+      now: () => now,
+    } as SearchDetailDependencies);
+
+    expect(result.lastSettlementRate).toBeCloseTo(0.001 / 12.5, 12);
+    expect(result.avgFundingRate2d).toBeCloseTo(0.001, 12);
+    expect(result.avgFundingRate7d).toBeCloseTo(0.001, 12);
+    expect(result.avgFundingRate30d).toBeCloseTo(0.001, 12);
+  });
 });
 
 describe("Phase 3 progressive detail lanes", () => {
@@ -201,7 +315,8 @@ describe("Phase 3 Bitget chart flow", () => {
     expect(actions).toEqual([`candles:${RAW}`, `funding:${RAW}:100`]);
     expect(result.candles[0].quoteVolume).toBe("17");
     expect(result.candles[1].quoteVolume).toBeUndefined();
-    expect(result.fundingRates.find((point) => point.time === 100)?.annualizedRate).toBeCloseTo(0.001 * 12 * 365);
+    expect(result.fundingRates.find((point) => point.time === 100)?.annualizedRate)
+      .toBeCloseTo(0.001 * 365 * 24 * 60 * 60 * 1000 / 99);
   });
 
   test("forwards one bounded window to candles while funding uses the earliest returned candle", async () => {

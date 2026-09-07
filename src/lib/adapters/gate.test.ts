@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { fetchGateBatchFundingHistory, getGateTickers } from "../gateio";
+import { fetchGateBatchFundingHistory, getAllFundingRates, getFundingHistoryForDays, getGateTickers } from "../gateio";
 import {
   buildGateUrl,
   buildGateRequest,
@@ -8,11 +8,14 @@ import {
   hasCompleteGateTickerEnrichment,
 } from "../gate-upstream";
 import { fetchGateCanonicalDetail } from "./gate";
+import { computeAvgFundingRates } from "../search";
 
 const originalFetch = globalThis.fetch;
+const originalDateNow = Date.now;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  Date.now = originalDateNow;
 });
 
 async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
@@ -37,14 +40,19 @@ describe("Gate detail cancellation and timeout", () => {
       if (text.includes("candlesticks")) {
         return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10 }]);
       }
-      return Response.json([{ t: 1, r: "0.001" }]);
+      return Response.json(Array.from({ length: 1000 }, (_, index) => ({
+        t: Math.floor(Date.now() / 1000) - index * 3_600,
+        r: "0.001",
+      })));
     }) as typeof fetch;
 
-    await expect(fetchGateCanonicalDetail("BTC", "1d", 28_800)).resolves.toMatchObject({
+    const detail = await fetchGateCanonicalDetail("BTC", "1d", 28_800);
+    expect(detail).toMatchObject({
       symbol: "BTC",
       candles: [{ open: "1" }],
-      fundingHistory: [{ fundingRate: 0.001 }],
     });
+    expect(detail.fundingHistory.length).toBeGreaterThan(0);
+    expect(detail.fundingHistory.every((item) => item.fundingRate === 0.001)).toBe(true);
     expect(urls.some((url) => url.startsWith("/api/gate/"))).toBe(true);
   });
 
@@ -200,6 +208,28 @@ describe("Gate direct-first transport", () => {
 
     await expect(getGateTickers()).resolves.toEqual([]);
   });
+
+  test("retains a valid zero live funding rate but drops a blank rate", async () => {
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("/tickers")) {
+        return Response.json([
+          { contract: "BTC_USDT", funding_rate: "0", funding_rate_indicative: "", mark_price: "100", index_price: "100", total_size: "1", volume_24h_settle: "1", last: "100" },
+          { contract: "ETH_USDT", funding_rate: "", funding_rate_indicative: "0.1", mark_price: "100", index_price: "100", total_size: "1", volume_24h_settle: "1", last: "100" },
+        ]);
+      }
+      if (text.includes("/contracts")) {
+        return Response.json([
+          { name: "BTC_USDT", funding_interval: 28_800, type: "Futures", in_delisting: false },
+          { name: "ETH_USDT", funding_interval: 28_800, type: "Futures", in_delisting: false },
+        ]);
+      }
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+
+    const rates = await getAllFundingRates();
+    expect(rates.map((rate) => [rate.coin, rate.fundingRate])).toEqual([["BTC", "0"]]);
+  });
 });
 
 describe("Gate batch latest settlements", () => {
@@ -279,5 +309,188 @@ describe("Gate batch latest settlements", () => {
     expect(result.get("BTC_USDT")).toEqual([{ time: 3000, fundingRate: "0.3" }]);
     expect(urls).toHaveLength(2);
     expect(urls.every((url) => url.startsWith("https://api.gateio.ws/"))).toBe(true);
+  });
+});
+
+describe("Gate funding history pagination", () => {
+  const nowMs = 1_700_000_000_000;
+  const nowSeconds = Math.floor(nowMs / 1000);
+
+  test("uses the time window rather than the current interval for 8h and 1h schedules", async () => {
+    Date.now = () => nowMs;
+    const requests: URL[] = [];
+    const rows = Array.from({ length: 721 }, (_, index) => ({
+      t: nowSeconds - index * 3_600,
+      r: String(index),
+    }));
+    globalThis.fetch = mock(async (url) => {
+      requests.push(new URL(String(url)));
+      return Response.json(rows);
+    }) as typeof fetch;
+
+    const current = await getFundingHistoryForDays("BTC", 30, 28_800, undefined, true);
+    const historical = await getFundingHistoryForDays("BTC", 30, 3_600);
+
+    expect(current).toHaveLength(721);
+    expect(historical).toHaveLength(721);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.searchParams.get("limit")).toBe("1000");
+      expect(request.searchParams.get("from")).toBe(String(nowSeconds - 90 * 24 * 60 * 60));
+      expect(request.searchParams.get("to")).toBe(String(nowSeconds));
+    }
+    expect(current[0].time).toBe(historical[0].time);
+    expect(current[0].time).toBe((nowSeconds - 720 * 3_600) * 1000);
+  });
+
+  test("paginates full pages, removes repeated boundaries, and sorts without zero fill", async () => {
+    Date.now = () => nowMs;
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return Response.json(Array.from({ length: 1000 }, (_, index) => ({
+          t: nowSeconds - index * 3_600,
+          r: String(index + 1),
+        })));
+      }
+      return Response.json([
+        { t: nowSeconds - 999 * 3_600, r: "duplicate" },
+        ...Array.from({ length: 500 }, (_, index) => ({
+          t: nowSeconds - (1000 + index) * 3_600,
+          r: String(index + 1001),
+        })),
+      ]);
+    }) as typeof fetch;
+
+    const history = await getFundingHistoryForDays("BTC", 100, 28_800);
+
+    expect(calls).toBe(2);
+    expect(history).toHaveLength(1500);
+    expect(history[0].time).toBe((nowSeconds - 1499 * 3_600) * 1000);
+    expect(history.at(-1)?.time).toBe(nowMs);
+    expect(history.some((item) => item.fundingRate === "0")).toBe(false);
+  });
+
+  test("stops at the cutoff and honors abort", async () => {
+    Date.now = () => nowMs;
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      return Response.json(Array.from({ length: 1000 }, (_, index) => ({
+        t: nowSeconds - index * 3_600,
+        r: "0.1",
+      })));
+    }) as typeof fetch;
+
+    const history = await getFundingHistoryForDays("BTC", 1, 3_600);
+    expect(history).toHaveLength(25);
+    expect(calls).toBe(1);
+
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled", "AbortError");
+    controller.abort(reason);
+    await expect(getFundingHistoryForDays("BTC", 30, 3_600, controller.signal)).rejects.toBe(reason);
+    expect(calls).toBe(1);
+  });
+
+  test("fails closed on uncovered short pages but preserves partial non-strict history", async () => {
+    Date.now = () => nowMs;
+    globalThis.fetch = mock(async () => Response.json([{ t: nowSeconds, r: "0.1" }])) as typeof fetch;
+
+    await expect(getFundingHistoryForDays("BTC", 30, 3_600, undefined, true)).resolves.toEqual([]);
+    await expect(getFundingHistoryForDays("BTC", 30, 3_600)).resolves.toEqual([
+      { time: nowMs, fundingRate: "0.1" },
+    ]);
+  });
+
+  test("enforces the maximum request budget", async () => {
+    Date.now = () => nowMs;
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      const pageStart = nowSeconds - (calls + 1) * 1_000;
+      calls += 1;
+      return Response.json(Array.from({ length: 1000 }, (_, index) => ({
+        t: pageStart - index,
+        r: "0.1",
+      })));
+    }) as typeof fetch;
+
+    await expect(getFundingHistoryForDays("BTC", 100_000, 3_600, undefined, true)).resolves.toEqual([]);
+    expect(calls).toBe(30);
+  });
+
+  test("fails closed when the oldest retained row is two days after the cutoff", async () => {
+    Date.now = () => nowMs;
+    const gridSeconds = 8 * 3_600;
+    const rows = Array.from({ length: 84 }, (_, index) => ({
+      t: nowSeconds - index * gridSeconds,
+      r: "0.0001",
+    }));
+    globalThis.fetch = mock(async () => Response.json(rows)) as typeof fetch;
+
+    await expect(getFundingHistoryForDays("BTC", 30, 28_800, undefined, true)).resolves.toEqual([]);
+  });
+
+  test("retains a settlement at the exact cutoff for shared half-open statistics", async () => {
+    Date.now = () => nowMs;
+    const cutoff = nowSeconds - 30 * 24 * 60 * 60;
+    globalThis.fetch = mock(async () => Response.json([
+      { t: cutoff + 3_600, r: "0.1" },
+      { t: cutoff, r: "0.2" },
+    ])) as typeof fetch;
+
+    await expect(getFundingHistoryForDays("BTC", 30, 28_800, undefined, true)).resolves.toEqual([
+      { time: cutoff * 1000, fundingRate: "0.2" },
+      { time: (cutoff + 3_600) * 1000, fundingRate: "0.1" },
+    ]);
+  });
+
+  test("retains an unaligned cutoff proof settlement for Search coverage", async () => {
+    Date.now = () => nowMs;
+    const cutoff = nowSeconds - 30 * 24 * 60 * 60;
+    globalThis.fetch = mock(async () => Response.json([
+      { t: cutoff + 3_600, r: "0.1" },
+      { t: cutoff - 1, r: "0.2" },
+    ])) as typeof fetch;
+
+    const history = await getFundingHistoryForDays("BTC", 30, 28_800, undefined, true);
+    expect(history).toEqual([
+      { time: (cutoff - 1) * 1000, fundingRate: "0.2" },
+      { time: (cutoff + 3_600) * 1000, fundingRate: "0.1" },
+    ]);
+    expect(computeAvgFundingRates(history, 28_800, nowMs, { requireWindowCoverage: true }).avg30d)
+      .toBeCloseTo(0.1 * (8 * 3_600_000) / (30 * 24 * 3_600_000), 12);
+  });
+
+  test("strict coverage ignores invalid proof rows but retains a valid zero boundary", async () => {
+    Date.now = () => nowMs;
+    const cutoff = nowSeconds - 30 * 24 * 60 * 60;
+    let calls = 0;
+    globalThis.fetch = mock(async () => {
+      calls += 1;
+      return Response.json(calls === 1
+        ? [{ t: cutoff + 3_600, r: "0.1" }, { t: cutoff, r: "" }, { t: cutoff - 1 }]
+        : [{ t: cutoff + 3_600, r: "0.1" }, { t: cutoff, r: 0 }]);
+    }) as typeof fetch;
+
+    await expect(getFundingHistoryForDays("BTC", 30, 28_800, undefined, true)).resolves.toEqual([]);
+    await expect(getFundingHistoryForDays("BTC", 30, 28_800, undefined, true)).resolves.toEqual([
+      { time: cutoff * 1000, fundingRate: "0" },
+      { time: (cutoff + 3_600) * 1000, fundingRate: "0.1" },
+    ]);
+  });
+
+  test("strictly fails when retained funding is far shorter than the requested window", async () => {
+    // A brand-new venue market keeps only a few days of funding; a 30-day
+    // detail window must not present a five-day average as a thirty-day one.
+    Date.now = () => nowMs;
+    const rows = Array.from({ length: 15 }, (_, index) => ({
+      t: nowSeconds - index * 8 * 3_600,
+      r: "0.0001",
+    }));
+    globalThis.fetch = mock(async () => Response.json(rows)) as typeof fetch;
+
+    await expect(getFundingHistoryForDays("BTC", 30, 28_800, undefined, true)).resolves.toEqual([]);
   });
 });

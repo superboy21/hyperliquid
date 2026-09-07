@@ -7,15 +7,12 @@ import {
   fetchL2BookBestBidAsk,
   getCandleSnapshot as hlGetCandleSnapshot,
   getFundingHistoryForDays as hlGetFundingHistoryForDays,
-  getAverageFundingRatesByInterval as hlGetAverageFundingRatesByInterval,
   type FundingHistoryItem as HlFundingHistoryItem,
   type CandleSnapshotItem as HlCandleSnapshotItem,
 } from "./hyperliquid";
 import {
   getAllFundingRates as gateGetAllFundingRates,
   getCandleSnapshot as gateGetCandleSnapshot,
-  getFundingHistoryForDays as gateGetFundingHistoryForDays,
-  getAverageFundingRatesByInterval as gateGetAverageFundingRatesByInterval,
   getFundingHistory as gateGetFundingHistory,
   type FundingHistoryItem as GateFundingHistoryItem,
   type CandleSnapshotItem as GateCandleSnapshotItem,
@@ -39,7 +36,6 @@ import {
   fetchGateSearchRates,
 } from "@/lib/adapters/gate";
 import {
-  computeOkxAverageFundingRatesByInterval,
   fetchOkxCanonicalDetail,
   fetchOkxCanonicalRates,
   mapOkxDetailToMetrics,
@@ -53,6 +49,7 @@ import {
   fetchBybitCanonicalRates,
 } from "@/lib/adapters/bybit";
 import type { CanonicalFundingRateRow } from "@/lib/types";
+import { calculateHistoricalFundingStatistics } from "./funding-statistics";
 
 // ==================== Interfaces ====================
 
@@ -63,6 +60,7 @@ export interface SearchExchangeRate {
   rawSymbol?: string;
   marketId?: number;
   fundingRate: number;
+  predictedFundingRate?: number | null;
   markPrice: number;
   indexPrice: number | null;
   lastPrice: number;
@@ -229,45 +227,78 @@ function computeBidAskSpread(
   return null;
 }
 
-// ==================== Avg Funding Rate Calculation ====================
+// ==================== Historical Funding Statistics ====================
 
-function computeAvgFundingRates(
-  fundingHistory: { time: number; fundingRate: string }[],
-): { avg7d: number | null; avg30d: number | null } {
-  // Filter to last 30 days first (same as BinanceFundingMonitor.tsx:374-376)
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const fundingHistory30d = fundingHistory.filter((item) => item.time >= thirtyDaysAgo);
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-  const hourlyFundingRates30d = getAverageFundingRatesByInterval(fundingHistory30d, "1h");
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const recent7d = hourlyFundingRates30d.filter((item) => item.bucketStartTime >= sevenDaysAgo);
-
-  const avg7d = recent7d.length > 0
-    ? recent7d.reduce((sum, item) => sum + item.averageFundingRate, 0) / recent7d.length
-    : null;
-
-  const avg30d = hourlyFundingRates30d.length > 0
-    ? hourlyFundingRates30d.reduce((sum, item) => sum + item.averageFundingRate, 0) / hourlyFundingRates30d.length
-    : null;
-
-  return { avg7d, avg30d };
+function parseSearchFundingRate(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-// ==================== Avg 2D Funding Rate Calculation ====================
+export interface HistoricalFundingAverages {
+  avg2d: number | null;
+  avg7d: number | null;
+  avg30d: number | null;
+}
 
-function computeAvgFundingRate2d(
-  fundingHistory: { time: number; fundingRate: string }[],
+export interface HistoricalFundingAverageOptions {
+  /** Require an older/equal boundary sample for every requested window. */
+  requireWindowCoverage?: boolean;
+}
+
+/**
+ * Returns the legacy reference-period rates for the search/strategy
+ * consumers.  Each window is evaluated against the same captured `nowMs` and
+ * the returned value is expressed as one current settlement interval.  The
+ * consumer's existing interval-based annualization therefore remains valid.
+ */
+export function computeAvgFundingRates(
+  fundingHistory: { time: number; fundingRate: string | number }[],
+  fundingIntervalSeconds: number,
+  nowMs: number = Date.now(),
+  options: HistoricalFundingAverageOptions = {},
+): HistoricalFundingAverages {
+  const referenceIntervalMs = fundingIntervalSeconds * 1000;
+  const toReferenceRate = (durationMs: number): number | null => {
+    const startTime = nowMs - durationMs;
+    const validHistory = fundingHistory.flatMap((item) => {
+      const rate = parseSearchFundingRate(item.fundingRate);
+      return rate === null ? [] : [{ time: item.time, rate }];
+    });
+    if (options.requireWindowCoverage) {
+      const hasBoundary = validHistory.some((item) => {
+        const time = Number(item.time);
+        return Number.isFinite(time) && time <= startTime;
+      });
+      if (!hasBoundary) return null;
+    }
+    const statistics = calculateHistoricalFundingStatistics(
+      validHistory,
+      startTime,
+      nowMs,
+      referenceIntervalMs,
+    );
+    return statistics?.referenceIntervalRate ?? null;
+  };
+
+  return {
+    avg2d: toReferenceRate(2 * DAY_MS),
+    avg7d: toReferenceRate(7 * DAY_MS),
+    avg30d: toReferenceRate(30 * DAY_MS),
+  };
+}
+
+/** Backwards-compatible named helper for callers that only need the 2d value. */
+export function computeAvgFundingRate2d(
+  fundingHistory: { time: number; fundingRate: string | number }[],
+  fundingIntervalSeconds: number = 3600,
+  nowMs: number = Date.now(),
 ): number | null {
-  if (fundingHistory.length === 0) return null;
-
-  // Get daily bucket averages
-  const dailyRates = getAverageFundingRatesByInterval(fundingHistory, "1d");
-
-  // Return the average of the last 2 daily buckets
-  if (dailyRates.length === 0) return null;
-
-  const lastTwoBuckets = dailyRates.slice(-2);
-  return lastTwoBuckets.reduce((sum, item) => sum + item.averageFundingRate, 0) / lastTwoBuckets.length;
+  return computeAvgFundingRates(fundingHistory, fundingIntervalSeconds, nowMs).avg2d;
 }
 
 // ==================== Fetch All Rates ====================
@@ -391,6 +422,7 @@ async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
     symbol: row.symbol,
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
+    predictedFundingRate: row.predictedFundingRate ?? null,
     markPrice: row.markPrice,
     indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
@@ -414,6 +446,7 @@ export function mapBitgetSearchRate(row: CanonicalFundingRateRow): SearchExchang
     symbol: row.symbol,
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
+    predictedFundingRate: row.predictedFundingRate ?? null,
     markPrice: row.markPrice,
     indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
@@ -442,6 +475,7 @@ export function mapBybitSearchRate(row: CanonicalFundingRateRow): SearchExchange
     symbol: row.symbol,
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
+    predictedFundingRate: row.predictedFundingRate ?? null,
     markPrice: row.markPrice,
     indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
@@ -507,12 +541,15 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
     }
   }
 
-  return lighterRates.map((entry: LighterFundingEntry) => {
+  return lighterRates
+    .filter((entry) => parseSearchFundingRate(entry.rate) !== null)
+    .map((entry: LighterFundingEntry) => {
     const stat = statsMap.get(entry.symbol);
     const orderDetails = orderBookDetailsMap.get(entry.market_id);
     const lastPrice = orderDetails?.lastPrice || parseFloat(String(stat?.last_trade_price || "0"));
     const openInterest = orderDetails?.openInterest || 0;
     const notionalValue = openInterest * lastPrice;
+    const fundingRate = parseSearchFundingRate(entry.rate);
 
     return {
       exchange: "Lighter" as const,
@@ -520,7 +557,7 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       symbol: entry.symbol || `Market ${entry.market_id}`,
       rawSymbol: entry.symbol || `Market ${entry.market_id}`,
       marketId: entry.market_id,
-      fundingRate: parseFloat(entry.rate || "0"),
+      fundingRate: fundingRate as number,
       markPrice: lastPrice,
       indexPrice: orderDetails?.indexPrice ?? null,
       lastPrice,
@@ -531,7 +568,7 @@ async function fetchLighterRates(): Promise<SearchExchangeRate[]> {
       fundingInterval: 3600,
       assetCategory: getLighterAssetCategory(entry.symbol || ""),
     };
-  });
+    });
 }
 
 // ==================== Filter by Keyword ====================
@@ -550,6 +587,8 @@ export function filterByKeyword(
 export interface SearchDetailDependencies {
   fetchBitgetCanonicalDetail: typeof fetchBitgetCanonicalDetail;
   fetchBybitCanonicalDetail: typeof fetchBybitCanonicalDetail;
+  fetchLighter?: typeof lighterFetch;
+  now?: () => number;
 }
 
 export interface SearchDetailOptions { priority?: "interactive" | "normal" | "background" }
@@ -557,6 +596,8 @@ export interface SearchDetailOptions { priority?: "interactive" | "normal" | "ba
 const SEARCH_DETAIL_DEPENDENCIES: SearchDetailDependencies = {
   fetchBitgetCanonicalDetail,
   fetchBybitCanonicalDetail,
+  fetchLighter: lighterFetch,
+  now: Date.now,
 };
 
 export async function fetchDetailForSymbol(
@@ -571,7 +612,7 @@ export async function fetchDetailForSymbol(
     case "Gate.io":
       return fetchGateioDetail(rate.symbol, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Binance":
-      return fetchBinanceDetail(rate.symbol, rate.bestBid, rate.bestAsk, signal);
+      return fetchBinanceDetail(rate.symbol, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "OKX":
       return fetchOkxDetail(rate.rawSymbol ?? `${rate.symbol}-USDT-SWAP`, rate.fundingInterval, rate.bestBid, rate.bestAsk, signal);
     case "Bitget":
@@ -579,7 +620,15 @@ export async function fetchDetailForSymbol(
     case "Bybit":
       return fetchBybitDetail(rate, signal, dependencies.fetchBybitCanonicalDetail);
     case "Lighter":
-      return fetchLighterDetail(rate.marketId, rate.symbol, rate.bestBid, rate.bestAsk, signal);
+      return fetchLighterDetail(
+        rate.marketId,
+        rate.symbol,
+        rate.bestBid,
+        rate.bestAsk,
+        signal,
+        dependencies.fetchLighter ?? lighterFetch,
+        dependencies.now ?? Date.now,
+      );
   }
 }
 
@@ -628,11 +677,11 @@ async function fetchBitgetDetail(
     fundingRate: String(item.fundingRate),
   }));
   const historicalVolatility = computeHistoricalVolatility(detail.candles);
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, rate.fundingInterval);
 
   return {
     lastSettlementRate: detail.lastSettlementRate,
-    avgFundingRate2d: computeAvgFundingRate2d(fundingHistory),
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: detail.bidAskSpread ?? computeBidAskSpread(rate.bestBid, rate.bestAsk),
     avgFundingRate7d: avg7d,
@@ -661,11 +710,11 @@ async function fetchBybitDetail(
     fundingRate: String(item.fundingRate),
   }));
   const historicalVolatility = computeHistoricalVolatility(detail.candles);
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, rate.fundingInterval);
 
   return {
     lastSettlementRate: detail.lastSettlementRate,
-    avgFundingRate2d: computeAvgFundingRate2d(fundingHistory),
+    avgFundingRate2d: avg2d,
     historicalVolatility,
     bidAskSpread: detail.bidAskSpread ?? computeBidAskSpread(rate.bestBid, rate.bestAsk),
     avgFundingRate7d: avg7d,
@@ -692,8 +741,7 @@ async function fetchHyperliquidDetail(
   }
 
   const historicalVolatility = computeHistoricalVolatility(candles);
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
-  const avg2d = computeAvgFundingRate2d(fundingHistory);
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, 3600);
   const latestSettledRate = fundingHistory.length > 0
     ? Number.parseFloat(fundingHistory[fundingHistory.length - 1]?.fundingRate ?? "")
     : Number.NaN;
@@ -724,8 +772,7 @@ async function fetchGateioDetail(
     fundingRate: String(item.fundingRate),
   }));
   const historicalVolatility = computeHistoricalVolatility(candles);
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
-  const avg2d = computeAvgFundingRate2d(fundingHistory);
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, fundingIntervalSeconds);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
@@ -741,6 +788,7 @@ async function fetchGateioDetail(
 
 async function fetchBinanceDetail(
   symbol: string,
+  fundingIntervalSeconds: number,
   bestBid?: number,
   bestAsk?: number,
   signal?: AbortSignal,
@@ -751,11 +799,8 @@ async function fetchBinanceDetail(
     time: item.timestamp,
     fundingRate: String(item.fundingRate),
   }));
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const fundingHistory30d = fundingHistory.filter((item) => item.time >= thirtyDaysAgo);
   const historicalVolatility = computeHistoricalVolatility(candles);
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory30d);
-  const avg2d = computeAvgFundingRate2d(fundingHistory30d);
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, fundingIntervalSeconds);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
@@ -780,21 +825,13 @@ async function fetchOkxDetail(
     await fetchOkxCanonicalDetail(rawSymbol, "1d", fundingIntervalSeconds, signal),
   );
   const fundingHistory = detail.fundingHistory
-    .filter((item) => item.timestamp >= Date.now() - 30 * 24 * 60 * 60 * 1000)
     .map((item) => ({
       time: item.timestamp,
       fundingRate: String(item.fundingRate),
     }));
   const candles = detail.candles.map((item) => ({ close: item.close }));
   const historicalVolatility = computeHistoricalVolatility(candles);
-  const avg2dBuckets = computeOkxAverageFundingRatesByInterval(detail.fundingHistory, "1d");
-  const avg2d =
-    avg2dBuckets.length > 0
-      ? avg2dBuckets
-          .slice(-2)
-          .reduce((sum, item) => sum + item.averageFundingRate, 0) / Math.min(avg2dBuckets.length, 2)
-      : null;
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, fundingIntervalSeconds);
 
   return {
     lastSettlementRate: Number.isFinite(detail.lastSettlementRate) ? detail.lastSettlementRate : null,
@@ -808,18 +845,41 @@ async function fetchOkxDetail(
 
 // ==================== Lighter Detail ====================
 
+const LIGHTER_DETAIL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+export const LIGHTER_DETAIL_FUNDING_COUNT = 721;
+
+/** Build Lighter detail query strings with the API's mixed timestamp units. */
+export function buildLighterDetailQueries(
+  marketId: number,
+  nowMs: number,
+): { candles: string; fundings: string } {
+  const startMs = nowMs - LIGHTER_DETAIL_WINDOW_MS;
+  // Fetch one hourly settlement before the requested window so coverage can be
+  // proven even when the 30-day boundary falls between exchange settlements.
+  const fundingStartSeconds = Math.floor((startMs - 60 * 60 * 1000) / 1000);
+  const endSeconds = Math.floor(nowMs / 1000);
+  return {
+    candles: `market_id=${marketId}&resolution=1d&start_timestamp=${startMs}&end_timestamp=${nowMs}&count_back=30`,
+    fundings: `market_id=${marketId}&resolution=1h&start_timestamp=${fundingStartSeconds}&end_timestamp=${endSeconds}&count_back=${LIGHTER_DETAIL_FUNDING_COUNT}`,
+  };
+}
+
+export const buildLighterDetailQuery = buildLighterDetailQueries;
+
 async function fetchLighterDetail(
   marketId: number | undefined,
   symbol: string,
   bestBid?: number,
   bestAsk?: number,
   signal?: AbortSignal,
+  fetchLighter: typeof lighterFetch = lighterFetch,
+  now: () => number = Date.now,
 ): Promise<DetailResult> {
   let resolvedMarketId = marketId ?? null;
 
 if (resolvedMarketId === null) {
     try {
-      const fundingRes = await lighterFetch("funding-rates", "", { signal });
+      const fundingRes = await fetchLighter("funding-rates", "", { signal });
       if (fundingRes.ok) {
         const fundingData = await fundingRes.json();
         const entry = (fundingData.funding_rates || []).find(
@@ -845,13 +905,13 @@ if (resolvedMarketId === null) {
     };
   }
 
-  const nowMs = Date.now();
-  const thirtyDaysAgoMs = nowMs - 30 * 24 * 60 * 60 * 1000;
+  const nowMs = now();
+  const queries = buildLighterDetailQueries(resolvedMarketId, nowMs);
 
   const [candlesRes, fundingRes, orderBookRes] = await Promise.allSettled([
-    lighterFetch("candles", `market_id=${resolvedMarketId}&resolution=1d&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=30`, { signal }),
-    lighterFetch("fundings", `market_id=${resolvedMarketId}&resolution=1h&start_timestamp=${thirtyDaysAgoMs}&end_timestamp=${nowMs}&count_back=720`, { signal }),
-    lighterFetch("orderBookOrders", `market_id=${resolvedMarketId}&limit=1`, { signal }),
+    fetchLighter("candles", queries.candles, { signal }),
+    fetchLighter("fundings", queries.fundings, { signal }),
+    fetchLighter("orderBookOrders", `market_id=${resolvedMarketId}&limit=1`, { signal }),
   ]);
 
   if (signal?.aborted) {
@@ -876,17 +936,19 @@ if (resolvedMarketId === null) {
     const fundingData = await fundingRes.value.json();
     const fundingArray: LighterFundingEntryRaw[] = fundingData.fundings || fundingData;
     if (Array.isArray(fundingArray)) {
-      fundingHistory = fundingArray.map((item) => {
-        const rate = parseFloat(item.rate || "0");
+      fundingHistory = fundingArray.flatMap((item) => {
+        const rate = parseSearchFundingRate(item.rate);
+        const timestamp = Number(item.timestamp);
+        if (rate === null || !Number.isFinite(timestamp)) return [];
         const direction = item.direction || "long";
         const signedRate = direction === "short" ? -rate : rate;
-        return {
-          time: item.timestamp * 1000,
+        return [{
+          time: timestamp * 1000,
           fundingRate: String(signedRate),
           rate: signedRate,
-          timestamp: item.timestamp,
+          timestamp,
           direction,
-        };
+        }];
       });
     }
   }
@@ -915,8 +977,11 @@ if (resolvedMarketId === null) {
   }
 
   const historicalVolatility = computeHistoricalVolatility(candles);
-  const { avg7d, avg30d } = computeAvgFundingRates(fundingHistory);
-  const avg2d = computeAvgFundingRate2d(fundingHistory);
+  // Lighter's history is hourly percentage points; keep the legacy hourly
+  // reference unit used by its UI/strategy consumers.
+  const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, 3600, nowMs, {
+    requireWindowCoverage: true,
+  });
 
   // Derive latest settled rate from the funding history we already fetched
   // (matches the normalization in fetchLatestSettledFundingRateInWindow: /12.5).

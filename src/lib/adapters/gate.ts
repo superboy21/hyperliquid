@@ -38,6 +38,7 @@ export interface GateSearchRate {
   symbol: string;
   rawSymbol: string;
   fundingRate: number;
+  predictedFundingRate: number | null;
   markPrice: number;
   indexPrice: number | null;
   lastPrice: number;
@@ -53,27 +54,40 @@ export interface GateSearchRate {
 
 async function fetchNativeCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
   const rates = await getAllFundingRates();
-  return rates.map((rate) => ({
-    exchange: "gateio",
-    transportMode: "native",
-    symbol: rate.coin,
-    rawSymbol: `${rate.coin}_USDT`,
-    marketKey: `${rate.coin}_USDT`,
-    fundingRate: Number.parseFloat(rate.fundingRateIndicative || rate.fundingRate),
-    predictedFundingRate: Number.parseFloat(rate.fundingRateIndicative || rate.fundingRate),
-    lastSettlementRate: null,
-    markPrice: Number.parseFloat(rate.markPrice),
-    indexPrice: Number.parseFloat(rate.indexPrice),
-    lastPrice: Number.parseFloat(rate.lastPrice),
-    change24h: Number.parseFloat(rate.change24h),
-    quoteVolume: Number.parseFloat(rate.dayVolume),
-    openInterest: Number.parseFloat(rate.openInterest),
-    notionalValue: Number.parseFloat(rate.notionalValue) || 0,
-    fundingIntervalSeconds: rate.fundingInterval || 28800,
-    assetCategory: rate.assetCategory || "其他",
-    bestBid: rate.bestBid ? Number.parseFloat(rate.bestBid) : null,
-    bestAsk: rate.bestAsk ? Number.parseFloat(rate.bestAsk) : null,
-  }));
+  return rates.flatMap((rate) => {
+    const fundingRate = parseLiveFundingRate(rate.fundingRate);
+    if (fundingRate === null) return [];
+    const predictedFundingRate = parseLiveFundingRate(rate.fundingRateIndicative);
+    return [{
+      exchange: "gateio",
+      transportMode: "native",
+      symbol: rate.coin,
+      rawSymbol: `${rate.coin}_USDT`,
+      marketKey: `${rate.coin}_USDT`,
+      fundingRate,
+      predictedFundingRate,
+      lastSettlementRate: null,
+      markPrice: Number.parseFloat(rate.markPrice),
+      indexPrice: Number.parseFloat(rate.indexPrice),
+      lastPrice: Number.parseFloat(rate.lastPrice),
+      change24h: Number.parseFloat(rate.change24h),
+      quoteVolume: Number.parseFloat(rate.dayVolume),
+      openInterest: Number.parseFloat(rate.openInterest),
+      notionalValue: Number.parseFloat(rate.notionalValue) || 0,
+      fundingIntervalSeconds: rate.fundingInterval || 28800,
+      assetCategory: rate.assetCategory || "其他",
+      bestBid: rate.bestBid ? Number.parseFloat(rate.bestBid) : null,
+      bestAsk: rate.bestAsk ? Number.parseFloat(rate.bestAsk) : null,
+    }];
+  });
+}
+
+function parseLiveFundingRate(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export async function fetchGateCanonicalRates(): Promise<CanonicalFundingRateRow[]> {
@@ -107,6 +121,7 @@ export async function fetchGateSearchRates(): Promise<GateSearchRate[]> {
     symbol: row.symbol,
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
+    predictedFundingRate: row.predictedFundingRate ?? null,
     markPrice: row.markPrice,
     indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
@@ -161,7 +176,7 @@ export async function fetchGateCanonicalDetail(
   // direct-first transport policy.
   const [candles, history] = await Promise.all([
     getCandleSnapshot(symbol, interval, 30, signal),
-    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal),
+    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal, true),
   ]);
   throwIfAborted(signal);
 
@@ -169,7 +184,7 @@ export async function fetchGateCanonicalDetail(
     timestamp: item.time,
     fundingRate: Number.parseFloat(item.fundingRate),
   }));
-  const latest = history.length > 0 ? Number.parseFloat(history[0].fundingRate) : null;
+  const latest = history.length > 0 ? Number.parseFloat(history[history.length - 1].fundingRate) : null;
   const bidAskSpread =
     bestBid != null && bestAsk != null && bestBid > 0 && bestAsk > 0
       ? ((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 100

@@ -22,6 +22,9 @@ function canonical(exchange: CanonicalFundingRateRow["exchange"], symbol: string
 }
 
 let bybitFails = false;
+let lighterFundingRate = "0.0001";
+let gatePredictedFundingRate: number | null = 0.0002;
+let okxPredictedFundingRate: number | null = 0.0003;
 
 // Exchange data sources consumed by search.ts's fetchAllRates. Each is mocked
 // so the integration test never touches the network; the Bybit mock doubles
@@ -34,7 +37,7 @@ mock.module("./hyperliquid", () => ({
 
 mock.module("@/lib/adapters/gate", () => ({
   fetchGateSearchRates: async () => [
-    { exchange: "Gate.io", exchangeColor: "yellow", symbol: "BTC_USDT", rawSymbol: "BTC_USDT", fundingRate: 0.0001, markPrice: 100, indexPrice: 100, lastPrice: 100, change24h: 0, quoteVolume: 1, openInterest: 1, notionalValue: 100, fundingInterval: 28800, assetCategory: "Crypto" },
+    { exchange: "Gate.io", exchangeColor: "yellow", symbol: "BTC_USDT", rawSymbol: "BTC_USDT", fundingRate: 0.0001, predictedFundingRate: gatePredictedFundingRate, markPrice: 100, indexPrice: 100, lastPrice: 100, change24h: 0, quoteVolume: 1, openInterest: 1, notionalValue: 100, fundingInterval: 28800, assetCategory: "Crypto" },
   ],
 }));
 
@@ -45,7 +48,7 @@ mock.module("@/lib/adapters/binance", () => ({
 }));
 
 mock.module("@/lib/adapters/okx", () => ({
-  fetchOkxCanonicalRates: async () => [canonical("okx", "BTC", "BTC-USDT-SWAP")],
+  fetchOkxCanonicalRates: async () => [{ ...canonical("okx", "BTC", "BTC-USDT-SWAP"), predictedFundingRate: okxPredictedFundingRate }],
 }));
 
 mock.module("@/lib/adapters/bitget", () => ({
@@ -62,7 +65,7 @@ mock.module("@/lib/adapters/bybit", () => ({
 mock.module("./lighter", () => ({
   lighterFetch: async (path: string) => {
     if (path === "funding-rates") {
-      return { ok: true, json: async () => ({ funding_rates: [{ exchange: "lighter", symbol: "BTC", market_id: 1, rate: "0.0001" }] }) };
+      return { ok: true, json: async () => ({ funding_rates: [{ exchange: "lighter", symbol: "BTC", market_id: 1, rate: lighterFundingRate }] }) };
     }
     if (path === "exchangeStats") {
       return { ok: true, json: async () => ({ order_book_stats: [] }) };
@@ -112,6 +115,33 @@ describe("fetchAllRates integration", () => {
     } finally {
       bybitFails = false;
       console.error = originalError;
+    }
+  });
+
+  test("drops a Lighter market when its live funding rate is unavailable", async () => {
+    lighterFundingRate = "";
+    try {
+      const rates = await fetchAllRates();
+      expect(rates.some((rate) => rate.exchange === "Lighter")).toBe(false);
+    } finally {
+      lighterFundingRate = "0.0001";
+    }
+  });
+
+  test("threads Gate and OKX predicted funding through Search and preserves null", async () => {
+    const rates = await fetchAllRates();
+    expect(rates.find((rate) => rate.exchange === "Gate.io")?.predictedFundingRate).toBe(0.0002);
+    expect(rates.find((rate) => rate.exchange === "OKX")?.predictedFundingRate).toBe(0.0003);
+
+    gatePredictedFundingRate = null;
+    okxPredictedFundingRate = null;
+    try {
+      const unavailable = await fetchAllRates();
+      expect(unavailable.find((rate) => rate.exchange === "Gate.io")?.predictedFundingRate).toBeNull();
+      expect(unavailable.find((rate) => rate.exchange === "OKX")?.predictedFundingRate).toBeNull();
+    } finally {
+      gatePredictedFundingRate = 0.0002;
+      okxPredictedFundingRate = 0.0003;
     }
   });
 });

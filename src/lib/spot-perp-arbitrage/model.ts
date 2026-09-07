@@ -149,7 +149,7 @@ export function toTableRow(
     change24h: finite(source.change24h),
     premium,
     premiumIndex: null,
-    predictedFundingRate: finite(source.fundingRate),
+    predictedFundingRate: finite(source.predictedFundingRate),
     quoteTurnover24h: finite(source.quoteVolume),
     openInterestNotional: finite(source.notionalValue),
     historicalVolatility: finite(detail.historicalVolatility) ?? finite(source.historicalVolatility),

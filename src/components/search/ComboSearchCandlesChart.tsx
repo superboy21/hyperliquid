@@ -39,13 +39,14 @@ interface CandleDatum {
 
 /**
  * Funding lane datum: the derived difference (value = annualized % × 100,
- * null when the bucket is unavailable) plus each leg's raw observation, or
+ * null when the bucket is unavailable) plus each leg's interval-cumulative observation, or
  * null when that leg had no actual settlement in the bucket (including the
  * 4h/1h/5m chart-only temporary zero). Carried into the ECharts datum so the
  * tooltip can read per-leg metadata off the hovered point.
  */
 interface FundingDatum {
   value: number | null;
+  /** Difference of the legs' interval-cumulative settled returns. */
   rawRate: number;
   firstFunding: ComboFundingLegObservation | null;
   secondFunding: ComboFundingLegObservation | null;
@@ -112,7 +113,7 @@ function formatChangePercent(open: number, close: number): string {
 }
 
 /**
- * One per-leg funding row: annualized (2 decimals) then raw (4 decimals), both
+ * One per-leg funding row: annualized (2 decimals) then interval cumulative (4 decimals), both
  * stored decimals multiplied by 100, positives prefixed with "+", true zero
  * without a plus. A null observation renders as no real settlement.
  */
@@ -122,7 +123,7 @@ function formatLegFundingRow(label: string, observation: ComboFundingLegObservat
   const raw = observation.rate * 100;
   const annualizedStr = `${annualized > 0 ? "+" : ""}${annualized.toFixed(2)}%`;
   const rawStr = `${raw > 0 ? "+" : ""}${raw.toFixed(4)}%`;
-  return `${label}: ${annualizedStr}（${rawStr}）`;
+  return `${label}: ${annualizedStr}（区间累计费率 ${rawStr}）`;
 }
 
 function formatVolume(value: number): string {
@@ -365,7 +366,7 @@ export default function ComboSearchCandlesChart({
         const rawStr = rawRate !== undefined && Number.isFinite(rawRate)
           ? `${rawRate > 0 ? "+" : ""}${(rawRate * 100).toFixed(4)}%`
           : null;
-        lines.push(`年化资金费率差: ${rawStr === null ? annualizedStr : `${annualizedStr}（${rawStr}）`}`);
+        lines.push(`年化资金费率差: ${rawStr === null ? annualizedStr : `${annualizedStr}（区间累计费率 ${rawStr}）`}`);
         // Per-leg rows only when the derived difference is rendered (both
         // actual, or a one-sided chart-only zero) — never beneath 资金费率差: 无.
         const datum = fundingItem.data as FundingDatum | undefined;

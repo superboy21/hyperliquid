@@ -61,10 +61,19 @@ export interface SingleMarketAnalytics {
   candleCloseVwap: WeightedDistributionMetric;
   candleCloseTwap: WeightedDistributionMetric;
   annualizedVolatility: AnnualizedVolatilityMetric;
-  /** Null when no funding series was supplied; an empty supplied series is an empty metric. */
+  /** Cumulative settled funding return across the visible candle window. */
   fundingRate: AverageMetric | null;
-  /** Null when no funding series was supplied; an empty supplied series is an empty metric. */
+  /** Cumulative settled funding return annualized by the funding-covered window duration. */
   fundingAnnualized: AverageMetric | null;
+  /**
+   * Timestamp of the oldest funding settlement actually observed inside the
+   * candle window, or null when funding is absent/empty. When the venue
+   * retains less funding history than the candle window, annualization uses
+   * [fundingCoverageStartTime, window end) so a partial overlay is not
+   * diluted by uncovered candles. Consumers use this to tell the user how
+   * much of the visible range actually carries funding data.
+   */
+  fundingCoverageStartTime: number | null;
 }
 
 /** Per-market source policy for quote-turnover data. */
@@ -92,6 +101,31 @@ function average(values: readonly number[]): AverageMetric {
     mean: values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length,
     count: values.length,
   };
+}
+
+interface FundingWindow {
+  startTime: number;
+  endTime: number;
+}
+
+function fundingWindow(candles: readonly SingleMarketCandleLike[]): FundingWindow | null {
+  const valid = candles.flatMap((candle) => {
+    const openTime = finiteNumber(candle.openTime);
+    const closeTime = finiteNumber(candle.closeTime);
+    return openTime !== null && closeTime !== null && closeTime > openTime
+      ? [{ openTime, closeTime }]
+      : [];
+  });
+  if (valid.length === 0) return null;
+  const startTime = Math.min(...valid.map((candle) => candle.openTime));
+  const endTime = Math.max(...valid.map((candle) => candle.closeTime));
+  return endTime > startTime ? { startTime, endTime } : null;
+}
+
+function settlementCount(value: unknown): number | null {
+  if (value === undefined) return 1;
+  const parsed = finiteNumber(value);
+  return parsed !== null && parsed > 0 ? parsed : null;
 }
 
 function emptyWeightedDistribution(count = 0, totalWeight = 0): WeightedDistributionMetric {
@@ -256,23 +290,40 @@ export function singleMarketAnalytics(
     }
   }
 
-  const actualFundingBuckets = funding?.filter((observation) => {
+  const window = fundingWindow(candles);
+  const fundingSamples = funding === undefined ? [] : funding.flatMap((observation) => {
     const time = finiteNumber(observation.time);
-    const sampleCount = observation.sampleCount === undefined ? undefined : finiteNumber(observation.sampleCount);
-    return time !== null && (sampleCount === undefined || (sampleCount !== null && sampleCount > 0));
+    const rate = finiteNumber(observation.rate);
+    const count = settlementCount(observation.sampleCount);
+    if (
+      time === null || rate === null || count === null || window === null
+      || time < window.startTime || time >= window.endTime
+    ) return [];
+    return [{ time, rate, count }];
   });
-  const fundingRate = actualFundingBuckets === undefined ? null : average(
-    actualFundingBuckets.flatMap((observation) => {
-      const rate = finiteNumber(observation.rate);
-      return rate === null ? [] : [rate];
-    }),
-  );
-  const fundingAnnualized = actualFundingBuckets === undefined ? null : average(
-    actualFundingBuckets.flatMap((observation) => {
-      const rate = finiteNumber(observation.annualizedRate);
-      return rate === null ? [] : [rate];
-    }),
-  );
+  const totalFunding = fundingSamples.reduce((sum, sample) => sum + sample.rate, 0);
+  const totalCount = fundingSamples.reduce((sum, sample) => sum + sample.count, 0);
+  // Funding history can be shorter than the visible candle range (venue
+  // retention limits). Annualize over the funding-covered sub-window starting
+  // at the oldest retained settlement so partial overlays are not diluted by
+  // candles that predate the funding history.
+  const fundingCoverageStartTime = fundingSamples.length === 0
+    ? null
+    : Math.min(...fundingSamples.map((sample) => sample.time));
+  const fundingDurationMs = window !== null && fundingCoverageStartTime !== null
+    ? window.endTime - fundingCoverageStartTime
+    : null;
+  const fundingRate = funding === undefined
+    ? null
+    : { mean: fundingSamples.length === 0 ? null : totalFunding, count: totalCount };
+  const fundingAnnualized = funding === undefined
+    ? null
+    : {
+        mean: fundingSamples.length === 0 || fundingDurationMs === null || fundingDurationMs <= 0
+          ? null
+          : totalFunding * ANALYTICS_YEAR_MS / fundingDurationMs,
+        count: totalCount,
+      };
   const quoteAverage = average(quoteTurnovers);
 
   return {
@@ -284,6 +335,7 @@ export function singleMarketAnalytics(
     annualizedVolatility: annualizedVolatilityForCandles(candles),
     fundingRate,
     fundingAnnualized,
+    fundingCoverageStartTime,
   };
 }
 

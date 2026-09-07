@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { binanceFetch, binanceKlinesFetch } from "./binance";
+import { binanceFetch, binanceKlinesFetch, parseBinanceLiveFundingRate } from "./binance";
 
 const originalFetch = globalThis.fetch;
 
@@ -97,5 +97,14 @@ describe.serial("Binance direct-first transport", () => {
 
     await expect(binanceKlinesFetch("BTCUSDT", "1h", "30", { signal: controller.signal })).rejects.toBe(reason);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Binance live funding normalization", () => {
+  test("retains a numeric zero but drops a blank premium funding rate", async () => {
+    expect(parseBinanceLiveFundingRate("0")).toBe(0);
+    expect(parseBinanceLiveFundingRate(0)).toBe(0);
+    expect(parseBinanceLiveFundingRate("")).toBeNull();
+    expect(parseBinanceLiveFundingRate("NaN")).toBeNull();
   });
 });

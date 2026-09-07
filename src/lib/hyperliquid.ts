@@ -62,7 +62,7 @@ export interface MarketInfo {
 }
 
 interface AssetContext {
-  funding: string;
+  funding: string | number;
   openInterest: string;
   prevDayPx: string;
   dayNtlVlm: string;
@@ -261,6 +261,13 @@ const INTERVAL_MS: Record<ChartInterval, number> = {
   "1m": 60 * 1000,
 };
 
+function isValidLiveFundingRate(value: unknown): value is string | number {
+  if (typeof value === "string" && value.trim() === "") return false;
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  const parsed = Number(value);
+  return Number.isFinite(parsed);
+}
+
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   try {
     const data = await fetchHyperliquidInfo<any[]>(
@@ -278,12 +285,13 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
       throw new Error("Invalid response format");
     }
 
-    return meta.universe.map((market: MarketInfo, index: number) => {
+    return meta.universe.flatMap((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
+      if (!isValidLiveFundingRate(ctx?.funding)) return [];
 
-      return {
+      return [{
         coin: market.name,
-        fundingRate: ctx?.funding || "0",
+        fundingRate: String(ctx.funding),
         markPrice: ctx?.markPx || "0",
         indexPrice: ctx?.oraclePx || "0",
         premium: ctx?.premium || "0",
@@ -294,7 +302,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
         bestBid: ctx?.impactPxs?.[0] || undefined,
         bestAsk: ctx?.impactPxs?.[1] || undefined,
         midPrice: ctx?.midPx || undefined,
-      };
+      }];
     });
   } catch (error) {
     console.error("Error fetching funding rates:", error);
@@ -324,9 +332,10 @@ async function getHip3MarketData(dex: "xyz" | "para" | "hyna"): Promise<Map<stri
     meta.universe.forEach((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
 
+      if (!isValidLiveFundingRate(ctx?.funding)) return;
       marketData.set(market.name, {
         coin: market.name,
-        fundingRate: ctx?.funding || "0",
+        fundingRate: String(ctx.funding),
         markPrice: ctx?.markPx || "0",
         indexPrice: ctx?.oraclePx || "0",
         premium: ctx?.premium || "0",
@@ -352,9 +361,10 @@ async function getDexFundingRates(dex: "xyz" | "para" | "hyna"): Promise<Funding
   const rates: FundingRate[] = [];
 
   for (const [coin, marketInfo] of marketData) {
+    if (!isValidLiveFundingRate(marketInfo.fundingRate)) continue;
     rates.push({
       coin,
-      fundingRate: marketInfo.fundingRate || "0",
+      fundingRate: String(marketInfo.fundingRate),
       markPrice: marketInfo.markPrice || "0",
       indexPrice: marketInfo.indexPrice || "0",
       premium: marketInfo.premium || "0",
@@ -537,9 +547,10 @@ export async function getFundingHistoryAll(
   const allHistory: FundingHistoryItem[] = [];
   const seen = new Set<number>();
   let currentStartTime: number | undefined = undefined;
-  const maxLoops = 20; // 安全限制，防止无限循环
-  // Hyperliquid 上线时间约为 2023-06-01
-  const hyperliquidGenesisSec = Math.floor(new Date("2023-06-01T00:00:00Z").getTime() / 1000);
+  // 80 pages × 500 rows covers roughly 4.5 years of hourly settlements, which
+  // exceeds the venue's full funding history; the walk ends early when the API
+  // returns no rows or only already-seen timestamps.
+  const maxLoops = 80;
 
   for (let i = 0; i < maxLoops; i++) {
     throwIfAborted(signal);
@@ -562,9 +573,6 @@ export async function getFundingHistoryAll(
     // 用最早的时间戳（秒）继续往前获取
     const earliestTime = Math.min(...history.map((h) => h.time));
     const earliestSec = Math.floor(earliestTime / 1000);
-
-    // 如果已经到达 genesis 时间附近，停止
-    if (earliestSec <= hyperliquidGenesisSec + 1) break;
 
     // 下一次请求用比最早时间早 1 秒作为 startTime
     currentStartTime = earliestSec - 1;

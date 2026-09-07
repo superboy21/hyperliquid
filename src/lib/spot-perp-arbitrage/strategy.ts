@@ -152,7 +152,7 @@ function legFundingFromSource(market: ArbitrageMarket): StrategyLegFunding {
   const source = market.source;
   return {
     latestSettlementRate: finiteRate(source.lastSettlementRate),
-    predictedFundingRate: finiteRate(source.fundingRate),
+    predictedFundingRate: finiteRate(source.predictedFundingRate),
     averageFundingRate2d: finiteRate(source.avgFundingRate2d),
     averageFundingRate7d: finiteRate(source.avgFundingRate7d),
     averageFundingRate30d: finiteRate(source.avgFundingRate30d),

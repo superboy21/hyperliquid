@@ -272,6 +272,7 @@ export function parseBybitList<T extends object>(payload: unknown): T[] {
 
 function numberOrNull(value: unknown): number | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
+  if (typeof value === "string" && value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -368,6 +369,8 @@ export function normalizeBybitFundingRows(instruments: BybitInstrument[], ticker
   for (const instrument of filterBybitInstruments(instruments)) {
     const ticker = tickers.get(instrument.symbol);
     if (!ticker) continue;
+    const fundingRate = numberOrNull(ticker.fundingRate);
+    if (fundingRate === null) continue;
     const markPrice = numberOrZero(ticker.markPrice);
     const lastPrice = numberOrNull(ticker.lastPrice) ?? markPrice;
     const prevPrice24h = numberOrNull(ticker.prevPrice24h);
@@ -380,7 +383,7 @@ export function normalizeBybitFundingRows(instruments: BybitInstrument[], ticker
       symbol: instrument.baseCoin ?? stripUsdtSuffix(instrument.symbol),
       rawSymbol: instrument.symbol,
       marketKey: instrument.symbol,
-      fundingRate: numberOrZero(ticker.fundingRate),
+      fundingRate,
       predictedFundingRate: null,
       lastSettlementRate: null,
       markPrice,
@@ -530,6 +533,8 @@ const DEFAULT_FUNDING_WINDOW_MS = 7 * DAY_MS;
 /** Hard cap shared with the /api/bybit proxy route; a window wider than this is rejected. */
 export const MAX_FUNDING_WINDOW_MS = 90 * DAY_MS;
 const MAX_FUNDING_PAGE_SIZE = 200;
+/** Hard request budget for a bounded history walk; termination is timestamp-based, not interval-based. */
+const MAX_FUNDING_HISTORY_PAGES = 100;
 
 /**
  * Interval-aware funding-history window contract. One V5 funding-history
@@ -603,14 +608,16 @@ export const bybitFundingHistoryCache = createBybitFundingHistoryCache();
  * resolveBybitFundingHistoryWindowMs) for overlay pagination; the default
  * stays 7 days so existing callers are unchanged. The optional `cache`
  * defaults to the module-level bybitFundingHistoryCache (pass null to bypass
- * reads and writes, e.g. in request-count tests).
+ * reads and writes, e.g. in request-count tests). `requireCutoffCoverage`
+ * fail-closes a partial walk as an empty result; latest reads without a
+ * cutoff retain their historical behavior.
  */
 export async function fetchBybitFundingHistory(
   rawSymbol: string,
-  options: { cutoffTime?: number; endTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; windowMs?: number; request?: BybitRequest; cache?: BybitFundingHistoryCache | null } = {},
+  options: { cutoffTime?: number; endTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; windowMs?: number; request?: BybitRequest; cache?: BybitFundingHistoryCache | null; requireCutoffCoverage?: boolean } = {},
 ): Promise<CanonicalFundingHistoryPoint[]> {
   const pageSize = Math.max(1, Math.min(MAX_FUNDING_PAGE_SIZE, Math.trunc(options.pageSize ?? MAX_FUNDING_PAGE_SIZE)));
-  const maxPages = Math.max(1, Math.min(100, Math.trunc(options.maxPages ?? 100)));
+  const maxPages = Math.max(1, Math.min(MAX_FUNDING_HISTORY_PAGES, Math.trunc(options.maxPages ?? MAX_FUNDING_HISTORY_PAGES)));
   const windowMs = Math.max(60_000, Math.min(MAX_FUNDING_WINDOW_MS, Math.trunc(options.windowMs ?? DEFAULT_FUNDING_WINDOW_MS)));
   const request = options.request ?? requestBybit;
   const cache = options.cache === undefined ? bybitFundingHistoryCache : options.cache;
@@ -620,6 +627,7 @@ export async function fetchBybitFundingHistory(
   const collected = new Map<number, number>();
   let previousOldest = Number.POSITIVE_INFINITY;
   let fetchedOldest = end - windowMs;
+  let reachedCutoff = options.cutoffTime === undefined;
 
   if (cache !== null) {
     throwIfAborted(options.signal);
@@ -646,7 +654,10 @@ export async function fetchBybitFundingHistory(
       if (options.cutoffTime === undefined || row.timestamp >= options.cutoffTime) collected.set(row.timestamp, row.fundingRate);
     }
     const oldest = rows.length ? rows[0].timestamp : Number.POSITIVE_INFINITY;
-    if (options.cutoffTime !== undefined && oldest <= options.cutoffTime) break;
+    if (options.cutoffTime !== undefined && oldest <= options.cutoffTime) {
+      reachedCutoff = true;
+      break;
+    }
     if (!rows.length || oldest >= previousOldest) break;
     // Without a cutoff, one window (or the first short page) is the full answer.
     if (options.cutoffTime === undefined && rows.length < pageSize) break;
@@ -655,7 +666,10 @@ export async function fetchBybitFundingHistory(
     if (end <= 0) break;
   }
   const result = Array.from(collected, ([timestamp, fundingRate]) => ({ timestamp, fundingRate })).sort((a, b) => a.timestamp - b.timestamp);
-  if (cache !== null) {
+  if (options.requireCutoffCoverage && !reachedCutoff) return [];
+  // A bounded walk that ran out of pages before reaching the cutoff is only a
+  // partial result. Never let it masquerade as a complete range in cache.
+  if (cache !== null && reachedCutoff) {
     cache.set(rawSymbol, result, fetchedOldest, requestedEnd);
   }
   return result;
@@ -933,15 +947,16 @@ export async function fetchBybitCanonicalDetail(
 ): Promise<CanonicalFundingDetail> {
   const now = options.now ?? Date.now();
   const cutoffTime = now - 30 * DAY_MS;
-  // Interval-aware windows (capped at MAX_FUNDING_WINDOW_MS) keep the 30-day
-  // funding fetch to one request for 4h/8h/1d funding and ~4 for 1h funding.
+  // The interval only sizes the API time window. Pages are deliberately
+  // budgeted independently because the current interval is not historical
+  // truth (for example, an 8h contract may still return 1h history).
   const windowMs = resolveBybitFundingHistoryWindowMs(row.fundingIntervalSeconds);
-  const maxHistoryPages = Math.max(1, Math.min(100, Math.ceil((30 * DAY_MS) / windowMs)));
   const [fundingHistory, candles] = await Promise.all([
     fetchBybitFundingHistory(row.rawSymbol, {
       cutoffTime,
       endTime: now,
-      maxPages: maxHistoryPages,
+      maxPages: MAX_FUNDING_HISTORY_PAGES,
+      requireCutoffCoverage: true,
       windowMs,
       signal: options.signal,
       request: options.request,

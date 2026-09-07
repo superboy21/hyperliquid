@@ -59,6 +59,7 @@ describe("unified market model", () => {
       bestBid: 90,
       bestAsk: 110,
       indexPrice: 100,
+      predictedFundingRate: 0.005,
       lastSettlementRate: 0.01,
       avgFundingRate2d: 0.02,
       avgFundingRate7d: 0.03,
@@ -74,6 +75,7 @@ describe("unified market model", () => {
     });
     expect(row.midpoint).toBe(101);
     expect(row.premium).toBeCloseTo(0.01);
+    expect(row.predictedFundingRate).toBe(0.005);
     expect([
       row.latestSettlementRate, row.averageFundingRate2d, row.averageFundingRate7d,
       row.averageFundingRate30d,

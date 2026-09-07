@@ -305,7 +305,7 @@ export default function SearchCandlesChart({
         const annualizedStr = annualized >= 0 ? `+${annualized.toFixed(2)}%` : `${annualized.toFixed(2)}%`;
         const rawStr = rawRate !== undefined ? `${(rawRate * 100).toFixed(4)}%` : "N/A";
         lines.push(`年化资金费率: ${annualizedStr}`);
-        lines.push(`原始结算周期费率: ${rawStr}`);
+        lines.push(`区间累计费率: ${rawStr}`);
       } else if (!is1m && fundingRates[hoveredIndex]?.sampleCount === 0) {
         lines.push(`资金费率: 该时段无资金结算样本（图中留空，不填充、不插值）`);
       }
