@@ -1,11 +1,102 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, normalizeLighterSearchFundingRow, parseSearchFundingRate, resolvePerpCandleSource, toOkxBar } from "./search-candles";
+import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, fetchSearchCandles, normalizeLighterSearchFundingRow, parseSearchFundingRate, resolvePerpCandleSource, toOkxBar } from "./search-candles";
 import { createCandleSourceProvenance } from "./candle-provenance";
 
 const originalFetch = globalThis.fetch;
+const originalDateNow = Date.now;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  Date.now = originalDateNow;
+});
+
+test("Hyperliquid Search derives funding bounds from candles and deduplicates overlays", async () => {
+  const now = 1_700_000_000_000;
+  const hour = 60 * 60 * 1000;
+  Date.now = () => now;
+  const fundingBodies: Record<string, unknown>[] = [];
+  globalThis.fetch = mock(async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    if (body.type === "candleSnapshot") {
+      return Response.json([{
+        t: now - 3 * hour,
+        T: now - 2 * hour,
+        s: "BTC",
+        i: "1h",
+        o: "100",
+        h: "101",
+        l: "99",
+        c: "100",
+        v: "1",
+        n: 1,
+      }, {
+        t: now - 2 * hour,
+        T: now - hour,
+        s: "BTC",
+        i: "1h",
+        o: "100",
+        h: "101",
+        l: "99",
+        c: "100",
+        v: "1",
+        n: 1,
+      }]);
+    }
+    if (body.type === "fundingHistory") {
+      fundingBodies.push(body);
+      return Response.json([{
+        time: now - 3 * hour,
+        coin: "BTC",
+        fundingRate: "0.001",
+      }, {
+        time: now - 2 * hour,
+        coin: "BTC",
+        fundingRate: "0.002",
+      }, {
+        time: now - 2 * hour,
+        coin: "BTC",
+        fundingRate: "0.002",
+      }, {
+        time: now - hour,
+        coin: "BTC",
+        fundingRate: "0.004",
+      }]);
+    }
+    return Response.json([]);
+  }) as typeof fetch;
+
+  const result = await fetchSearchCandles({
+    exchange: "Hyperliquid",
+    exchangeColor: "blue",
+    symbol: "BTC",
+    rawSymbol: "BTC",
+    fundingRate: 0,
+    markPrice: 100,
+    indexPrice: 100,
+    lastPrice: 100,
+    change24h: 0,
+    quoteVolume: 1,
+    openInterest: 1,
+    notionalValue: 100,
+    fundingInterval: 3600,
+    assetCategory: "Crypto",
+  }, "1h");
+
+  expect(fundingBodies).toEqual([expect.objectContaining({
+    startTime: now - 3 * hour,
+    endTime: now - hour - 1,
+  })]);
+  expect(result.fundingRates).toEqual([{
+    time: now - 3 * hour,
+    rate: 0.001,
+    annualizedRate: 0.001 * 365 * 24,
+    sampleCount: 1,
+  }, {
+    time: now - 2 * hour,
+    rate: 0.002,
+    annualizedRate: 0.002 * 365 * 24,
+    sampleCount: 1,
+  }]);
 });
 
 test("Gate search candles prefer the direct URL before the proxy", async () => {

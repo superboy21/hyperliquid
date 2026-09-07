@@ -5,6 +5,9 @@ import {
   getCandleSnapshot,
   getAllFundingRates,
   getFundingHistory,
+  getFundingHistoryRange,
+  HYPERLIQUID_FUNDING_PAGE_MS,
+  HYPERLIQUID_FUNDING_MAX_PAGES,
   getMeta,
 } from "./hyperliquid";
 
@@ -191,6 +194,57 @@ describe("Hyperliquid direct-first transport", () => {
       await fetchL2Book("BTC");
       await getMeta();
       expect(bodies).toEqual(["fundingHistory", "candleSnapshot", "l2Book", "meta"]);
+    } finally {
+      restore();
+    }
+  });
+
+  test("paginates a multi-page range with fixed inclusive millisecond windows", async () => {
+    const hour = 60 * 60 * 1000;
+    const start = 0;
+    const end = 600 * hour;
+    const requests: { startTime: number; endTime: number }[] = [];
+    const restore = mockFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { startTime: number; endTime: number };
+      requests.push(body);
+      const rows = [];
+      for (let time = body.startTime; time <= body.endTime; time += hour) {
+        rows.push({ time, coin: "BTC", fundingRate: "0.001" });
+      }
+      if (rows.length > 0) rows.push(rows[0]);
+      return jsonResponse(rows);
+    });
+
+    try {
+      const history = await getFundingHistoryRange("BTC", start, end);
+      expect(requests).toHaveLength(2);
+      expect(requests.every(({ startTime, endTime }) =>
+        endTime >= startTime && endTime - startTime + 1 <= HYPERLIQUID_FUNDING_PAGE_MS,
+      )).toBe(true);
+      expect(requests[1].endTime).toBe(requests[0].startTime - 1);
+      expect(history).toHaveLength(600);
+      expect(history.map((item) => item.time)).toEqual(
+        Array.from({ length: 600 }, (_, index) => index * hour),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  test("does not return partial history when the range exceeds the page budget", async () => {
+    let calls = 0;
+    const restore = mockFetch(async () => {
+      calls += 1;
+      return jsonResponse([]);
+    });
+
+    try {
+      await expect(getFundingHistoryRange(
+        "BTC",
+        0,
+        HYPERLIQUID_FUNDING_PAGE_MS * HYPERLIQUID_FUNDING_MAX_PAGES + 1,
+      )).rejects.toThrow("page budget");
+      expect(calls).toBe(0);
     } finally {
       restore();
     }

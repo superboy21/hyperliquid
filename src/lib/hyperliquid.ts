@@ -429,11 +429,11 @@ export async function getFundingHistory(
     const body: Record<string, unknown> = {
       type: "fundingHistory",
       coin,
+      startTime: startTimeSeconds === undefined
+        ? Date.now() - HYPERLIQUID_FUNDING_PAGE_MS
+        : startTimeSeconds * 1000,
+      endTime: Date.now(),
     };
-
-    if (startTimeSeconds) {
-      body.startTime = startTimeSeconds * 1000;
-    }
 
     const data = await fetchHyperliquidInfo<unknown[]>(body, 1, signal);
     if (!Array.isArray(data)) {
@@ -517,68 +517,95 @@ export async function getFundingHistoryForDays(
   days: number = 30,
   signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
-  const endTimeSeconds = Math.floor(Date.now() / 1000);
-  const midpointSeconds = endTimeSeconds - 15 * 24 * 60 * 60;
-  const startTimeSeconds = endTimeSeconds - days * 24 * 60 * 60;
+  const endTimeMs = Date.now();
+  const startTimeMs = endTimeMs - days * 24 * 60 * 60 * 1000;
+  return getFundingHistoryRange(coin, startTimeMs, endTimeMs, signal);
+}
 
-  const [olderHistory, recentHistory] = await Promise.all([
-    getFundingHistory(coin, startTimeSeconds, signal),
-    getFundingHistory(coin, midpointSeconds, signal),
-  ]);
+/** Maximum safe Hyperliquid funding-history request span (499 hourly settlements). */
+export const HYPERLIQUID_FUNDING_PAGE_MS = 499 * 60 * 60 * 1000;
+export const HYPERLIQUID_FUNDING_MAX_PAGES = 80;
 
-  const uniqueHistory = Array.from(
-    new Map(
-      [...olderHistory, ...recentHistory].map((item) => [`${item.time}-${item.fundingRate}`, item]),
-    ).values(),
-  ).sort((a, b) => a.time - b.time);
+/**
+ * Fetch settled funding in the Search caller's half-open millisecond range.
+ * Hyperliquid's upstream bounds are inclusive, so each fixed page is sent as
+ * [startTime, endTime] and the caller-visible result is filtered back to
+ * [startTimeMs, endTimeMs). Adjacent pages are disjoint; duplicate source
+ * rows are still deduplicated and page boundaries never use returned
+ * timestamps as cursors.
+ */
+export async function getFundingHistoryRange(
+  coin: string,
+  startTimeMs: number,
+  endTimeMs: number,
+  signal?: AbortSignal,
+): Promise<FundingHistoryItem[]> {
+  if (!Number.isFinite(startTimeMs) || !Number.isFinite(endTimeMs)) {
+    throw new RangeError("Hyperliquid funding history bounds must be finite");
+  }
 
-  const startTimeMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  return uniqueHistory.filter((item) => item.time >= startTimeMs);
+  const start = Math.floor(startTimeMs);
+  const end = Math.floor(endTimeMs);
+  if (end <= start) return [];
+
+  const pageCount = Math.ceil((end - start) / HYPERLIQUID_FUNDING_PAGE_MS);
+  if (pageCount > HYPERLIQUID_FUNDING_MAX_PAGES) {
+    throw new RangeError("Hyperliquid funding history range exceeds the page budget");
+  }
+
+  const collected = new Map<number, FundingHistoryItem>();
+  for (let page = 0; page < pageCount; page += 1) {
+    throwIfAborted(signal);
+    const pageEndExclusive = end - page * HYPERLIQUID_FUNDING_PAGE_MS;
+    const pageStart = Math.max(start, pageEndExclusive - HYPERLIQUID_FUNDING_PAGE_MS);
+    const pageEndInclusive = pageEndExclusive - 1;
+    const data = await fetchHyperliquidInfo<unknown[]>(
+      {
+        type: "fundingHistory",
+        coin,
+        startTime: pageStart,
+        endTime: pageEndInclusive,
+      },
+      1,
+      signal,
+    );
+    throwIfAborted(signal);
+    if (!Array.isArray(data)) {
+      throw new Error("Invalid Hyperliquid funding history response");
+    }
+
+    for (const item of data) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      const time = Number(row.time);
+      if (!Number.isFinite(time) || time < start || time >= end) continue;
+      if (!collected.has(time)) {
+        collected.set(time, {
+          time,
+          coin: String(row.coin ?? coin),
+          fundingRate: String(row.fundingRate ?? ""),
+          premium: String(row.premium ?? "0"),
+          markPrice: row.markPrice === undefined ? "0" : String(row.markPrice),
+          indexPrice: row.indexPrice === undefined ? "0" : String(row.indexPrice),
+        });
+      }
+    }
+  }
+
+  return Array.from(collected.values()).sort((a, b) => a.time - b.time);
 }
 
 /**
- * 获取指定币种的全部历史资金费率（自动分页直到获取完所有可用数据）
- * Hyperliquid API 每次最多返回 500 条，通过循环使用最后一条时间戳作为 startTime 来分页
+ * 获取指定币种的有界历史资金费率。
+ * 保留此入口供旧调用方使用；Search 使用 getFundingHistoryRange 获取其蜡烛范围。
  */
 export async function getFundingHistoryAll(
   coin: string,
   signal?: AbortSignal,
 ): Promise<FundingHistoryItem[]> {
-  const allHistory: FundingHistoryItem[] = [];
-  const seen = new Set<number>();
-  let currentStartTime: number | undefined = undefined;
-  // 80 pages × 500 rows covers roughly 4.5 years of hourly settlements, which
-  // exceeds the venue's full funding history; the walk ends early when the API
-  // returns no rows or only already-seen timestamps.
-  const maxLoops = 80;
-
-  for (let i = 0; i < maxLoops; i++) {
-    throwIfAborted(signal);
-
-    const history = await getFundingHistory(coin, currentStartTime, signal);
-    if (history.length === 0) break;
-
-    // 去重并添加新数据
-    let newCount = 0;
-    for (const item of history) {
-      if (!seen.has(item.time)) {
-        seen.add(item.time);
-        allHistory.push(item);
-        newCount++;
-      }
-    }
-
-    if (newCount === 0) break; // 没有新数据，结束分页
-
-    // 用最早的时间戳（秒）继续往前获取
-    const earliestTime = Math.min(...history.map((h) => h.time));
-    const earliestSec = Math.floor(earliestTime / 1000);
-
-    // 下一次请求用比最早时间早 1 秒作为 startTime
-    currentStartTime = earliestSec - 1;
-  }
-
-  return allHistory.sort((a, b) => a.time - b.time);
+  const endTimeMs = Date.now();
+  const startTimeMs = Math.max(0, endTimeMs - HYPERLIQUID_FUNDING_PAGE_MS * HYPERLIQUID_FUNDING_MAX_PAGES);
+  return getFundingHistoryRange(coin, startTimeMs, endTimeMs, signal);
 }
 
 export async function getCandleSnapshot(

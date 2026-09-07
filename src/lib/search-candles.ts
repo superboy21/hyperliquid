@@ -2,7 +2,7 @@
 // Fetches candlestick data for all 6 exchanges with maximum history per interval.
 // Used by the search page chart component.
 
-import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryAll as hlGetFundingHistoryAll } from "./hyperliquid";
+import { getCandleSnapshot as hlGetCandleSnapshot, getFundingHistoryRange as hlGetFundingHistoryRange } from "./hyperliquid";
 import { lighterFetch } from "./lighter";
 import { fetchOkxFundingHistory as fetchOkxFundingHistoryCanonical, okxFetch } from "./adapters/okx";
 import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
@@ -638,20 +638,16 @@ export function normalizeLighterSearchFundingRow(
 
 async function fetchHyperliquidFundingHistory(
   symbol: string,
-  cutoffTime: number = Date.now() - 365 * 24 * 60 * 60 * 1000,
+  startTimeMs: number,
+  endTimeMs: number,
   signal?: AbortSignal,
 ): Promise<{ time: number; rate: number }[]> {
   try {
-    const now = Date.now();
-    // Hyperliquid settles hourly and its paged funding history reaches the
-    // venue genesis. Walk the full retained history instead of clamping to a
-    // days window so chart overlays receive every settlement still available
-    // (soft coverage: funding simply starts wherever the venue history does).
-    const history = await hlGetFundingHistoryAll(symbol, signal);
+    const history = await hlGetFundingHistoryRange(symbol, startTimeMs, endTimeMs, signal);
     return history.flatMap((h) => {
       const time = Number(h.time);
       const rate = parseSearchFundingRate(h.fundingRate);
-      return Number.isFinite(time) && rate !== null && time >= cutoffTime && time < now
+      return Number.isFinite(time) && rate !== null && time >= startTimeMs && time < endTimeMs
         ? [{ time, rate }]
         : [];
     });
@@ -1037,9 +1033,11 @@ export async function fetchSearchCandles(
     case "Hyperliquid": {
       const hlSymbol = rate.rawSymbol ?? rate.symbol;
       const candles = await fetchHyperliquidCandles(hlSymbol, interval, signal, purpose);
-      const cutoffTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const oldestCandleTime = candles.length > 0 ? Math.min(...candles.map((candle) => candle.openTime)) : 0;
+      const latestCandleClose = candles.length > 0 ? Math.max(...candles.map((candle) => candle.closeTime)) : 0;
+      const fundingEndTime = Math.min(Date.now(), latestCandleClose);
       const fundingHistory = candles.length > 0
-        ? await fetchHyperliquidFundingHistory(hlSymbol, cutoffTime, signal)
+        ? await fetchHyperliquidFundingHistory(hlSymbol, oldestCandleTime, fundingEndTime, signal)
         : [];
       const fundingRates = aggregateFundingRatesToCandles(fundingHistory, candles, rate.fundingInterval);
       return { ...empty, candles, fundingRates };
