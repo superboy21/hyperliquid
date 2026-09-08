@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { fetchGateBatchFundingHistory, getAllFundingRates, getFundingHistoryForDays, getGateTickers } from "../gateio";
+import { clearGateMultiplierCache, fetchGateBatchFundingHistory, getAllFundingRates, getCandleSnapshot, getFundingHistoryForDays, getGateTickers } from "../gateio";
 import {
   buildGateUrl,
   buildGateRequest,
@@ -16,6 +16,7 @@ const originalDateNow = Date.now;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   Date.now = originalDateNow;
+  clearGateMultiplierCache();
 });
 
 async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
@@ -29,6 +30,69 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe("Gate detail cancellation and timeout", () => {
+  test("normalizes contract volume with the official quanto multiplier", async () => {
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("candlesticks")) {
+        return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10, sum: "15" }]);
+      }
+      if (text.includes("tickers")) return Response.json([{ contract: "BTC_USDT", quanto_multiplier: "0.01" }]);
+      if (text.includes("contracts")) return Response.json([{ name: "BTC_USDT", funding_interval: 28_800 }]);
+      return Response.json([]);
+    }) as typeof fetch;
+
+    await expect(getCandleSnapshot("BTC", "1d", 1)).resolves.toEqual([expect.objectContaining({
+      volume: "0.1",
+      quoteVolume: "15",
+    })]);
+  });
+
+  test("does not estimate Gate quote volume when sum is absent", async () => {
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("candlesticks")) {
+        return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10 }]);
+      }
+      if (text.includes("tickers")) return Response.json([{ contract: "BTC_USDT", quanto_multiplier: "0.01" }]);
+      if (text.includes("contracts")) return Response.json([{ name: "BTC_USDT", funding_interval: 28_800 }]);
+      return Response.json([]);
+    }) as typeof fetch;
+
+    const candles = await getCandleSnapshot("BTC", "1d", 1);
+    expect(candles[0].quoteVolume).toBeUndefined();
+    expect(candles[0].volume).toBe("0.1");
+  });
+
+  test("canonical detail preserves a partial three-day history and latest settlement", async () => {
+    const nowMs = Date.UTC(2026, 6, 15);
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const boundarySeconds = nowSeconds - 30 * 24 * 60 * 60 - 8 * 60 * 60;
+    const urls: string[] = [];
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      urls.push(text);
+      if (text.includes("candlesticks")) return Response.json([]);
+      return Response.json([
+        { t: nowSeconds - 3 * 24 * 60 * 60, r: "0.1" },
+        { t: boundarySeconds, r: "0.2" },
+      ]);
+    }) as typeof fetch;
+
+    const detail = await fetchGateCanonicalDetail("BTC", "1d", 3600, undefined, undefined, undefined, { asOf: nowMs });
+    expect(new URL(urls.find((url) => url.includes("funding_rate"))!).searchParams.get("to")).toBe(String(nowSeconds));
+    expect(detail.fundingHistory).toEqual([
+      { timestamp: boundarySeconds * 1000, fundingRate: 0.2 },
+      { timestamp: (nowSeconds - 3 * 24 * 60 * 60) * 1000, fundingRate: 0.1 },
+    ]);
+    expect(detail.lastSettlementRate).toBe(0.1);
+  });
+
+  test("canonical detail rejects a Gate 5xx history response", async () => {
+    globalThis.fetch = mock(async () => new Response("upstream failure", { status: 503 })) as typeof fetch;
+    await expect(fetchGateCanonicalDetail("BTC", "1d", 8 * 60 * 60, undefined, undefined, undefined, { now: Date.now() }))
+      .rejects.toThrow("Failed to fetch funding history");
+  });
+
   test("proxies a direct timeout instead of treating it as caller cancellation", async () => {
     const urls: string[] = [];
     globalThis.fetch = mock(async (url) => {
@@ -40,6 +104,8 @@ describe("Gate detail cancellation and timeout", () => {
       if (text.includes("candlesticks")) {
         return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10 }]);
       }
+      if (text.includes("tickers")) return Response.json([{ contract: "BTC_USDT", quanto_multiplier: "0.01" }]);
+      if (text.includes("contracts")) return Response.json([{ name: "BTC_USDT", funding_interval: 28_800 }]);
       return Response.json(Array.from({ length: 1000 }, (_, index) => ({
         t: Math.floor(Date.now() / 1000) - index * 3_600,
         r: "0.001",
@@ -450,6 +516,7 @@ describe("Gate funding history pagination", () => {
     Date.now = () => nowMs;
     const cutoff = nowSeconds - 30 * 24 * 60 * 60;
     globalThis.fetch = mock(async () => Response.json([
+      { t: nowSeconds - 3_600, r: "0.3" },
       { t: cutoff + 3_600, r: "0.1" },
       { t: cutoff - 1, r: "0.2" },
     ])) as typeof fetch;
@@ -458,9 +525,10 @@ describe("Gate funding history pagination", () => {
     expect(history).toEqual([
       { time: (cutoff - 1) * 1000, fundingRate: "0.2" },
       { time: (cutoff + 3_600) * 1000, fundingRate: "0.1" },
+      { time: (nowSeconds - 3_600) * 1000, fundingRate: "0.3" },
     ]);
     expect(computeAvgFundingRates(history, 28_800, nowMs, { requireWindowCoverage: true }).avg30d)
-      .toBeCloseTo(0.1 * (8 * 3_600_000) / (30 * 24 * 3_600_000), 12);
+      .toBeCloseTo(0.4 * (8 * 3_600_000) / (30 * 24 * 3_600_000), 12);
   });
 
   test("strict coverage ignores invalid proof rows but retains a valid zero boundary", async () => {

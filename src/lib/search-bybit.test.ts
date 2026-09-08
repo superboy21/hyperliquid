@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { CanonicalFundingRateRow } from "./types";
 import {
   batchFetchDetails,
@@ -126,6 +126,33 @@ describe("Bybit exact symbol detail dispatch", () => {
     expect(() => requireBybitRawSymbol(rate({ rawSymbol: undefined }))).toThrow("rawSymbol");
   });
 
+  test("passes one captured now to Bybit canonical detail and averages", async () => {
+    const now = 9_000_000_000;
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    let receivedNow: number | undefined;
+    try {
+      await fetchDetailForSymbol(rate(), undefined, {
+        fetchBybitCanonicalDetail: async (_row, _interval, options) => {
+          receivedNow = options?.now;
+          return {
+            exchange: "bybit",
+            transportMode: "native",
+            symbol: "BTC",
+            rawSymbol: RAW,
+            marketKey: RAW,
+            fundingHistory: [],
+            candles: [],
+            lastSettlementRate: null,
+            bidAskSpread: null,
+          };
+        },
+      });
+      expect(receivedNow).toBe(now);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("maps funding-only canonical detail without losing settlement or BBO metrics", async () => {
     const now = Date.now();
     const result = await fetchDetailForSymbol(rate(), undefined, {
@@ -147,9 +174,9 @@ describe("Bybit exact symbol detail dispatch", () => {
       historicalVolatility: null,
       bidAskSpread: 2,
     });
-    expect(result.avgFundingRate2d).toBeCloseTo(0.001 / 6, 6);
-    expect(result.avgFundingRate7d).toBeCloseTo(0.001 / 21, 6);
-    expect(result.avgFundingRate30d).toBeCloseTo(0.001 / 90, 6);
+    expect(result.avgFundingRate2d).toBeNull();
+    expect(result.avgFundingRate7d).toBeNull();
+    expect(result.avgFundingRate30d).toBeNull();
   });
 });
 

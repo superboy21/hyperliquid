@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, fetchSearchCandles, normalizeLighterSearchFundingRow, parseSearchFundingRate, resolvePerpCandleSource, toOkxBar } from "./search-candles";
+import { aggregateDailyCandlesToWeekly, aggregateFundingRatesToCandles, fetchGateCandles, fetchOkxCandles, fetchSearchCandles, normalizeLighterSearchFundingRow, normalizeOkxSearchCandle, parseSearchFundingRate, resolvePerpCandleSource, toOkxBar } from "./search-candles";
+import { clearGateMultiplierCache } from "./gateio";
 import { createCandleSourceProvenance } from "./candle-provenance";
 
 const originalFetch = globalThis.fetch;
@@ -8,6 +9,7 @@ const originalDateNow = Date.now;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   Date.now = originalDateNow;
+  clearGateMultiplierCache();
 });
 
 test("Hyperliquid Search derives funding bounds from candles and deduplicates overlays", async () => {
@@ -102,12 +104,47 @@ test("Hyperliquid Search derives funding bounds from candles and deduplicates ov
 test("Gate search candles prefer the direct URL before the proxy", async () => {
   const urls: string[] = [];
   globalThis.fetch = mock(async (url) => {
-    urls.push(String(url));
-    return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10, sum: "15" }]);
+    const text = String(url);
+    urls.push(text);
+    if (text.includes("candlesticks")) {
+      return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10, sum: "15" }]);
+    }
+    if (text.includes("tickers")) return Response.json([{ contract: "BTC_USDT", quanto_multiplier: "0.01" }]);
+    if (text.includes("contracts")) return Response.json([{ name: "BTC_USDT", funding_interval: 28_800 }]);
+    return Response.json([]);
   }) as typeof fetch;
 
-  await expect(fetchGateCandles("BTC", "1h")).resolves.toMatchObject([{ openTime: 1000, close: "1.5" }]);
-  expect(urls).toEqual(["https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=BTC_USDT&interval=1h&limit=2000"]);
+  await expect(fetchGateCandles("BTC", "1h")).resolves.toMatchObject([{ openTime: 1000, close: "1.5", volume: "0.1", quoteVolume: "15" }]);
+  expect(urls).toContain("https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=BTC_USDT&interval=1h&limit=2000");
+  expect(urls.some((url) => url.includes("/tickers") || url.includes("/contracts"))).toBe(true);
+});
+
+test("Gate search candles fail closed without a valid multiplier", async () => {
+  globalThis.fetch = mock(async (url) => {
+    const text = String(url);
+    if (text.includes("candlesticks")) return Response.json([{ t: 1, o: "1", h: "2", l: "0.5", c: "1.5", v: 10, sum: "15" }]);
+    if (text.includes("tickers")) return Response.json([{ contract: "ETH_USDT", quanto_multiplier: "" }]);
+    if (text.includes("contracts")) return Response.json([{ name: "ETH_USDT", funding_interval: 28_800 }]);
+    return Response.json([]);
+  }) as typeof fetch;
+
+  await expect(fetchGateCandles("ETH", "1h")).resolves.toEqual([]);
+});
+
+test("OKX perpetual candle fields keep contract, base, and quote volume semantics", () => {
+  expect(normalizeOkxSearchCandle([1_000, "1", "2", "0.5", "1.5", "10", "25", "37.5", "1"], 60_000))
+    .toEqual({ openTime: 1_000, closeTime: 61_000, open: "1", high: "2", low: "0.5", close: "1.5", volume: "25", quoteVolume: "37.5" });
+  expect(normalizeOkxSearchCandle([1_000, "1", "2", "0.5", "1.5", "10", "25"], 60_000).quoteVolume).toBeUndefined();
+  expect(normalizeOkxSearchCandle([1_000, "1", "2", "0.5", "1.5", "10"], 60_000).volume).toBe("0");
+});
+
+test("OKX 1m pagination and other intervals use the same volume mapping", async () => {
+  globalThis.fetch = mock(async () => Response.json({
+    data: [[1_000, "1", "2", "0.5", "1.5", "10", "25", "37.5", "1"]],
+  })) as typeof fetch;
+
+  await expect(fetchOkxCandles("BTC-USDT-SWAP", "1m")).resolves.toMatchObject([{ volume: "25", quoteVolume: "37.5" }]);
+  await expect(fetchOkxCandles("BTC-USDT-SWAP", "1h")).resolves.toMatchObject([{ volume: "25", quoteVolume: "37.5" }]);
 });
 
 test("Lighter search funding rejects missing/blank rates but retains zero", () => {

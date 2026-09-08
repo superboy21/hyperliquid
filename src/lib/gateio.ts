@@ -59,7 +59,7 @@ export interface GateCandlestick {
   l: string;                           // 最低价
   c: string;                           // 收盘价
   v: number;                           // 成交量（张）
-  sum: string;                         // 成交额
+  sum?: string;                        // 成交额（官方报价币成交额）
 }
 
 export interface GatePremiumIndexItem {
@@ -99,9 +99,64 @@ export interface CandleSnapshotItem {
   low: string;                         // 最低价
   close: string;                       // 收盘价
   volume: string;                      // 成交量
+  quoteVolume?: string;                // 官方报价币成交额
 }
 
 export type ChartInterval = "1d" | "4h" | "1h" | "1m";
+
+const gateMultiplierCache = new Map<string, number>();
+const gateMultiplierInFlight = new Map<string, Promise<number | null>>();
+
+function parseGateMultiplier(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** Cache only valid Gate contract multipliers; never substitute a unit multiplier. */
+export function cacheGateMultipliers(
+  tickers: Array<{ contract: string; quanto_multiplier?: unknown }>,
+): void {
+  for (const ticker of tickers) {
+    const multiplier = parseGateMultiplier(ticker.quanto_multiplier);
+    if (multiplier !== null) {
+      gateMultiplierCache.set(ticker.contract, multiplier);
+    }
+  }
+}
+
+export function clearGateMultiplierCache(): void {
+  gateMultiplierCache.clear();
+  gateMultiplierInFlight.clear();
+}
+
+/** Resolve a contract multiplier from the official ticker metadata, failing closed. */
+export async function getGateQuantoMultiplier(
+  contract: string,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  const cached = gateMultiplierCache.get(contract);
+  if (cached !== undefined) return cached;
+
+  const inFlight = gateMultiplierInFlight.get(contract);
+  if (inFlight) return inFlight;
+
+  const request = (async () => {
+    try {
+      const tickers = await getGateTickers(contract, signal);
+      const ticker = tickers.find((item) => item.contract === contract);
+      const multiplier = parseGateMultiplier(ticker?.quanto_multiplier);
+      if (multiplier !== null) gateMultiplierCache.set(contract, multiplier);
+      return multiplier;
+    } catch (error) {
+      if (isAbortLikeError(error) || signal?.aborted) throw error;
+      return null;
+    } finally {
+      gateMultiplierInFlight.delete(contract);
+    }
+  })();
+  gateMultiplierInFlight.set(contract, request);
+  return request;
+}
 
 export interface IntervalFundingRateItem {
   bucketStartTime: number;
@@ -156,7 +211,9 @@ export async function getGateTickers(contract?: string, signal?: AbortSignal): P
     if (!hasCompleteGateTickerEnrichment(data, contracts)) {
       throw new Error("Gate ticker contracts enrichment is unavailable");
     }
-    return enrichGateTickers(data, contracts) as unknown as GateTicker[];
+    const enriched = enrichGateTickers(data, contracts) as unknown as GateTicker[];
+    cacheGateMultipliers(enriched);
+    return enriched;
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) {
       throwIfAborted(signal);
@@ -182,10 +239,10 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
     if (!isValidLiveFundingRate(ticker.funding_rate)) return [];
     const totalSize = parseFloat(ticker.total_size) || 0;
     const markPrice = parseFloat(ticker.mark_price) || 0;
-    const multiplier = parseFloat(ticker.quanto_multiplier) || 1;
+    const multiplier = parseGateMultiplier(ticker.quanto_multiplier);
     
     // 持仓价值 = 持仓张数 * 合约乘数 * 标记价格
-    const notionalValue = totalSize * multiplier * markPrice;
+    const notionalValue = multiplier === null ? 0 : totalSize * multiplier * markPrice;
 
     // 计算中间价
     const bestBid = ticker.highest_bid || "0";
@@ -395,6 +452,7 @@ export async function getFundingHistoryForDays(
   fundingIntervalSeconds: number = 28800,
   signal?: AbortSignal,
   strict = false,
+  asOf?: number,
 ): Promise<FundingHistoryItem[]> {
   const contract = toContractName(coin);
   // Keep the interval argument for compatibility with existing callers. It
@@ -404,7 +462,8 @@ export async function getFundingHistoryForDays(
   void fundingIntervalSeconds;
 
   const targetDays = Number.isFinite(days) && days > 0 ? days : 30;
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const asOfMs = Number.isFinite(asOf) ? asOf as number : Date.now();
+  const nowSeconds = Math.floor(asOfMs / 1000);
   const cutoffSeconds = nowSeconds - Math.ceil(targetDays * 24 * 60 * 60);
   const pageSize = 1000;
   const windowSeconds = 90 * 24 * 60 * 60;
@@ -440,7 +499,7 @@ export async function getFundingHistoryForDays(
 
     if (!response.ok) {
       if (strict) return [];
-      break;
+      throw new Error(`Failed to fetch funding history: ${response.status}`);
     }
 
     let payload: unknown;
@@ -455,7 +514,14 @@ export async function getFundingHistoryForDays(
       throw error;
     }
     throwIfAborted(signal);
-    if (!Array.isArray(payload) || payload.length === 0) {
+    if (!Array.isArray(payload)) {
+      if (strict) {
+        if (collected.size === 0) return [];
+        break;
+      }
+      throw new Error("Malformed Gate funding history response");
+    }
+    if (payload.length === 0) {
       if (strict && collected.size === 0) return [];
       break;
     }
@@ -464,8 +530,11 @@ export async function getFundingHistoryForDays(
       item && Number.isFinite(item.t) && parseGateFundingRate(item.r) !== null
     ));
     if (rows.length === 0) {
-      if (strict && collected.size === 0) return [];
-      break;
+      if (strict) {
+        if (collected.size === 0) return [];
+        break;
+      }
+      throw new Error("Malformed Gate funding history rows");
     }
 
     const earliest = Math.min(...rows.map((item) => item.t));
@@ -599,20 +668,28 @@ export async function getCandleSnapshot(
     if (!Array.isArray(data)) {
       return [];
     }
+    if (data.length === 0) return [];
 
-    // Gate.io 返回格式: {t: timestamp, o: open, h: high, l: low, c: close, v: volume, sum: quote_volume}
-    return data.map((item: { t: number; o: string; h: string; l: string; c: string; v: number; sum: string }) => {
+    // Gate.io 返回格式: {t: timestamp, o: open, h: high, l: low, c: close, v: contracts, sum: quote_volume}
+    const multiplier = await getGateQuantoMultiplier(contract, signal);
+    if (multiplier === null) return [];
+
+    return data.flatMap((item: GateCandlestick) => {
+      const contracts = Number(item.v);
+      if (!Number.isFinite(contracts)) return [];
       const openTime = item.t * 1000; // 转换为毫秒
       const intervalMs = getIntervalMs(interval);
-      return {
+      const candle: CandleSnapshotItem = {
         openTime,
         closeTime: openTime + intervalMs,
         open: item.o,
         high: item.h,
         low: item.l,
         close: item.c,
-        volume: String(item.v),
+        volume: String(contracts * multiplier),
+        ...(item.sum === undefined || item.sum === null ? {} : { quoteVolume: String(item.sum) }),
       };
+      return [candle];
     });
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) {

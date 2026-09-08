@@ -34,6 +34,7 @@ export interface BinanceSearchRate {
   symbol: string;
   rawSymbol: string;
   fundingRate: number;
+  predictedFundingRate: number | null;
   markPrice: number;
   indexPrice: number | null;
   lastPrice: number;
@@ -73,7 +74,10 @@ interface NativePremiumIndex {
   symbol: string;
   markPrice: string;
   indexPrice: string;
-  lastFundingRate: string;
+  /** Current-cycle premium-index funding estimate (PONS/current endpoint). */
+  fundingRate?: string;
+  /** Legacy/current premium-index field retained for older responses. */
+  lastFundingRate?: string;
   nextFundingTime: number;
   lastPrice: string;
 }
@@ -221,6 +225,7 @@ function mapCanonicalSearchRow(row: CanonicalFundingRateRow): BinanceSearchRate 
     symbol: row.symbol,
     rawSymbol: row.rawSymbol,
     fundingRate: row.fundingRate,
+    predictedFundingRate: row.predictedFundingRate ?? null,
     markPrice: row.markPrice,
     indexPrice: row.indexPrice ?? null,
     lastPrice: row.lastPrice,
@@ -276,7 +281,10 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
     const markPrice = Number.parseFloat(premium.markPrice || "0");
     const quoteVolume = Number.parseFloat(ticker?.quoteVolume || "0");
 
-    const fundingRate = parseBinanceLiveFundingRate(premium.lastFundingRate);
+    const liveFundingValue = premium.fundingRate !== undefined
+      ? premium.fundingRate
+      : premium.lastFundingRate;
+    const fundingRate = parseBinanceLiveFundingRate(liveFundingValue);
     if (fundingRate === null) continue;
 
     results.push({
@@ -286,7 +294,7 @@ async function fetchNativeRates(): Promise<CanonicalFundingRateRow[]> {
       rawSymbol: symbol,
       marketKey: symbol,
       fundingRate,
-      predictedFundingRate: null,
+      predictedFundingRate: fundingRate,
       lastSettlementRate: latestSettledMap.get(symbol) ?? null,
       markPrice,
       indexPrice: Number.parseFloat(premium.indexPrice || "0"),

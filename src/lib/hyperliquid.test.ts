@@ -264,4 +264,68 @@ describe("Hyperliquid direct-first transport", () => {
       restore();
     }
   });
+
+  test("uses only the HlPerp predicted funding source and retains valid zero values", async () => {
+    const restore = mockFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { type: string };
+      if (body.type === "predictedFundings") {
+        return jsonResponse([
+          ["BTC", [
+            ["BinPerp", { fundingRate: "0.2", nextFundingTime: 1, fundingIntervalHours: 8 }],
+            ["HlPerp", { fundingRate: "0", nextFundingTime: 1, fundingIntervalHours: 1 }],
+            ["BybitPerp", { fundingRate: "0.3", nextFundingTime: 1, fundingIntervalHours: 8 }],
+          ]],
+          ["ETH", [["HlPerp", { fundingRate: 0, nextFundingTime: 1, fundingIntervalHours: 1 }]]],
+          ["SOL", [["HlPerp", { fundingRate: "", nextFundingTime: 1, fundingIntervalHours: 1 }]]],
+          ["XRP", [["HlPerp", { fundingRate: "not-a-number", nextFundingTime: 1, fundingIntervalHours: 1 }]]],
+          ["DOGE", [["HlPerp", { fundingRate: "Infinity", nextFundingTime: 1, fundingIntervalHours: 1 }]]],
+          ["ADA", [["BinPerp", { fundingRate: "0.4", nextFundingTime: 1, fundingIntervalHours: 8 }], ["BybitPerp", { fundingRate: "0.5", nextFundingTime: 1, fundingIntervalHours: 8 }]]],
+          ["", [["HlPerp", { fundingRate: "0.6" }]]],
+          [123, [["HlPerp", { fundingRate: "0.7" }]]],
+        ]);
+      }
+      return jsonResponse([
+        { universe: [{ name: "BTC" }, { name: "ETH" }, { name: "SOL" }, { name: "XRP" }, { name: "DOGE" }, { name: "ADA" }] },
+        [
+          { funding: "0.001" },
+          { funding: "0.001" },
+          { funding: "0.001" },
+          { funding: "0.001" },
+          { funding: "0.001" },
+          { funding: "0.001" },
+        ],
+      ]);
+    });
+
+    try {
+      const rates = await getAllFundingRates();
+      expect(rates.find((rate) => rate.coin === "BTC")?.predictedFundingRate).toBe("0");
+      expect(rates.find((rate) => rate.coin === "ETH")?.predictedFundingRate).toBe(0);
+      expect(rates.find((rate) => rate.coin === "SOL")?.predictedFundingRate).toBeUndefined();
+      expect(rates.find((rate) => rate.coin === "XRP")?.predictedFundingRate).toBeUndefined();
+      expect(rates.find((rate) => rate.coin === "DOGE")?.predictedFundingRate).toBeUndefined();
+      expect(rates.find((rate) => rate.coin === "ADA")?.predictedFundingRate).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test("keeps current rate rows when predicted funding is unavailable", async () => {
+    const restore = mockFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { type: string };
+      if (body.type === "predictedFundings") return new Response(null, { status: 400 });
+      return jsonResponse([
+        { universe: [{ name: "BTC" }] },
+        [{ funding: "0.001" }],
+      ]);
+    });
+
+    try {
+      await expect(getAllFundingRates()).resolves.toEqual([
+        expect.objectContaining({ coin: "BTC", fundingRate: "0.001" }),
+      ]);
+    } finally {
+      restore();
+    }
+  });
 });

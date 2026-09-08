@@ -261,7 +261,7 @@ function toNumber(value: unknown): number {
 }
 
 function parseOptionalNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") {
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
     return null;
   }
 
@@ -270,7 +270,7 @@ function parseOptionalNumber(value: unknown): number | null {
   }
 
   if (typeof value === "string") {
-    const parsed = Number.parseFloat(value);
+    const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
 
@@ -358,13 +358,14 @@ export async function fetchOkxFundingHistory(
   days?: number,
   cutoffTimestampMs?: number,
   requireCutoffCoverage = false,
+  asOfTimestampMs?: number,
 ): Promise<CanonicalFundingHistoryPoint[]> {
   // Keep the interval argument for call-site compatibility, but history
   // coverage must be based on elapsed time. A symbol can change from 8h to 1h
   // funding without the detail request changing its shape.
   void fundingIntervalSeconds;
   const targetDays = days && days > 0 ? days : DEFAULT_OKX_FUNDING_HISTORY_DAYS;
-  const requestStartedAt = Date.now();
+  const requestStartedAt = Number.isFinite(asOfTimestampMs) ? asOfTimestampMs as number : Date.now();
   const cutoff = Number.isFinite(cutoffTimestampMs)
     ? (cutoffTimestampMs as number)
     : requestStartedAt - targetDays * 24 * 60 * 60 * 1000;
@@ -600,7 +601,10 @@ async function fetchNativeRates(signal?: AbortSignal): Promise<CanonicalFundingR
         marketKey: instId,
         settlementHydrationKey: `okx:${instId}`,
         fundingRate: parseOptionalNumber(funding.fundingRate) as number,
-        predictedFundingRate: parseOptionalNumber(funding.nextFundingRate),
+        // fundingRate is the rate for the upcoming settlement at fundingTime.
+        // nextFundingRate describes the following period and is not the
+        // next-settlement estimate requested by Search.
+        predictedFundingRate: parseOptionalNumber(funding.fundingRate),
         lastSettlementRate: funding.settState === "settled" ? parseOptionalNumber(funding.settFundingRate) : null,
         markPrice,
         indexPrice,
@@ -661,9 +665,16 @@ export async function fetchOkxCanonicalDetail(
   interval: OkxChartInterval,
   fundingIntervalSeconds?: number,
   signal?: AbortSignal,
+  options: { now?: number; asOf?: number } | number = {},
 ): Promise<CanonicalFundingDetail> {
+  const asOf = typeof options === "number"
+    ? options
+    : options.asOf ?? options.now;
+  const asOfMs = Number.isFinite(asOf) ? asOf as number : Date.now();
+  const historicalSettlementBufferMs = 8 * 60 * 60 * 1000;
+  const cutoffTimestamp = asOfMs - 30 * 24 * 60 * 60 * 1000 - historicalSettlementBufferMs;
   const [fundingHistory, candlesRes, snapshot] = await Promise.all([
-    fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal, 30, undefined, true),
+    fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal, 30, cutoffTimestamp, false, asOfMs),
     okxFetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store", signal }),
     fetchNativeFundingSnapshot(signal),
   ]);
@@ -683,7 +694,8 @@ export async function fetchOkxCanonicalDetail(
       high: String(item[2] ?? 0),
       low: String(item[3] ?? 0),
       close: String(item[4] ?? 0),
-      volume: String(item[7] ?? item[6] ?? item[5] ?? 0),
+      volume: String(item[6] ?? 0),
+      ...(item[7] === undefined || item[7] === null ? {} : { quoteVolume: String(item[7]) }),
     }))
     .filter((item) => item.openTime > 0)
     .sort((a, b) => a.openTime - b.openTime)
@@ -700,10 +712,11 @@ export async function fetchOkxCanonicalDetail(
     marketKey: rawSymbol,
     fundingHistory,
     candles,
+    // The history endpoint is the source of truth for the latest settled
+    // point.  Snapshot settlement is only a fallback when history is empty.
     lastSettlementRate:
-      native && native.settState === "settled"
-        ? parseOptionalNumber(native.settFundingRate) ?? latestHistory?.fundingRate ?? null
-        : latestHistory?.fundingRate ?? null,
+      latestHistory?.fundingRate
+      ?? (native && native.settState === "settled" ? parseOptionalNumber(native.settFundingRate) : null),
     bidAskSpread: null,
   } satisfies CanonicalFundingDetail;
 }

@@ -4,6 +4,7 @@ import { runDirectFirst } from "./utils/direct-first";
 export interface FundingRate {
   coin: string;
   fundingRate: string;
+  predictedFundingRate?: string | number;
   markPrice: string;
   indexPrice: string;
   premium: string;
@@ -268,16 +269,38 @@ function isValidLiveFundingRate(value: unknown): value is string | number {
   return Number.isFinite(parsed);
 }
 
+function getHlPerpPredictions(data: unknown): Map<string, string | number> {
+  if (!Array.isArray(data)) return new Map();
+
+  const result = new Map<string, string | number>();
+
+  for (const entry of data) {
+    if (!Array.isArray(entry) || typeof entry[0] !== "string" || entry[0].trim() === "") continue;
+    if (!Array.isArray(entry[1])) continue;
+
+    const hlPerp = entry[1].find((venue) =>
+      Array.isArray(venue) && venue[0] === "HlPerp" && venue[1] !== null && typeof venue[1] === "object",
+    );
+    if (!Array.isArray(hlPerp)) continue;
+    const prediction = hlPerp[1] as Record<string, unknown>;
+    if (!isValidLiveFundingRate(prediction.fundingRate)) continue;
+    result.set(entry[0], prediction.fundingRate);
+  }
+
+  return result;
+}
+
 export async function getAllFundingRates(): Promise<FundingRate[]> {
   try {
-    const data = await fetchHyperliquidInfo<any[]>(
-      { type: "metaAndAssetCtxs" },
-      2,
-    );
+    const [data, predictedFundings] = await Promise.all([
+      fetchHyperliquidInfo<any[]>({ type: "metaAndAssetCtxs" }, 2),
+      fetchHyperliquidInfo<unknown[]>({ type: "predictedFundings" }, 2),
+    ]);
 
     if (!data) {
       throw new Error("Failed to fetch funding rates");
     }
+    const hlPerpPredictions = getHlPerpPredictions(predictedFundings);
     const meta = data[0];
     const assetCtxs: AssetContext[] = data[1];
 
@@ -289,9 +312,11 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
       const ctx = assetCtxs[index];
       if (!isValidLiveFundingRate(ctx?.funding)) return [];
 
+      const predictedFundingRate = hlPerpPredictions.get(market.name);
       return [{
         coin: market.name,
         fundingRate: String(ctx.funding),
+        ...(predictedFundingRate === undefined ? {} : { predictedFundingRate }),
         markPrice: ctx?.markPx || "0",
         indexPrice: ctx?.oraclePx || "0",
         premium: ctx?.premium || "0",

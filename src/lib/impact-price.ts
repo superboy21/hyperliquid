@@ -10,7 +10,7 @@ import { fetchBitgetImpactSpread, fetchBitgetImpactSpreadDetail, fetchBitgetOrde
 import { fetchBybitImpactSpread, fetchBybitImpactSpreadDetail, fetchBybitOrderBook, type BybitRequest } from "./adapters/bybit";
 import { bookTopBbo, clampRpiDepth, type BookMode } from "./rpi-book";
 import { requireBitgetRawSymbol, type SearchExchangeRate } from "./search";
-import { getGateOrderBook, getGateTickers } from "./gateio";
+import { getGateOrderBook, getGateQuantoMultiplier } from "./gateio";
 import {
   computeOrderBookImpactDetail,
   computeOrderBookImpactSpread,
@@ -59,25 +59,6 @@ export function computePremiumIndex(
 /** Result of an impact spread computation. */
 export type ImpactSpreadResult = number | "insufficient" | "no_ctVal" | "no_multiplier" | null;
 export type ImpactSpreadDetailResult = OrderBookImpactDetail | "insufficient" | "no_ctVal" | "no_multiplier" | null;
-
-// ==================== Gate.io Multiplier Cache ====================
-
-const gateMultiplierCache = new Map<string, number>();
-
-/**
- * Cache Gate.io quanto_multipliers from tickers.
- * Call this once when tickers are fetched.
- */
-export function cacheGateMultipliers(
-  tickers: Array<{ contract: string; quanto_multiplier: string }>,
-): void {
-  for (const t of tickers) {
-    const mult = Number.parseFloat(t.quanto_multiplier);
-    if (Number.isFinite(mult) && mult > 0) {
-      gateMultiplierCache.set(t.contract, mult);
-    }
-  }
-}
 
 // ==================== OKX ctVal Cache ====================
 
@@ -146,23 +127,6 @@ async function fetchHyperliquidBook(
   }
 }
 
-async function getGateMultiplier(contract: string, signal?: AbortSignal): Promise<number | null> {
-  try {
-    const rows = await getGateTickers(contract, signal);
-    const row = rows.find((item) => item.contract === contract);
-    const multiplier = row?.quanto_multiplier ? Number.parseFloat(row.quanto_multiplier) : Number.NaN;
-    if (!Number.isFinite(multiplier) || multiplier <= 0) {
-      return null;
-    }
-
-    gateMultiplierCache.set(contract, multiplier);
-    return multiplier;
-  } catch {
-    if (signal?.aborted) throw signal.reason;
-    return null;
-  }
-}
-
 export interface GatePerpOrderBookPayload {
   bids?: Array<{ p: string; s: number }>;
   asks?: Array<{ p: string; s: number }>;
@@ -193,7 +157,7 @@ async function fetchGateioBook(
     const data = await getGateOrderBook(contract, depthLimit, signal, bookMode === "rpi");
     if (!data) return null;
 
-    const multiplier = gateMultiplierCache.get(contract) ?? await getGateMultiplier(contract, signal);
+    const multiplier = await getGateQuantoMultiplier(contract, signal);
     return normalizeGatePerpOrderBook(data, multiplier);
   } catch {
     if (signal?.aborted) throw signal.reason;

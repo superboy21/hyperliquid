@@ -365,7 +365,9 @@ export function normalizeBitgetFundingRows(
       rawSymbol: instrument.symbol,
       marketKey: instrument.symbol,
       fundingRate,
-      predictedFundingRate: null,
+      // current-fund-rate is the live current-cycle estimate for the upcoming
+      // settlement; history-fund-rate remains the settled-history source.
+      predictedFundingRate: fundingRate,
       lastSettlementRate: null,
       markPrice,
       indexPrice: numberOrNull(ticker.indexPrice),
@@ -498,14 +500,17 @@ export function latestBitgetFundingPoint(history: CanonicalFundingHistoryPoint[]
 
 /** Hard request budget for a bounded cursor walk; the cutoff, not current interval metadata, ends a successful walk. */
 const MAX_FUNDING_HISTORY_PAGES = 100;
+/** Maximum documented Bitget settlement cadence used to prove a 30-day boundary. */
+const HISTORICAL_SETTLEMENT_BUFFER_MS = 8 * 60 * 60 * 1000;
 
 export async function fetchBitgetFundingHistory(
   rawSymbol: string,
-  options: { cutoffTime?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; request?: BitgetRequest; priority?: BitgetRequestPriority; requireCutoffCoverage?: boolean } = {},
+  options: { cutoffTime?: number; endTime?: number; now?: number; asOf?: number; signal?: AbortSignal; pageSize?: number; maxPages?: number; request?: BitgetRequest; priority?: BitgetRequestPriority; requireCutoffCoverage?: boolean } = {},
 ): Promise<CanonicalFundingHistoryPoint[]> {
   const pageSize = Math.max(1, Math.min(100, options.pageSize ?? 100));
   const maxPages = Math.max(1, Math.min(MAX_FUNDING_HISTORY_PAGES, Math.trunc(options.maxPages ?? MAX_FUNDING_HISTORY_PAGES)));
   const request = options.request ?? requestBitget;
+  const requestedEnd = options.endTime ?? options.asOf ?? options.now ?? Date.now();
   const collected = new Map<number, number>();
   let previousOldest = Number.POSITIVE_INFINITY;
   let reachedCutoff = options.cutoffTime === undefined;
@@ -514,7 +519,11 @@ export async function fetchBitgetFundingHistory(
     const payload = await request("history-fund-rate", { symbol: rawSymbol, cursor: String(cursor), limit: String(pageSize) }, options.signal, { priority: options.priority });
     const rawRows = parseBitgetList<BitgetFundingHistoryEntry>(payload);
     const rows = normalizeBitgetFundingHistory(payload);
-    for (const row of rows) if (options.cutoffTime === undefined || row.timestamp >= options.cutoffTime) collected.set(row.timestamp, row.fundingRate);
+    for (const row of rows) {
+      if ((options.cutoffTime === undefined || row.timestamp >= options.cutoffTime) && row.timestamp <= requestedEnd) {
+        collected.set(row.timestamp, row.fundingRate);
+      }
+    }
     const oldest = rows.length ? rows[0].timestamp : Number.POSITIVE_INFINITY;
     if (options.cutoffTime !== undefined && oldest <= options.cutoffTime) {
       reachedCutoff = true;
@@ -742,12 +751,16 @@ export async function fetchBitgetCanonicalDetail(
   options: { now?: number; signal?: AbortSignal; request?: BitgetRequest; priority?: BitgetRequestPriority } = {},
 ): Promise<CanonicalFundingDetail> {
   const now = options.now ?? Date.now();
-  const cutoffTime = now - 30 * 86_400_000;
+  // Request one native settlement interval beyond 30 days so a valid boundary
+  // sample is retained when the market has one.  Do not require that boundary:
+  // new markets must still expose their partial history and latest settlement.
+  const cutoffTime = now - 30 * 86_400_000 - HISTORICAL_SETTLEMENT_BUFFER_MS;
   const [fundingHistory, candles] = await Promise.all([
     fetchBitgetFundingHistory(row.rawSymbol, {
       cutoffTime,
+      endTime: now,
       maxPages: MAX_FUNDING_HISTORY_PAGES,
-      requireCutoffCoverage: true,
+      requireCutoffCoverage: false,
       signal: options.signal,
       request: options.request,
       priority: options.priority,

@@ -48,6 +48,8 @@ function validateBody(body: unknown): body is JsonObject {
   if (!isObject(body) || typeof body.type !== "string") return false;
 
   switch (body.type) {
+    case "predictedFundings":
+      return hasOnlyKeys(body, ["type"]);
     case "metaAndAssetCtxs":
       return hasOnlyKeys(body, ["type"], ["dex"]) &&
         (!Object.prototype.hasOwnProperty.call(body, "dex") ||

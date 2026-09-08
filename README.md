@@ -311,6 +311,10 @@ Invoke-WebRequest "http://localhost:3000/api/spot/binance?action=list"
 
 ## 更新日志
 
+### v2026.09.08.2
+- 修复 Gate candle：`v` 按 `quanto_multiplier` 转换为基础币成交量；OKX 使用官方 `volCcy`。Gate `sum` 与 OKX `volCcyQuote` 保持官方报价币成交额，缺失时不再错误估算；canonical detail 同步修复
+- 回归验证通过：811 项 tests、TypeScript typecheck、ESLint；实时 BTC 日成交量约为 Gate 3.9 万–4.3 万、OKX 4.8 万–5.1 万
+
 ### v2026.09.08.1
 - 修正 `/search` 历史资金费率统计：窗口内先累计实际结算费率，再按真实窗口时长年化，避免用 bucket 算术平均值乘当前结算周期导致 1 小时/8 小时周期切换或空桶时失真
 - 统一搜索图表、2/7/30 天统计、单市场分析、Perp/Perp 与混合组合分析的资金费率口径；精确选区使用 `[start, end)`，支持错峰结算并保留真实 0 费率

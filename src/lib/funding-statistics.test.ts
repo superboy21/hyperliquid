@@ -93,6 +93,67 @@ describe("historical funding statistics", () => {
     expect(result.avg2d).toBeCloseTo(0.01 * HOUR / (2 * DAY), 12);
   });
 
+  test("a three-day listing exposes only its covered two-day window", () => {
+    const result = computeAvgFundingRates([
+      { time: NOW - 3 * DAY, fundingRate: "0.01" },
+      { time: NOW - 2 * DAY, fundingRate: "0.01" },
+      { time: NOW - DAY, fundingRate: "0.01" },
+      { time: NOW - HOUR, fundingRate: "0.01" },
+    ], 3600, NOW, { requireWindowCoverage: true });
+
+    expect(result.avg2d).not.toBeNull();
+    expect(result.avg7d).toBeNull();
+    expect(result.avg30d).toBeNull();
+  });
+
+  test("an eight-day listing exposes two-day and seven-day windows only", () => {
+    const result = computeAvgFundingRates([
+      { time: NOW - 8 * DAY, fundingRate: "0.01" },
+      { time: NOW - 7 * DAY, fundingRate: "0.01" },
+      { time: NOW - 2 * DAY, fundingRate: "0.01" },
+      { time: NOW - HOUR, fundingRate: "0.01" },
+    ], 3600, NOW, { requireWindowCoverage: true });
+
+    expect(result.avg2d).not.toBeNull();
+    expect(result.avg7d).not.toBeNull();
+    expect(result.avg30d).toBeNull();
+  });
+
+  test("requires the exact boundary or an earlier settlement, not a post-cutoff row", () => {
+    const start = NOW - 7 * DAY;
+    const exact = computeAvgFundingRates([
+      { time: start, fundingRate: 0 },
+      { time: NOW - HOUR, fundingRate: 0.01 },
+    ], 3600, NOW, { requireWindowCoverage: true });
+    const after = computeAvgFundingRates([
+      { time: start + 1, fundingRate: 0 },
+      { time: NOW - HOUR, fundingRate: 0.01 },
+    ], 3600, NOW, { requireWindowCoverage: true });
+
+    expect(exact.avg7d).not.toBeNull();
+    expect(after.avg7d).toBeNull();
+  });
+
+  test("required coverage rejects a stale settlement tail for every window", () => {
+    const result = computeAvgFundingRates([
+      { time: NOW - 30 * DAY, fundingRate: "0.01" },
+      { time: NOW - 7 * DAY, fundingRate: "0.01" },
+      { time: NOW - 2 * DAY, fundingRate: "0.01" },
+      { time: NOW - HOUR - 1_001, fundingRate: 0 },
+    ], 3600, NOW, { requireWindowCoverage: true });
+
+    expect(result).toEqual({ avg2d: null, avg7d: null, avg30d: null });
+  });
+
+  test("allows at most one second of settlement timestamp normalization skew", () => {
+    const result = computeAvgFundingRates([
+      { time: NOW - 2 * DAY, fundingRate: "0.01" },
+      { time: NOW - HOUR - 1_000, fundingRate: "0" },
+    ], 3600, NOW, { requireWindowCoverage: true });
+
+    expect(result.avg2d).not.toBeNull();
+  });
+
   test("returns null when a window has no valid samples", () => {
     expect(calculateHistoricalFundingStatistics([
       { time: NOW - DAY, rate: Number.NaN },

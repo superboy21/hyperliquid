@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { binanceFetch, binanceKlinesFetch, parseBinanceLiveFundingRate } from "./binance";
+import {
+  binanceFetch,
+  binanceKlinesFetch,
+  fetchBinanceCanonicalRates,
+  fetchBinanceSearchRates,
+  parseBinanceLiveFundingRate,
+} from "./binance";
 
 const originalFetch = globalThis.fetch;
 
@@ -106,5 +112,36 @@ describe("Binance live funding normalization", () => {
     expect(parseBinanceLiveFundingRate(0)).toBe(0);
     expect(parseBinanceLiveFundingRate("")).toBeNull();
     expect(parseBinanceLiveFundingRate("NaN")).toBeNull();
+    expect(parseBinanceLiveFundingRate("0.1garbage")).toBeNull();
+  });
+
+  test("maps PONS current funding as predicted funding and propagates it to Search", async () => {
+    const now = Date.now();
+    const premiums = [
+      { symbol: "BTCUSDT", markPrice: "100", indexPrice: "100", fundingRate: "0.00040108", lastFundingRate: "0.0002", nextFundingTime: now + 8 * 60 * 60 * 1000, lastPrice: "100" },
+      { symbol: "ZEROUSDT", markPrice: "100", indexPrice: "100", fundingRate: "0", nextFundingTime: now + 8 * 60 * 60 * 1000, lastPrice: "100" },
+      { symbol: "LEGACYUSDT", markPrice: "100", indexPrice: "100", lastFundingRate: "-0.0002", nextFundingTime: now + 8 * 60 * 60 * 1000, lastPrice: "100" },
+      { symbol: "BADUSDT", markPrice: "100", indexPrice: "100", fundingRate: "0.1garbage", lastFundingRate: "0.0003", nextFundingTime: now + 8 * 60 * 60 * 1000, lastPrice: "100" },
+    ];
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("premiumIndex")) return Response.json(premiums);
+      if (text.includes("ticker/24hr")) return Response.json(premiums.map((item) => ({ symbol: item.symbol, priceChangePercent: "0", quoteVolume: "1", lastPrice: "100" })));
+      if (text.includes("fundingInfo")) return Response.json(premiums.map((item) => ({ symbol: item.symbol, fundingIntervalHours: 8 })));
+      if (text.includes("bookTicker")) return Response.json(premiums.map((item) => ({ symbol: item.symbol, bidPrice: "99", askPrice: "101" })));
+      if (text.includes("fundingRate")) return Response.json([]);
+      throw new Error(`Unexpected Binance test URL: ${text}`);
+    }) as typeof fetch;
+
+    const canonical = await fetchBinanceCanonicalRates();
+    expect(canonical.map((row) => [row.symbol, row.fundingRate, row.predictedFundingRate])).toEqual([
+      ["BTCUSDT", 0.00040108, 0.00040108],
+      ["ZEROUSDT", 0, 0],
+      ["LEGACYUSDT", -0.0002, -0.0002],
+    ]);
+
+    const search = await fetchBinanceSearchRates();
+    expect(search.find((row) => row.symbol === "BTCUSDT")?.predictedFundingRate).toBe(0.00040108);
+    expect(search.find((row) => row.symbol === "ZEROUSDT")?.predictedFundingRate).toBe(0);
   });
 });

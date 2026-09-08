@@ -45,7 +45,7 @@ describe("Bitget successful-payload parsing and list normalization", () => {
     );
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ symbol: "BTC", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT", fundingIntervalSeconds: 7200, change24h: 2.5, quoteVolume: 12345, openInterest: 7, notionalValue: 707, assetCategory: "Crypto", bestBid: 100, bestAsk: 102 });
+    expect(rows[0]).toMatchObject({ symbol: "BTC", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT", fundingRate: 0.0001, predictedFundingRate: 0.0001, fundingIntervalSeconds: 7200, change24h: 2.5, quoteVolume: 12345, openInterest: 7, notionalValue: 707, assetCategory: "Crypto", bestBid: 100, bestAsk: 102 });
   });
 
   test("applies interval precedence, fallback change, and category mapping", () => {
@@ -75,7 +75,29 @@ describe("Bitget successful-payload parsing and list normalization", () => {
       { symbol: "BADUSDT", fundingRate: "NaN" },
     ]);
 
-    expect(rows.map((row) => [row.symbol, row.fundingRate])).toEqual([["ZERO", 0]]);
+    expect(rows.map((row) => [row.symbol, row.fundingRate, row.predictedFundingRate])).toEqual([["ZERO", 0, 0]]);
+  });
+
+  test("propagates positive and negative live rates as predicted rates", () => {
+    const rows = normalizeBitgetFundingRows(
+      [
+        { symbol: "POSUSDT", baseCoin: "POS", type: "perpetual", status: "online" },
+        { symbol: "NEGUSDT", baseCoin: "NEG", type: "perpetual", status: "online" },
+      ],
+      [
+        { symbol: "POSUSDT", markPrice: "10" },
+        { symbol: "NEGUSDT", markPrice: "10" },
+      ],
+      [
+        { symbol: "POSUSDT", fundingRate: "0.001" },
+        { symbol: "NEGUSDT", fundingRate: "-0.002" },
+      ],
+    );
+
+    expect(rows.map((row) => [row.fundingRate, row.predictedFundingRate])).toEqual([
+      [0.001, 0.001],
+      [-0.002, -0.002],
+    ]);
   });
 });
 
@@ -155,8 +177,29 @@ describe("Bitget funding history", () => {
     }, "1d", { now, request });
 
     expect(fundingCalls).toBe(8);
-    expect(detail.fundingHistory.at(0)?.timestamp).toBeGreaterThanOrEqual(cutoffTime);
+    expect(detail.fundingHistory.at(0)?.timestamp).toBeGreaterThanOrEqual(cutoffTime - 8 * hour);
     expect(detail.fundingHistory.at(-1)?.timestamp).toBe(now);
+  });
+
+  test("uses the captured now and an 8h historical buffer for current 1h funding", async () => {
+    const now = Date.UTC(2026, 6, 15);
+    const boundary = now - 30 * 86_400_000 - 8 * hour;
+    const request: BitgetRequest = async (action) => action === "history-fund-rate"
+      ? { resultList: [
+        { fundingRateTimestamp: String(now + hour), fundingRate: "0.3" },
+        { fundingRateTimestamp: String(now), fundingRate: "0.1" },
+        { fundingRateTimestamp: String(boundary), fundingRate: "0.2" },
+      ] }
+      : [];
+
+    const detail = await fetchBitgetCanonicalDetail({
+      symbol: "BTC", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
+      fundingIntervalSeconds: 3600, bestBid: 99, bestAsk: 101,
+    }, "1d", { now, request });
+
+    expect(detail.fundingHistory.at(0)?.timestamp).toBe(boundary);
+    expect(detail.fundingHistory.at(-1)?.timestamp).toBe(now);
+    expect(detail.lastSettlementRate).toBe(0.1);
   });
 
   test("strict cutoff coverage fail-closes a page-capped partial result while non-strict keeps it", async () => {
@@ -467,13 +510,13 @@ describe("Bitget canonical detail degradation", () => {
     await expect(fetchBitgetCanonicalDetail(row, "1d", { now, request })).rejects.toBe(fundingFailure);
   });
 
-  test("canonical detail requires complete funding cutoff coverage", async () => {
+  test("canonical detail preserves a partial three-day history and latest settlement", async () => {
     const request: BitgetRequest = async (action) => action === "history-fund-rate"
       ? { resultList: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] }
       : [];
     const detail = await fetchBitgetCanonicalDetail(row, "1d", { now, request });
-    expect(detail.fundingHistory).toEqual([]);
-    expect(detail.lastSettlementRate).toBeNull();
+    expect(detail.fundingHistory).toEqual([{ timestamp: now - 1000, fundingRate: 0.001 }]);
+    expect(detail.lastSettlementRate).toBe(0.001);
   });
 });
 

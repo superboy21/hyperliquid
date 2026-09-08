@@ -27,6 +27,7 @@ describe("Hyperliquid Perp proxy contract", () => {
         { type: "metaAndAssetCtxs", dex: "xyz" },
         { type: "metaAndAssetCtxs", dex: "para" },
         { type: "metaAndAssetCtxs", dex: "hyna" },
+        { type: "predictedFundings" },
         { type: "fundingHistory", coin: "BTC", startTime: 1000, endTime: 2000 },
         { type: "candleSnapshot", req: { coin: "BTC", interval: "1h", startTime: 1000, endTime: 2000 } },
         { type: "l2Book", coin: "BTC" },

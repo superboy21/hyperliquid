@@ -169,22 +169,37 @@ export async function fetchGateCanonicalDetail(
   bestBid?: number,
   bestAsk?: number,
   signal?: AbortSignal,
+  options: { now?: number; asOf?: number } | number = {},
 ): Promise<CanonicalFundingDetail> {
   // requestGate applies a per-direct-leg client timeout and can then fall back
   // through the proxy. Do not combine that timeout into the caller signal: an
   // internal direct timeout must not look like caller cancellation to the
   // direct-first transport policy.
+  const asOf = typeof options === "number"
+    ? options
+    : options.asOf ?? options.now;
+  const asOfMs = Number.isFinite(asOf) ? asOf as number : Date.now();
+  const historicalSettlementBufferSeconds = 8 * 60 * 60;
+  // Fetch one native settlement interval beyond the 30-day window.  The
+  // helper's strict mode remains reserved for callers that need a complete
+  // window; canonical detail keeps valid partial history for new markets.
+  const historyDays = 30 + historicalSettlementBufferSeconds / (24 * 60 * 60);
   const [candles, history] = await Promise.all([
     getCandleSnapshot(symbol, interval, 30, signal),
-    getFundingHistoryForDays(symbol, 30, fundingIntervalSeconds, signal, true),
+    getFundingHistoryForDays(symbol, historyDays, fundingIntervalSeconds, signal, false, asOfMs),
   ]);
   throwIfAborted(signal);
 
-  const fundingHistory: CanonicalFundingHistoryPoint[] = history.map((item) => ({
-    timestamp: item.time,
-    fundingRate: Number.parseFloat(item.fundingRate),
-  }));
-  const latest = history.length > 0 ? Number.parseFloat(history[history.length - 1].fundingRate) : null;
+  const fundingHistory: CanonicalFundingHistoryPoint[] = history.flatMap((item) => {
+    const fundingRate = parseLiveFundingRate(item.fundingRate);
+    return Number.isFinite(item.time) && item.time > 0 && fundingRate !== null
+      ? [{ timestamp: item.time, fundingRate }]
+      : [];
+  });
+  const latest = fundingHistory.reduce<CanonicalFundingHistoryPoint | null>(
+    (current, point) => !current || point.timestamp > current.timestamp ? point : current,
+    null,
+  )?.fundingRate ?? null;
   const bidAskSpread =
     bestBid != null && bestAsk != null && bestBid > 0 && bestAsk > 0
       ? ((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 100

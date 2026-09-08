@@ -9,6 +9,7 @@ import { binanceFetch, binanceKlinesFetch } from "./adapters/binance";
 import { fetchBitgetCandles, fetchBitgetFundingHistory } from "./adapters/bitget";
 import { fetchBybitCandles, fetchBybitFundingHistory, resolveBybitFundingHistoryWindowMs } from "./adapters/bybit";
 import { isAbortLikeError, throwIfAborted } from "./utils/abort";
+import { getGateQuantoMultiplier } from "./gateio";
 import { requestGate } from "./gate-upstream";
 import { requireBitgetRawSymbol, requireBybitRawSymbol, type SearchExchangeRate } from "./search";
 import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
@@ -125,6 +126,20 @@ export function toOkxBar(interval: SearchChartInterval): string {
     case "1m": return "1m";
     default: return "1Dutc";
   }
+}
+
+export function normalizeOkxSearchCandle(item: any[], intervalMs: number): SearchCandlePoint {
+  return {
+    openTime: Number(item[0]),
+    closeTime: Number(item[0]) + intervalMs,
+    open: String(item[1] ?? 0),
+    high: String(item[2] ?? 0),
+    low: String(item[3] ?? 0),
+    close: String(item[4] ?? 0),
+    // OKX perpetual rows are [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm].
+    volume: String(item[6] ?? 0),
+    ...(item[7] === undefined || item[7] === null ? {} : { quoteVolume: String(item[7]) }),
+  };
 }
 
 function toLighterResolution(interval: SearchChartInterval): string {
@@ -356,20 +371,26 @@ export async function fetchGateCandles(
 
     const data = await response.json();
     if (!Array.isArray(data)) return [];
+    if (data.length === 0) return [];
+
+    const multiplier = await getGateQuantoMultiplier(contract, signal);
+    if (multiplier === null) return [];
 
     const intervalMs = getGateIntervalMs(interval);
-    return data.map((item: { t: number; o: string; h: string; l: string; c: string; v: number; sum?: string }) => {
+    return data.flatMap((item: { t: number; o: string; h: string; l: string; c: string; v: number; sum?: string }) => {
+      const contracts = Number(item.v);
+      if (!Number.isFinite(contracts)) return [];
       const openTime = item.t * 1000;
-      return {
+      return [{
         openTime,
         closeTime: openTime + intervalMs,
         open: item.o,
         high: item.h,
         low: item.l,
         close: item.c,
-        volume: String(item.v),
-        quoteVolume: String(item.sum ?? Number(item.v) * Number(item.c)),
-      };
+        volume: String(contracts * multiplier),
+        ...(item.sum === undefined || item.sum === null ? {} : { quoteVolume: String(item.sum) }),
+      }];
     });
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -378,7 +399,7 @@ export async function fetchGateCandles(
   }
 }
 
-async function fetchOkxCandles(
+export async function fetchOkxCandles(
   rawSymbol: string,
   interval: SearchChartInterval,
   signal?: AbortSignal,
@@ -415,16 +436,7 @@ async function fetchOkxCandles(
           const openTime = Number(item[0]);
           if (!seen.has(openTime) && openTime > 0) {
             seen.add(openTime);
-            allCandles.push({
-              openTime,
-              closeTime: openTime + intervalMs,
-              open: String(item[1] ?? 0),
-              high: String(item[2] ?? 0),
-              low: String(item[3] ?? 0),
-              close: String(item[4] ?? 0),
-              volume: String(item[5] ?? 0),
-              quoteVolume: String(item[7] ?? Number(item[5] ?? 0) * Number(item[4] ?? 0)),
-            });
+            allCandles.push(normalizeOkxSearchCandle(item, intervalMs));
           }
         }
 
@@ -449,16 +461,7 @@ async function fetchOkxCandles(
     const rows = Array.isArray(payload.data) ? payload.data : [];
 
     return rows
-      .map((item: any[]) => ({
-        openTime: Number(item[0]),
-        closeTime: Number(item[0]) + intervalMs,
-        open: String(item[1] ?? 0),
-        high: String(item[2] ?? 0),
-        low: String(item[3] ?? 0),
-        close: String(item[4] ?? 0),
-        volume: String(item[5] ?? 0),
-        quoteVolume: String(item[7] ?? Number(item[5] ?? 0) * Number(item[4] ?? 0)),
-      }))
+      .map((item: any[]) => normalizeOkxSearchCandle(item, intervalMs))
       .filter((item: SearchCandlePoint) => item.openTime > 0)
       .sort((a: SearchCandlePoint, b: SearchCandlePoint) => a.openTime - b.openTime);
   } catch (error) {

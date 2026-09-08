@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { CanonicalFundingRateRow } from "./types";
 import {
   batchFetchDetails,
@@ -106,6 +106,33 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
     expect(seen).toEqual([RAW, RAW]);
   });
 
+  test("passes one captured now to Bitget canonical detail and averages", async () => {
+    const now = 9_000_000_000;
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    let receivedNow: number | undefined;
+    try {
+      await fetchDetailForSymbol(rate(), undefined, {
+        fetchBitgetCanonicalDetail: async (_row, _interval, options) => {
+          receivedNow = options?.now;
+          return {
+            exchange: "bitget",
+            transportMode: "native",
+            symbol: "BTC",
+            rawSymbol: RAW,
+            marketKey: RAW,
+            fundingHistory: [],
+            candles: [],
+            lastSettlementRate: null,
+            bidAskSpread: null,
+          };
+        },
+      });
+      expect(receivedNow).toBe(now);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test("maps funding-only canonical detail without losing settlement or BBO metrics", async () => {
     const now = Date.now();
     const result = await fetchDetailForSymbol(rate(), undefined, {
@@ -127,9 +154,9 @@ describe("Phase 3 Bitget exact symbol dispatch", () => {
       historicalVolatility: null,
       bidAskSpread: 2,
     });
-    expect(result.avgFundingRate2d).toBeCloseTo(0.001 / 6, 6);
-    expect(result.avgFundingRate7d).toBeCloseTo(0.001 / 21, 6);
-    expect(result.avgFundingRate30d).toBeCloseTo(0.001 / 90, 6);
+    expect(result.avgFundingRate2d).toBeNull();
+    expect(result.avgFundingRate7d).toBeNull();
+    expect(result.avgFundingRate30d).toBeNull();
   });
 
 });
@@ -197,6 +224,71 @@ describe("Lighter detail query units", () => {
     expect(result.avgFundingRate30d).toBeNull();
   });
 
+  test.each([
+    ["under", 1, true],
+    ["exact", 0, false],
+    ["over", -1, false],
+  ] as const)("Lighter %s-7d boundary coverage is strict", async (_name, offsetMs, expectedNull) => {
+    const now = 100 * 24 * 60 * 60 * 1000;
+    const boundarySeconds = (now - 7 * 24 * 60 * 60 * 1000 + offsetMs) / 1000;
+    const fetchLighter = async (endpoint: string): Promise<Response> => {
+      if (endpoint === "candles") return Response.json({ c: [] });
+      if (endpoint === "fundings") return Response.json({ fundings: [
+        { timestamp: boundarySeconds, rate: "0.10", direction: "long" },
+        { timestamp: now / 1000 - 3600, rate: "0", direction: "long" },
+      ] });
+      return Response.json({ asks: [{ price: "101" }], bids: [{ price: "99" }] });
+    };
+
+    const result = await fetchDetailForSymbol(rate({ exchange: "Lighter", marketId: 7 }), undefined, {
+      fetchLighter,
+      now: () => now,
+    } as SearchDetailDependencies);
+
+    expect(result.avgFundingRate7d === null).toBe(expectedNull);
+  });
+
+  test.each([
+    ["rejection", async () => { throw new Error("funding unavailable"); }],
+    ["non-OK", async () => new Response(null, { status: 503 })],
+    ["malformed", async () => Response.json({ fundings: "not-an-array" })],
+  ] as const)("fails Lighter detail when funding history is %s", async (_name, fundingRequest) => {
+    const fetchLighter = async (endpoint: string): Promise<Response> => {
+      if (endpoint === "fundings") return fundingRequest();
+      if (endpoint === "candles") return Response.json({ c: [] });
+      return Response.json({ asks: [], bids: [] });
+    };
+
+    await expect(fetchDetailForSymbol(rate({ exchange: "Lighter", marketId: 7 }), undefined, {
+      fetchLighter,
+      now: () => 100 * 24 * 60 * 60 * 1000,
+    } as SearchDetailDependencies)).rejects.toThrow();
+  });
+
+  test("propagates a caller abort that occurs while reading Lighter funding history", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled after await");
+    const fetchLighter = async (endpoint: string): Promise<Response> => {
+      if (endpoint === "candles") return Response.json({ c: [] });
+      if (endpoint === "fundings") {
+        return {
+          ok: true,
+          json: async () => {
+            controller.abort(reason);
+            return { fundings: [] };
+          },
+        } as unknown as Response;
+      }
+      return Response.json({ asks: [], bids: [] });
+    };
+
+    await expect(fetchDetailForSymbol(
+      rate({ exchange: "Lighter", marketId: 7 }),
+      controller.signal,
+      { fetchLighter, now: () => 100 * 24 * 60 * 60 * 1000 } as SearchDetailDependencies,
+    )).rejects.toBe(reason);
+  });
+
   test("detail mapping rejects missing/blank/non-finite funding but retains zero", async () => {
     const now = Date.UTC(2026, 0, 31, 12, 34, 56, 789);
     const nowSeconds = Math.floor(now / 1000);
@@ -206,7 +298,7 @@ describe("Lighter detail query units", () => {
         { timestamp: nowSeconds - 3600, rate: "" },
         { timestamp: nowSeconds - 7200 },
         { timestamp: nowSeconds - 10800, rate: "NaN" },
-        { timestamp: nowSeconds - 14400, rate: "0", direction: "long" },
+        { timestamp: nowSeconds - 3600, rate: "0", direction: "long" },
         { timestamp: Math.floor((now - 2 * 24 * 60 * 60 * 1000) / 1000) - 1, rate: "0.05", direction: "long" },
       ] });
       return Response.json({ asks: [{ price: "101" }], bids: [{ price: "99" }] });

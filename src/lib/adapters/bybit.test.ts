@@ -73,6 +73,7 @@ describe("Bybit successful-payload parsing and list normalization", () => {
       rawSymbol: "1000PEPEUSDT",
       marketKey: "1000PEPEUSDT",
       fundingRate: 0.0001,
+      predictedFundingRate: 0.0001,
       markPrice: 0.01015,
       indexPrice: 0.0101,
       lastPrice: 0.0102,
@@ -115,7 +116,25 @@ describe("Bybit successful-payload parsing and list normalization", () => {
       ],
     });
 
-    expect(rows.map((row) => [row.symbol, row.fundingRate])).toEqual([["ZERO", 0]]);
+    expect(rows.map((row) => [row.symbol, row.fundingRate, row.predictedFundingRate])).toEqual([["ZERO", 0, 0]]);
+  });
+
+  test("propagates positive and negative live rates as predicted rates", () => {
+    const rows = normalizeBybitFundingRows(
+      [
+        { symbol: "POSUSDT", baseCoin: "POS", contractType: "LinearPerpetual", status: "Trading", settleCoin: "USDT" },
+        { symbol: "NEGUSDT", baseCoin: "NEG", contractType: "LinearPerpetual", status: "Trading", settleCoin: "USDT" },
+      ],
+      { list: [
+        { symbol: "POSUSDT", markPrice: "10", fundingRate: "0.001" },
+        { symbol: "NEGUSDT", markPrice: "10", fundingRate: "-0.002" },
+      ] },
+    );
+
+    expect(rows.map((row) => [row.fundingRate, row.predictedFundingRate])).toEqual([
+      [0.001, 0.001],
+      [-0.002, -0.002],
+    ]);
   });
 });
 
@@ -529,8 +548,33 @@ describe("Bybit detail funding request counts", () => {
 
     expect(fundingCalls).toBe(4);
     expect(Math.min(...fundingEnds)).toBeGreaterThan(cutoffTime);
-    expect(detail.fundingHistory.at(0)?.timestamp).toBeGreaterThanOrEqual(cutoffTime);
+    expect(detail.fundingHistory.at(0)?.timestamp).toBeGreaterThanOrEqual(cutoffTime - 8 * hour);
     expect(detail.fundingHistory.at(-1)?.timestamp).toBe(now);
+  });
+
+  test("uses the captured now and an 8h historical buffer for current 1h funding", async () => {
+    const now = Date.UTC(2026, 6, 15);
+    const boundary = now - 30 * day - 8 * hour;
+    let fundingParams: Record<string, string> | undefined;
+    const request: BybitRequest = async (action, params) => {
+      if (action === "funding-history") {
+        fundingParams = params;
+        return { list: [
+          { fundingRateTimestamp: String(now), fundingRate: "0.1" },
+          { fundingRateTimestamp: String(boundary), fundingRate: "0.2" },
+        ] };
+      }
+      return { list: [] };
+    };
+
+    const detail = await fetchBybitCanonicalDetail({
+      symbol: "BTC", rawSymbol: "BTCUSDT", marketKey: "BTCUSDT",
+      fundingIntervalSeconds: 3600, bestBid: 99, bestAsk: 101,
+    }, "1d", { now, request, fundingCache: null, candleCache: null });
+
+    expect(fundingParams?.endTime).toBe(String(now));
+    expect(detail.fundingHistory.at(0)?.timestamp).toBe(boundary);
+    expect(detail.lastSettlementRate).toBe(0.1);
   });
 });
 
@@ -992,15 +1036,15 @@ describe("Bybit canonical detail degradation", () => {
     await expect(fetchBybitCanonicalDetail(row, "1d", { now, request, fundingCache: null, candleCache: null })).rejects.toBe(fundingFailure);
   });
 
-  test("canonical detail requires complete funding cutoff coverage", async () => {
+  test("canonical detail preserves a partial three-day history and latest settlement", async () => {
     const request: BybitRequest = async (action) => action === "funding-history"
       ? { list: [{ fundingRateTimestamp: String(now - 1000), fundingRate: "0.001" }] }
       : { list: [] };
     const detail = await fetchBybitCanonicalDetail(row, "1d", {
       now, request, fundingCache: null, candleCache: null,
     });
-    expect(detail.fundingHistory).toEqual([]);
-    expect(detail.lastSettlementRate).toBeNull();
+    expect(detail.fundingHistory).toEqual([{ timestamp: now - 1000, fundingRate: 0.001 }]);
+    expect(detail.lastSettlementRate).toBe(0.001);
   });
 
   test("selects the 30-day candle budget per interval", () => {

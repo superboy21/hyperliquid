@@ -3,6 +3,7 @@ import {
   clearOkxFundingSnapshotCache,
   computeOkxRetryDelayMs,
   fetchOkxCanonicalDetail,
+  fetchOkxCanonicalRates,
   fetchOkxFundingHistory,
   fetchNativeFundingSnapshot,
   okxFetch,
@@ -192,6 +193,54 @@ describe.serial("OKX funding snapshot cache", () => {
     expect(refreshed.get("BTC-USDT-SWAP")?.fundingRate).toBe("0.001");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  test("maps the PONS upcoming fundingRate instead of next or settled funding", async () => {
+    const now = originalDateNow();
+    const entries = [
+      {
+        instId: "BTC-USDT-SWAP", instType: "SWAP", fundingTime: String(now),
+        fundingRate: "0.0003286308411615", nextFundingRate: "", settState: "settled", settFundingRate: "0.0099",
+        markPx: "100", indexPx: "100",
+      },
+      {
+        instId: "ZERO-USDT-SWAP", instType: "SWAP", fundingTime: String(now),
+        fundingRate: "0", nextFundingRate: "0.7", settState: "settled", settFundingRate: "-0.2",
+        markPx: "100", indexPx: "100",
+      },
+      {
+        instId: "BAD-USDT-SWAP", instType: "SWAP", fundingTime: String(now),
+        fundingRate: "0.1garbage", nextFundingRate: "0.8", markPx: "100", indexPx: "100",
+      },
+      {
+        instId: "NAN-USDT-SWAP", instType: "SWAP", fundingTime: String(now),
+        fundingRate: "NaN", nextFundingRate: "0.9", markPx: "100", indexPx: "100",
+      },
+    ];
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("/public/funding-rate") && text.includes("instId=ANY")) return response(200, undefined, { data: entries });
+      if (text.includes("/public/instruments")) return response(200, undefined, {
+        data: entries.map((entry) => ({ instId: entry.instId, instType: "SWAP", state: "live", instCategory: "1" })),
+      });
+      if (text.includes("/market/tickers")) return response(200, undefined, {
+        data: entries.map((entry) => ({ instId: entry.instId, last: "100", open24h: "100", bidPx: "99", askPx: "101" })),
+      });
+      if (text.includes("/public/open-interest")) return response(200, undefined, {
+        data: entries.map((entry) => ({ instId: entry.instId, oi: "1", oiUsd: "100" })),
+      });
+      if (text.includes("/market/index-tickers")) return response(200, undefined, {
+        data: entries.map((entry) => ({ instId: entry.instId.replace("-SWAP", ""), idxPx: "100" })),
+      });
+      throw new Error(`Unexpected OKX test URL: ${text}`);
+    }) as typeof fetch;
+
+    const rows = await fetchOkxCanonicalRates();
+    expect(rows.map((row) => [row.symbol, row.fundingRate, row.predictedFundingRate])).toEqual([
+      ["BTC", 0.0003286308411615, 0.0003286308411615],
+      ["ZERO", 0, 0],
+    ]);
+    expect(rows[0].lastSettlementRate).toBe(0.0099);
+  });
 });
 
 describe.serial("OKX funding history pagination", () => {
@@ -298,19 +347,49 @@ describe.serial("OKX funding history pagination", () => {
       .resolves.toEqual([{ timestamp: now, fundingRate: 0.1 }]);
   });
 
-  test("canonical detail requires cutoff coverage", async () => {
+  test("canonical detail preserves a partial three-day history and latest settlement", async () => {
+    const now = originalDateNow();
+    Date.now = () => now;
     globalThis.fetch = mock(async (url) => {
       const text = String(url);
       if (text.includes("history-candles")) return response(200, undefined, { data: [] });
       if (text.includes("funding-rate-history")) {
         return response(200, undefined, {
-          data: [{ fundingTime: String(Date.now()), fundingRate: "0.1" }],
+          data: [
+            { fundingTime: String(now + 1_000), fundingRate: "0.2" },
+            { fundingTime: String(now - 3 * 24 * 60 * 60 * 1000), fundingRate: "0.1" },
+          ],
         });
       }
       return response(200, undefined, { data: [] });
     }) as typeof fetch;
 
-    const detail = await fetchOkxCanonicalDetail("BTC-USDT-SWAP", "1d", 8 * 60 * 60);
-    expect(detail.fundingHistory).toEqual([]);
+    const detail = await fetchOkxCanonicalDetail("BTC-USDT-SWAP", "1d", 8 * 60 * 60, undefined, { asOf: now });
+    expect(detail.fundingHistory).toEqual([{ timestamp: now - 3 * 24 * 60 * 60 * 1000, fundingRate: 0.1 }]);
+    expect(detail.lastSettlementRate).toBe(0.1);
+  });
+
+  test("canonical detail uses OKX base and official quote candle volumes", async () => {
+    const now = originalDateNow();
+    Date.now = () => now;
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes("history-candles")) return response(200, undefined, {
+        data: [
+          [String(now - 60_000), "1", "2", "0.5", "1.5", "10", "25", "37.5", "1"],
+          [String(now), "1", "2", "0.5", "1.5", "10", "25"],
+        ],
+      });
+      if (text.includes("funding-rate-history")) return response(200, undefined, { data: [] });
+      if (text.includes("public/funding-rate")) return response(200, undefined, { data: [] });
+      return response(200, undefined, { data: [] });
+    }) as typeof fetch;
+
+    const detail = await fetchOkxCanonicalDetail("BTC-USDT-SWAP", "1d", undefined, undefined, { asOf: now });
+    expect(detail.candles).toEqual([
+      expect.objectContaining({ volume: "25", quoteVolume: "37.5" }),
+      expect.objectContaining({ volume: "25" }),
+    ]);
+    expect(detail.candles[1].quoteVolume).toBeUndefined();
   });
 });

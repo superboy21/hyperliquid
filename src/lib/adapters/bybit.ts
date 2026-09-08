@@ -384,7 +384,9 @@ export function normalizeBybitFundingRows(instruments: BybitInstrument[], ticker
       rawSymbol: instrument.symbol,
       marketKey: instrument.symbol,
       fundingRate,
-      predictedFundingRate: null,
+      // Bybit's ticker fundingRate is the live current-cycle estimate for the
+      // upcoming settlement. It is distinct from funding-history settlements.
+      predictedFundingRate: fundingRate,
       lastSettlementRate: null,
       markPrice,
       indexPrice: numberOrNull(ticker.indexPrice),
@@ -529,6 +531,8 @@ export function latestBybitFundingPoint(history: CanonicalFundingHistoryPoint[])
 }
 
 const DAY_MS = 86_400_000;
+/** Maximum documented Bybit settlement cadence used to prove a 30-day boundary. */
+const HISTORICAL_SETTLEMENT_BUFFER_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_FUNDING_WINDOW_MS = 7 * DAY_MS;
 /** Hard cap shared with the /api/bybit proxy route; a window wider than this is rejected. */
 export const MAX_FUNDING_WINDOW_MS = 90 * DAY_MS;
@@ -946,7 +950,11 @@ export async function fetchBybitCanonicalDetail(
   options: { now?: number; signal?: AbortSignal; request?: BybitRequest; fundingCache?: BybitFundingHistoryCache | null; candleCache?: BybitCandleCache | null } = {},
 ): Promise<CanonicalFundingDetail> {
   const now = options.now ?? Date.now();
-  const cutoffTime = now - 30 * DAY_MS;
+  // Keep one native settlement beyond the requested 30-day display window.
+  // This gives consumers a real boundary sample when the venue has one, while
+  // still allowing newly listed markets to return the valid history they do
+  // have.  Strict cutoff coverage remains available on the low-level helper.
+  const cutoffTime = now - 30 * DAY_MS - HISTORICAL_SETTLEMENT_BUFFER_MS;
   // The interval only sizes the API time window. Pages are deliberately
   // budgeted independently because the current interval is not historical
   // truth (for example, an 8h contract may still return 1h history).
@@ -956,7 +964,7 @@ export async function fetchBybitCanonicalDetail(
       cutoffTime,
       endTime: now,
       maxPages: MAX_FUNDING_HISTORY_PAGES,
-      requireCutoffCoverage: true,
+      requireCutoffCoverage: false,
       windowMs,
       signal: options.signal,
       request: options.request,
