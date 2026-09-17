@@ -1,32 +1,9 @@
-import {
-  annualizedVolatilityForVisibleRange,
-  type AnnualizedVolatilityMetric,
-  type VolatilityCandleLike,
-} from "./spot-perp-arbitrage/single-market-analytics";
-
-export type CombinationWeightMode = "none" | "parity" | "custom";
+export type CombinationViewMode = "plain" | "ols";
+export type CombinationWeightMode = "none" | "custom";
 
 export interface CombinationWeights {
   first: number;
   second: number;
-}
-
-/**
- * The applied (not merely edited) weighting state owned by a combination
- * chart.  The key makes the child-to-controller hand-off reject a callback
- * from a chart that has already been replaced.
- */
-export interface AppliedCombinationWeightSnapshot {
-  key: string;
-  mode: CombinationWeightMode;
-  weights: CombinationWeights;
-}
-
-export function isCurrentCombinationWeightSnapshot(
-  snapshot: AppliedCombinationWeightSnapshot,
-  currentKey: string | null,
-): boolean {
-  return currentKey !== null && snapshot.key === currentKey;
 }
 
 export interface WeightedOhlc {
@@ -39,14 +16,6 @@ export interface WeightedOhlc {
 interface PriceCandleLike {
   open: unknown;
   close: unknown;
-}
-
-export interface VolatilityParityResult {
-  ok: boolean;
-  first: AnnualizedVolatilityMetric;
-  second: AnnualizedVolatilityMetric;
-  weights?: CombinationWeights;
-  error?: string;
 }
 
 function finite(value: unknown): number | null {
@@ -98,33 +67,6 @@ export function combineWeightedOhlc(
     close,
     high: Math.max(open, close),
     low: Math.min(open, close),
-  };
-}
-
-export function calculateVolatilityParity(
-  first: readonly VolatilityCandleLike[],
-  second: readonly VolatilityCandleLike[],
-  startTime?: number,
-  endTime?: number,
-): VolatilityParityResult {
-  const firstVol = annualizedVolatilityForVisibleRange(first, startTime, endTime);
-  const secondVol = annualizedVolatilityForVisibleRange(second, startTime, endTime);
-  if (firstVol.percent === null || secondVol.percent === null || firstVol.percent <= 0 || secondVol.percent <= 0) {
-    return {
-      ok: false,
-      first: firstVol,
-      second: secondVol,
-      error: "当前可见区间的数据不足，或一条腿的年化波动率为 0，无法计算波动率平价。",
-    };
-  }
-  const inverseFirst = 1 / firstVol.percent;
-  const inverseSecond = 1 / secondVol.percent;
-  const smallest = Math.min(inverseFirst, inverseSecond);
-  return {
-    ok: true,
-    first: firstVol,
-    second: secondVol,
-    weights: { first: inverseFirst / smallest, second: inverseSecond / smallest },
   };
 }
 

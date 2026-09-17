@@ -2,25 +2,23 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  calculateVolatilityParity,
   validCombinationWeights,
+  type CombinationViewMode,
   type CombinationWeightMode,
   type CombinationWeights,
-  type VolatilityParityResult,
 } from "@/lib/combo-weighting";
-import type { VolatilityCandleLike } from "@/lib/spot-perp-arbitrage/single-market-analytics";
 
 interface Props {
   firstLabel: string;
   secondLabel: string;
+  view: CombinationViewMode;
   mode: CombinationWeightMode;
   weights: CombinationWeights;
-  parity: VolatilityParityResult | null;
   error: string | null;
   customOpen: boolean;
   firstDraft: string;
   secondDraft: string;
-  onToggleParity: () => void;
+  onSetView: (view: CombinationViewMode) => void;
   onToggleCustom: () => void;
   onFirstDraftChange: (value: string) => void;
   onSecondDraftChange: (value: string) => void;
@@ -31,216 +29,210 @@ function compactWeight(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-function ratioLabel(weights: CombinationWeights): string {
-  return `${compactWeight(weights.first)} : ${compactWeight(weights.second)}`;
+function viewButtonClass(active: boolean): string {
+  return `rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${active ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`;
 }
 
-/** Compact, shared controls used by every two-leg combination chart. */
+/**
+ * Compact model controls shared by every two-leg regression chart.
+ *
+ * The view switch picks the visualisation (classic spread/ratio candles versus
+ * the log-price regression residual/Z chart) without touching the applied A:B
+ * weighting; both views read the same weights. Rendered inline so it drops into
+ * the chart toolbar as one additional button group.
+ */
 export function CombinationWeightControls({
   firstLabel,
   secondLabel,
+  view,
   mode,
   weights,
-  parity,
   error,
   customOpen,
   firstDraft,
   secondDraft,
-  onToggleParity,
+  onSetView,
   onToggleCustom,
   onFirstDraftChange,
   onSecondDraftChange,
   onApplyCustom,
 }: Props) {
+  const isCustom = mode === "custom";
+  const weightPair = `A:B ${compactWeight(weights.first)}:${compactWeight(weights.second)}`;
+  const viewTitle = view === "plain"
+    ? isCustom
+      ? `普通价差图 · 当前 ${weightPair}`
+      : "普通价差图 · 未启用配比时按 1:1"
+    : isCustom
+      ? "OLS 回归 · β = B/A，内部归一为 1:β"
+      : "OLS 回归 · ln(腿1)=α+β·ln(腿2)+ε";
+
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-gray-700/80 bg-gray-900/45 px-2.5 py-2 text-xs" role="group" aria-label="组合配比控制">
-      <span className="text-gray-500">组合配比</span>
-      <button
-        type="button"
-        aria-pressed={mode === "parity"}
-        onClick={onToggleParity}
-        className={`rounded border px-2.5 py-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${mode === "parity" ? "border-violet-300 bg-violet-500/35 text-violet-100" : "border-gray-600 bg-gray-800 text-gray-300 hover:border-violet-400/70 hover:text-white"}`}
-      >
-        波动率平价
-      </button>
-      <button
-        type="button"
-        aria-pressed={mode === "custom"}
-        aria-expanded={customOpen}
-        onClick={onToggleCustom}
-        className={`rounded border px-2.5 py-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${mode === "custom" ? "border-violet-300 bg-violet-500/35 text-violet-100" : "border-gray-600 bg-gray-800 text-gray-300 hover:border-violet-400/70 hover:text-white"}`}
-      >
-        自定义配比
-      </button>
+    <>
+      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="组合视图与配比控制">
+        <span className="mr-0.5 text-xs text-gray-500">视图</span>
+        <button
+          type="button"
+          aria-pressed={view === "plain"}
+          onClick={() => onSetView("plain")}
+          title={view === "plain" ? viewTitle : "切换到普通价差图"}
+          className={viewButtonClass(view === "plain")}
+        >
+          普通价差图
+        </button>
+        <button
+          type="button"
+          aria-pressed={view === "ols"}
+          onClick={() => onSetView("ols")}
+          title={view === "ols" ? viewTitle : "切换到 OLS 回归"}
+          className={viewButtonClass(view === "ols")}
+        >
+          OLS 回归
+        </button>
+        <span aria-hidden="true" className="px-0.5 text-gray-600">·</span>
+        <button
+          type="button"
+          aria-pressed={isCustom}
+          aria-expanded={customOpen}
+          aria-controls="combination-weight-editor"
+          onClick={onToggleCustom}
+          title={isCustom ? `已启用 ${weightPair}；点击停用并回到 1:1` : "启用自定义 A:B 配比"}
+          className={viewButtonClass(isCustom)}
+        >
+          自定义 A:B
+        </button>
+        {isCustom && <span className="text-xs text-violet-300" title="自定义配比 A:B">{weightPair}</span>}
+        {error && <p className="text-xs text-amber-300" role="alert" aria-live="assertive">{error}</p>}
+      </div>
 
       {customOpen && (
-        <div className="flex min-w-[240px] flex-1 flex-wrap items-end gap-2">
-          <label className="flex min-w-[92px] flex-1 flex-col gap-1 text-gray-400">
-            <span>A 权重 · {firstLabel}</span>
-            <input aria-label={`A 权重，${firstLabel}`} inputMode="decimal" type="number" step="any" value={firstDraft} onChange={(event) => onFirstDraftChange(event.target.value)} className="h-7 w-full rounded border border-gray-600 bg-gray-800 px-2 text-gray-100 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400" />
+        <div id="combination-weight-editor" className="flex basis-full flex-wrap items-end gap-2 rounded bg-gray-900/60 px-2 py-1.5">
+          <label className="flex min-w-[100px] flex-1 flex-col gap-1 text-xs text-gray-400">
+            <span>A · {firstLabel}</span>
+            <input aria-label={`A 权重，${firstLabel}`} inputMode="decimal" type="number" min="0" step="any" value={firstDraft} onChange={(event) => onFirstDraftChange(event.target.value)} className="h-7 w-full rounded border border-gray-600 bg-gray-800 px-2 text-xs text-gray-100 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400" />
           </label>
-          <label className="flex min-w-[92px] flex-1 flex-col gap-1 text-gray-400">
-            <span>B 权重 · {secondLabel}</span>
-            <input aria-label={`B 权重，${secondLabel}`} inputMode="decimal" type="number" step="any" value={secondDraft} onChange={(event) => onSecondDraftChange(event.target.value)} className="h-7 w-full rounded border border-gray-600 bg-gray-800 px-2 text-gray-100 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400" />
+          <label className="flex min-w-[100px] flex-1 flex-col gap-1 text-xs text-gray-400">
+            <span>B · {secondLabel}</span>
+            <input aria-label={`B 权重，${secondLabel}`} inputMode="decimal" type="number" min="0" step="any" value={secondDraft} onChange={(event) => onSecondDraftChange(event.target.value)} className="h-7 w-full rounded border border-gray-600 bg-gray-800 px-2 text-xs text-gray-100 outline-none focus:border-violet-400 focus:ring-1 focus:ring-violet-400" />
           </label>
-          <button type="button" onClick={onApplyCustom} className="h-7 rounded border border-violet-400/70 bg-violet-600/25 px-2.5 font-medium text-violet-100 hover:bg-violet-600/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">应用</button>
+          <button type="button" onClick={onApplyCustom} className="h-7 rounded border border-violet-400/70 bg-violet-600/25 px-3 text-xs font-medium text-violet-100 hover:bg-violet-600/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">应用</button>
+          <p className="basis-full text-[11px] text-gray-500">普通视图按 A:B 加权蜡烛；OLS 视图仅取 β = B/A。</p>
         </div>
       )}
-
-      {mode === "parity" && parity?.ok && parity.weights && (
-        <span className="basis-full text-violet-100 sm:basis-auto" aria-live="polite">
-          年化波动率 A {parity.first.percent?.toFixed(2)}% · B {parity.second.percent?.toFixed(2)}% · 当前 A:B {ratioLabel(weights)}
-        </span>
-      )}
-      {mode === "custom" && <span className="basis-full text-violet-100 sm:basis-auto" aria-live="polite">当前 A:B {ratioLabel(weights)}</span>}
-      {customOpen && mode !== "custom" && <span className="basis-full text-gray-400" aria-live="polite">待应用：图表当前仍为 1:1</span>}
-      {error && <span className="basis-full text-amber-300" role="alert" aria-live="assertive">{error}</span>}
-    </div>
+    </>
   );
 }
 
 export interface CombinationWeightingState {
+  view: CombinationViewMode;
   mode: CombinationWeightMode;
   weights: CombinationWeights;
-  parity: VolatilityParityResult | null;
   error: string | null;
   customOpen: boolean;
   firstDraft: string;
   secondDraft: string;
-  toggleParity: (startTime?: number, endTime?: number) => void;
+  setView: (view: CombinationViewMode) => void;
   toggleCustom: () => void;
   setFirstDraft: (value: string) => void;
   setSecondDraft: (value: string) => void;
   applyCustom: () => void;
-  recomputeParity: (startTime: number, endTime: number) => void;
 }
 
-export interface CustomEditorTransition {
+/** The view-and-weighting fields shared by every transition seam. */
+export interface CombinationViewSnapshot {
+  view: CombinationViewMode;
   mode: CombinationWeightMode;
-  customOpen: boolean;
   weights: CombinationWeights;
+  customOpen: boolean;
 }
 
-/** Pure seam for the editor-only versus applied-custom distinction. */
+export type CustomEditorTransition = CombinationViewSnapshot;
+
+/**
+ * Switching the view is intentionally a no-op for the applied weighting: the
+ * classic candles and the OLS residual chart both consume the same A:B state.
+ */
+export function setViewTransition(
+  snapshot: CombinationViewSnapshot,
+  view: CombinationViewMode,
+): CombinationViewSnapshot {
+  return { ...snapshot, view };
+}
+
+/**
+ * Pure seam for the editor-only versus applied-custom distinction. Opening
+ * only reveals the editor and restores the last valid custom ratio; closing
+ * always falls back to the inactive 1:1 weighting, regardless of the view.
+ */
 export function toggleCustomEditor(
+  view: CombinationViewMode,
   mode: CombinationWeightMode,
   customOpen: boolean,
   lastValidWeights: CombinationWeights,
 ): CustomEditorTransition {
-  if (customOpen) return { mode: "none", customOpen: false, weights: { first: 1, second: 1 } };
-  return { mode: "none", customOpen: true, weights: lastValidWeights };
+  if (customOpen) return { view, mode: "none", customOpen: false, weights: { first: 1, second: 1 } };
+  return { view, mode, customOpen: true, weights: lastValidWeights };
 }
 
-export function invalidParityTransition(): CustomEditorTransition {
-  return { mode: "none", customOpen: false, weights: { first: 1, second: 1 } };
+/** Fresh chart state: classic view, no custom weighting, drafts reset. */
+export function resetToPlainTransition(): CustomEditorTransition {
+  return { view: "plain", mode: "none", customOpen: false, weights: { first: 1, second: 1 } };
 }
 
-/** State machine shared by legacy Perp/Perp and Spot-containing charts. */
-export function useCombinationWeighting(
-  firstPoints: readonly VolatilityCandleLike[] | undefined,
-  secondPoints: readonly VolatilityCandleLike[] | undefined,
-): CombinationWeightingState {
+/** UI state only. Regression fitting is intentionally owned by pair-statistics. */
+export function useCombinationWeighting(resetKey?: unknown): CombinationWeightingState {
+  const [view, setViewState] = useState<CombinationViewMode>("plain");
   const [mode, setMode] = useState<CombinationWeightMode>("none");
   const [weights, setWeights] = useState<CombinationWeights>({ first: 1, second: 1 });
   const [customWeights, setCustomWeights] = useState<CombinationWeights>({ first: 1, second: 1 });
   const [customOpen, setCustomOpen] = useState(false);
-  const [parity, setParity] = useState<VolatilityParityResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [firstDraft, setFirstDraft] = useState("1");
   const [secondDraft, setSecondDraft] = useState("1");
 
-  const calculate = useCallback((startTime?: number, endTime?: number) => {
-    if (!firstPoints || !secondPoints) {
-      return { ok: false, error: "缺少两条腿的原始价格数据，无法计算波动率平价。" } as const;
-    }
-    return calculateVolatilityParity(firstPoints, secondPoints, startTime, endTime);
-  }, [firstPoints, secondPoints]);
-
-  const applyParity = useCallback((startTime?: number, endTime?: number) => {
-    const result = calculate(startTime, endTime);
-    if (!result.ok || !result.weights) {
-      setError(result.error ?? "当前可见区间无法计算波动率平价。");
-      const reset = invalidParityTransition();
-      setCustomOpen(reset.customOpen);
-      setMode(reset.mode);
-      setWeights(reset.weights);
-      setParity(null);
-      return;
-    }
-    setMode("parity");
-    setCustomOpen(false);
-    setWeights(result.weights);
-    setParity(result);
+  const setView = useCallback((next: CombinationViewMode) => {
+    // View only: the applied A:B weighting is shared by both views.
+    setViewState(next);
     setError(null);
-  }, [calculate]);
-
-  const toggleParity = useCallback((startTime?: number, endTime?: number) => {
-    if (mode === "parity") {
-      setMode("none");
-      setCustomOpen(false);
-      setWeights({ first: 1, second: 1 });
-      setParity(null);
-      setError(null);
-      return;
-    }
-    applyParity(startTime, endTime);
-  }, [applyParity, mode]);
-
+  }, []);
   const toggleCustom = useCallback(() => {
-    const next = toggleCustomEditor(mode, customOpen, customWeights);
+    const next = toggleCustomEditor(view, mode, customOpen, customWeights);
     setMode(next.mode);
-    setCustomOpen(next.customOpen);
     setWeights(next.weights);
-    setParity(null);
+    setCustomOpen(next.customOpen);
     setError(null);
     if (next.customOpen) {
       setFirstDraft(String(customWeights.first));
       setSecondDraft(String(customWeights.second));
     }
-  }, [customOpen, customWeights, mode]);
-
+  }, [customOpen, customWeights, mode, view]);
   const applyCustom = useCallback(() => {
     const next = validCombinationWeights(firstDraft.trim(), secondDraft.trim());
     if (!next) {
-      setError("A、B 权重必须是大于 0 的有限数字，不能留空。");
+      setError("A、B 必须为大于 0 的有限数字，不能留空。");
       return;
     }
     setWeights(next);
     setCustomWeights(next);
     setMode("custom");
     setCustomOpen(true);
-    setParity(null);
     setError(null);
   }, [firstDraft, secondDraft]);
 
-  // The raw aligned leg identity changes when the chart/preset changes. Reset
-  // the local interaction state then, while keeping slider updates local to
-  // the ECharts instance so they do not reset the viewport.
   useEffect(() => {
+    const next = resetToPlainTransition();
+    // Chart/preset identity changed: intentionally reset the local view and
+    // weighting state to the classic default.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMode("none");
-    setWeights({ first: 1, second: 1 });
+    setViewState(next.view);
+    setMode(next.mode);
+    setWeights(next.weights);
     setCustomWeights({ first: 1, second: 1 });
-    setCustomOpen(false);
+    setCustomOpen(next.customOpen);
     setFirstDraft("1");
     setSecondDraft("1");
-    setParity(null);
     setError(null);
-  }, [firstPoints, secondPoints]);
+  }, [resetKey]);
 
-  return {
-    mode,
-    weights,
-    customOpen,
-    parity,
-    error,
-    firstDraft,
-    secondDraft,
-    toggleParity,
-    toggleCustom,
-    setFirstDraft,
-    setSecondDraft,
-    applyCustom,
-    recomputeParity: (startTime, endTime) => applyParity(startTime, endTime),
-  };
+  return { view, mode, weights, error, customOpen, firstDraft, secondDraft, setView, toggleCustom, setFirstDraft, setSecondDraft, applyCustom };
 }

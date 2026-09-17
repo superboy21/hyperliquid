@@ -11,12 +11,16 @@ import {
   type TailTrimPercent,
 } from "@/lib/spot-perp-arbitrage";
 import type { ComboCandleResult } from "@/lib/combo";
-import type { CombinationWeights } from "@/lib/combo-weighting";
+import type { CombinationViewMode, CombinationWeights } from "@/lib/combo-weighting";
 import { formatChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import type { ChartTimeZone } from "@/lib/chart-timezone";
+import type { PairAnalysis } from "@/lib/spot-perp-arbitrage/pair-statistics";
 
 interface Props {
   result: MixedCombinationResult | SpotSpotCombinationResult | ComboCandleResult;
+  /** The same pair-statistics result rendered by the chart. Used by the OLS view. */
+  pairAnalysis?: PairAnalysis | null;
+  view: CombinationViewMode;
   range: ArbitrageChartRange;
   initialTailTrim?: TailTrimPercent;
   exactSelection?: ChartTimeSelection | null;
@@ -27,12 +31,25 @@ interface Props {
 const TAIL_OPTIONS: TailTrimPercent[] = [0, 1, 2.5, 5, 10];
 const DEFAULT_WEIGHTS: CombinationWeights = { first: 1, second: 1 };
 
-function derivedLabel(value: number | null, mode: "spread" | "ratio"): string {
-  if (value === null) return "--";
-  if (mode === "spread") return `${value >= 0 ? "+" : ""}${value.toFixed(Math.abs(value) >= 100 ? 2 : 4)}`;
-  return value.toFixed(Math.abs(value) >= 1 ? 4 : 6);
+function payload<T>(stat: unknown): T | null {
+  if (stat && typeof stat === "object" && "value" in stat) return (stat as { value?: T | null }).value ?? null;
+  return stat as T | null;
 }
-
+function pickNumber(source: unknown, names: readonly string[]): number | null {
+  if (typeof source === "number" && Number.isFinite(source)) return source;
+  const record = payload<Record<string, unknown>>(source);
+  if (!record || typeof record !== "object") return null;
+  for (const name of names) { const value = record[name]; if (typeof value === "number" && Number.isFinite(value)) return value; }
+  return null;
+}
+function pickBoolean(source: unknown, names: readonly string[]): boolean | null {
+  const record = payload<Record<string, unknown>>(source);
+  if (!record || typeof record !== "object") return null;
+  for (const name of names) if (typeof record[name] === "boolean") return record[name] as boolean;
+  return null;
+}
+function decimal(value: number | null, digits = 4): string { return value === null ? "--" : value.toFixed(digits); }
+function signedPercent(value: number | null, digits = 2): string { return value === null ? "--" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`; }
 function compact(value: number | null): string {
   if (value === null) return "--";
   const absolute = Math.abs(value);
@@ -40,6 +57,23 @@ function compact(value: number | null): string {
   if (absolute >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
   if (absolute >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
   return value.toFixed(2);
+}
+function isMixed(result: Props["result"]): result is MixedCombinationResult { return "kind" in result && result.composition === "mixed"; }
+function isLegacy(result: Props["result"]): result is ComboCandleResult { return "candles" in result; }
+function legLabel(result: Props["result"], leg: 1 | 2): string {
+  if (isLegacy(result)) return leg === 1 ? `${result.firstExchange} ${result.firstSymbol}` : `${result.secondExchange} ${result.secondSymbol}`;
+  const market = leg === 1 ? result.leg1 : result.leg2;
+  return `${market.source.exchange} ${marketDisplaySymbol(market)}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Plain (classic spread/ratio) helpers
+ * ------------------------------------------------------------------ */
+
+function derivedLabel(value: number | null, mode: "spread" | "ratio"): string {
+  if (value === null) return "--";
+  if (mode === "spread") return `${value >= 0 ? "+" : ""}${value.toFixed(Math.abs(value) >= 100 ? 2 : 4)}`;
+  return value.toFixed(Math.abs(value) >= 1 ? 4 : 6);
 }
 
 function gapLabel(value: number | null): string {
@@ -104,29 +138,20 @@ interface PrimaryMetricCard {
   featured?: boolean;
 }
 
-function isLegacyPerpPair(result: Props["result"]): result is ComboCandleResult {
-  return "candles" in result;
-}
+/* ------------------------------------------------------------------ */
 
-function isMixedResult(result: Props["result"]): result is MixedCombinationResult {
-  return "kind" in result && result.composition === "mixed";
-}
-
-function legIdentity(result: Props["result"], leg: 1 | 2): string {
-  if (isLegacyPerpPair(result)) {
-    return leg === 1
-      ? `${result.firstExchange} ${result.firstSymbol}`
-      : `${result.secondExchange} ${result.secondSymbol}`;
-  }
-  const market = leg === 1 ? result.leg1 : result.leg2;
-  return `${market.source.exchange} ${marketDisplaySymbol(market)}`;
-}
-
-export default function MixedAnalyticsDashboard({ result, range, initialTailTrim = 1, exactSelection = null, weights = DEFAULT_WEIGHTS, timeZone }: Props) {
+function PlainDashboard({ result, range, initialTailTrim, exactSelection, weights, timeZone }: {
+  result: Props["result"];
+  range: ArbitrageChartRange;
+  initialTailTrim: TailTrimPercent;
+  exactSelection: ChartTimeSelection | null;
+  weights: CombinationWeights;
+  timeZone: ChartTimeZone;
+}) {
   const [tailTrim, setTailTrim] = useState<TailTrimPercent>(initialTailTrim);
-  const mixedResult = isMixedResult(result) ? result : null;
+  const mixedResult = isMixed(result) ? result : null;
   const analysis = useMemo(() => {
-    if (isMixedResult(result)) {
+    if (isMixed(result)) {
       return { kind: "mixed" as const, dashboard: visibleDashboardAnalytics(result, range, tailTrim, weights).dashboard };
     }
     return { kind: "pair" as const, dashboard: visiblePairDashboardAnalytics(result, range, tailTrim, weights).dashboard };
@@ -141,11 +166,11 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
   const distribution = dashboard.derivedClose;
   const totalDerived = distribution.retainedCount + distribution.removedCount;
   const mode = result.mode === "ratio" ? "ratio" : "spread";
-  const leg1 = legIdentity(result, 1);
-  const leg2 = legIdentity(result, 2);
+  const leg1 = legLabel(result, 1);
+  const leg2 = legLabel(result, 2);
   const composition = analysis.kind === "mixed"
     ? "mixed"
-    : isLegacyPerpPair(result) ? "perp-perp" : "spot-spot";
+    : isLegacy(result) ? "perp-perp" : "spot-spot";
 
   const cards: PrimaryMetricCard[] = [
     {
@@ -316,4 +341,60 @@ export default function MixedAnalyticsDashboard({ result, range, initialTailTrim
       </aside>
     </section>
   );
+}
+
+function OlsDiagnostics({ result, pairAnalysis, range, exactSelection, weights, timeZone }: {
+  result: Props["result"];
+  pairAnalysis: PairAnalysis | null | undefined;
+  range: ArbitrageChartRange;
+  exactSelection: ChartTimeSelection | null;
+  weights: CombinationWeights;
+  timeZone: ChartTimeZone;
+}) {
+  // Funding and turnover are market observations, not a second regression.
+  const marketAnalytics = useMemo(() => isMixed(result)
+    ? { kind: "mixed" as const, data: visibleDashboardAnalytics(result, range, 0, weights).dashboard }
+    : { kind: "pair" as const, data: visiblePairDashboardAnalytics(result, range, 0, weights).dashboard }, [range, result, weights]);
+  const model = payload<{ kind?: string; alpha?: number; beta?: number }>(pairAnalysis?.model);
+  const latest = pairAnalysis?.points.length ? pairAnalysis.points[pairAnalysis.points.length - 1] : null;
+  const stationarityPassed = pickBoolean(pairAnalysis?.stationarity, ["stationary", "passes5Percent", "passed5Percent", "pass5Percent", "passed"]);
+  const adf = pickNumber(pairAnalysis?.stationarity, ["adf", "adfStatistic", "statistic", "value"]);
+  const halfLife = pickNumber(pairAnalysis?.halfLife, ["halfLifePeriods", "periods", "halfLife", "value"]);
+  const betaDispersion = pickNumber(pairAnalysis?.hedgeStability, ["relativeDispersion", "betaRelativeDispersion", "coefficientOfVariation", "value"]);
+  const remainingBtcBeta = pickNumber(pairAnalysis?.btcBeta, ["remainingBtcBeta", "residualBtcBeta", "beta", "value"]);
+  const coreCards = [
+    { label: "当前残差 ε", value: decimal(latest?.residual ?? null, 6), note: `模型偏离 ${signedPercent(latest?.modelDeviationPercent ?? null)}`, tone: "text-violet-200" },
+    { label: "当前 Rolling Z", value: decimal(latest?.zScore ?? null, 2), note: "以统计接口提供的滚动窗口计算", tone: "text-cyan-300" },
+    { label: model?.kind === "custom" ? "自定义 β" : "OLS β", value: decimal(model?.beta ?? null, 6), note: model?.kind === "custom" ? "A:B 仅决定 β=B/A，内部归一为 1:β。" : `α ${decimal(model?.alpha ?? null, 6)}`, tone: "text-fuchsia-300" },
+    { label: "ADF(0) 近似", value: stationarityPassed === null ? "--" : stationarityPassed ? "通过5%近似阈值" : "未通过5%近似阈值", note: adf === null ? "统计量不可用" : `ADF(0) ${decimal(adf, 3)}`, tone: stationarityPassed ? "text-emerald-300" : stationarityPassed === false ? "text-amber-300" : "text-gray-500" },
+    ...(stationarityPassed === true ? [{ label: "半衰期", value: halfLife === null ? "--" : `${decimal(halfLife, 1)} 根`, note: "仅在通过5%近似阈值时展示", tone: "text-sky-300" }] : []),
+    { label: "滚动 β 相对离散度", value: betaDispersion === null ? "--" : `${decimal(betaDispersion * (Math.abs(betaDispersion) <= 1 ? 100 : 1), 2)}%`, note: "越低表示对冲比例越稳定", tone: "text-indigo-300" },
+    { label: "剩余 BTC Beta", value: decimal(remainingBtcBeta, 4), note: "组合残余的 BTC 暴露", tone: "text-rose-300" },
+  ];
+  const leg1 = legLabel(result, 1); const leg2 = legLabel(result, 2);
+  const marketCards = marketAnalytics.kind === "mixed"
+    ? [
+        { label: "年化资金费率均值", value: signedPercent(marketAnalytics.data.fundingAnnualized.mean === null ? null : marketAnalytics.data.fundingAnnualized.mean * 100), note: `${marketAnalytics.data.fundingAnnualized.count} 个可用样本` },
+        { label: "平均 Perp 成交额", value: compact(marketAnalytics.data.perpTurnover.mean), note: `${marketAnalytics.data.perpTurnover.count} 个样本` },
+        { label: "平均 Spot 成交额", value: compact(marketAnalytics.data.spotTurnover.mean), note: `${marketAnalytics.data.spotTurnover.count} 个样本` },
+      ]
+    : [
+        ...(marketAnalytics.data.fundingAnnualized ? [{ label: "年化资金费率差", value: signedPercent(marketAnalytics.data.fundingAnnualized.mean === null ? null : marketAnalytics.data.fundingAnnualized.mean * 100), note: `${marketAnalytics.data.fundingAnnualized.count} 个可用样本` }] : []),
+        { label: "腿1平均成交额", value: compact(marketAnalytics.data.leg1Turnover.mean), note: `${leg1} · ${marketAnalytics.data.leg1Turnover.count} 个样本` },
+        { label: "腿2平均成交额", value: compact(marketAnalytics.data.leg2Turnover.mean), note: `${leg2} · ${marketAnalytics.data.leg2Turnover.count} 个样本` },
+      ];
+
+  return <section className="rounded-lg border border-violet-500/25 bg-gray-800 p-4" aria-labelledby="mixed-analytics-title">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><h3 id="mixed-analytics-title" className="text-sm font-semibold text-white">{exactSelection ? "精确区间" : "当前预设范围"} · 配对诊断</h3>{exactSelection && <p className="mt-1 font-mono text-xs text-violet-200">{timeZone}：{formatChartTimeSelection(exactSelection, timeZone)}</p>}<p className="mt-1 text-xs text-gray-500">{model?.kind === "custom" ? "自定义 β 模型" : "默认模型：ln(腿1)=α+β·ln(腿2)+ε"}</p></div><span className={`w-fit rounded-full border px-2 py-1 text-[11px] ${pairAnalysis ? "border-violet-400/40 bg-violet-400/10 text-violet-200" : "border-gray-700 bg-gray-900 text-gray-500"}`}>{pairAnalysis ? "统计结果已载入" : pairAnalysis === undefined ? "统计计算中" : "统计结果不可用"}</span></div>
+    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">{coreCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700 bg-gray-900/65 p-3"><p className="text-[11px] text-gray-500">{card.label}</p><p className={`mt-1 font-mono text-sm font-semibold ${card.tone}`}>{card.value}</p><p className="mt-1 text-[10px] leading-4 text-gray-600">{card.note}</p></div>)}</div>
+    <div className="mt-3 border-t border-gray-700/70 pt-3"><h4 className="text-xs font-medium text-gray-300">资金费率与流动性</h4><div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">{marketCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700/80 bg-gray-900/40 px-3 py-2"><p className="text-[10px] text-gray-500">{card.label}</p><p className="mt-1 font-mono text-sm text-gray-300">{card.value}</p><p className="mt-1 text-[10px] text-gray-600">{card.note}</p></div>)}</div></div>
+    <aside className="mt-3 rounded border border-violet-500/15 bg-gray-900/50 px-3 py-2.5 text-[11px] leading-5 text-gray-500"><p className="font-medium text-gray-400">口径说明</p><p>全预设范围一次拟合，历史残差包含全样本参数，不构成无前视交易回测。</p><p>ADF(0) 仅报告通过/未通过5%近似阈值；它不是交易信号。半衰期仅在通过5%近似阈值时显示。资金费率与成交额按当前可见、对齐的数据窗口汇总。</p></aside>
+  </section>;
+}
+
+export default function MixedAnalyticsDashboard({ result, pairAnalysis, view, range, initialTailTrim = 1, exactSelection = null, weights = DEFAULT_WEIGHTS, timeZone }: Props) {
+  if (view === "ols") {
+    return <OlsDiagnostics result={result} pairAnalysis={pairAnalysis} range={range} exactSelection={exactSelection} weights={weights} timeZone={timeZone} />;
+  }
+  return <PlainDashboard result={result} range={range} initialTailTrim={initialTailTrim} exactSelection={exactSelection} weights={weights} timeZone={timeZone} />;
 }

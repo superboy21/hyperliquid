@@ -395,7 +395,7 @@ export async function fetchOkxFundingHistory(
     }
     if (!response.ok) {
       if (requireCutoffCoverage) return [];
-      throw new Error("Failed to fetch OKX funding history");
+      throw okxEndpointError("public/funding-rate-history", `request failed (HTTP ${response.status})`);
     }
 
     let payload: { data?: OkxNativeHistoryEntry[] };
@@ -406,7 +406,11 @@ export async function fetchOkxFundingHistory(
       if (requireCutoffCoverage) return [];
       throw error;
     }
-    const rows = Array.isArray(payload.data) ? payload.data : [];
+    if (!Array.isArray(payload.data)) {
+      if (requireCutoffCoverage) return [];
+      throw okxEndpointError("public/funding-rate-history", "response malformed (expected data array)");
+    }
+    const rows = payload.data;
     if (rows.length === 0) {
       break;
     }
@@ -467,6 +471,47 @@ export async function fetchOkxFundingHistory(
 let fundingSnapshotCache: { value: Map<string, OkxNativeFundingRateEntry>; expiresAt: number } | null = null;
 let fundingSnapshotInFlight: Promise<Map<string, OkxNativeFundingRateEntry>> | null = null;
 
+function okxEndpointError(endpoint: string, detail: string): Error {
+  return new Error(`OKX ${endpoint} ${detail}`);
+}
+
+async function readOkxDataArray<T>(response: Response, endpoint: string): Promise<T[]> {
+  if (!response.ok) {
+    throw okxEndpointError(endpoint, `request failed (HTTP ${response.status})`);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw okxEndpointError(endpoint, "response malformed (invalid JSON)");
+  }
+
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) {
+    throw okxEndpointError(endpoint, "response malformed (expected data array)");
+  }
+
+  return (payload as { data: T[] }).data;
+}
+
+function warnOkxOptionalDegradation(endpoint: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error);
+  console.warn(`[OKX] ${endpoint} degraded: ${detail}`);
+}
+
+function requireUsableOkxRows<T>(
+  rows: T[],
+  endpoint: string,
+  isUsable: (row: T) => boolean,
+  detail: string,
+): T[] {
+  const usableRows = rows.filter(isUsable);
+  if (usableRows.length === 0) {
+    throw okxEndpointError(endpoint, detail);
+  }
+  return usableRows;
+}
+
 export function clearOkxFundingSnapshotCache(): void {
   fundingSnapshotCache = null;
   fundingSnapshotInFlight = null;
@@ -478,93 +523,104 @@ export async function fetchNativeFundingSnapshot(
 ): Promise<Map<string, OkxNativeFundingRateEntry>> {
   if (signal?.aborted) throw abortError();
   if (fundingSnapshotCache && Date.now() < fundingSnapshotCache.expiresAt) {
-    return fundingSnapshotCache.value;
+    return rejectImmediatelyOnAbort(Promise.resolve(fundingSnapshotCache.value), signal);
   }
   if (fundingSnapshotInFlight) {
     return rejectImmediatelyOnAbort(fundingSnapshotInFlight, signal);
   }
 
-  let cacheable = false;
   const request = (async () => {
-    const response = await okxFetch("/api/okx?endpoint=public/funding-rate&instId=ANY", { cache: "no-store", signal });
-    if (!response.ok) return new Map<string, OkxNativeFundingRateEntry>();
-
-    const payload = (await response.json()) as { data?: OkxNativeFundingRateEntry[] };
-    const rows = Array.isArray(payload.data) ? payload.data : [];
-    cacheable = true;
-    return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
+    // This request intentionally has no caller signal: it is shared by all
+    // snapshot consumers, while each consumer races it against its own signal.
+    const response = await okxFetch("/api/okx?endpoint=public/funding-rate&instId=ANY", { cache: "no-store" });
+    const rows = await readOkxDataArray<OkxNativeFundingRateEntry>(response, "public/funding-rate");
+    const usableRows = requireUsableOkxRows(
+      rows,
+      "public/funding-rate",
+      (row) => typeof row.instId === "string" && row.instId.length > 0,
+      "response contained no usable funding rows",
+    );
+    return new Map(usableRows.map((row) => [row.instId as string, row]));
   })();
   fundingSnapshotInFlight = request;
   void request.then(
     (value) => {
-      if (cacheable) fundingSnapshotCache = { value, expiresAt: Date.now() + Math.max(0, ttlMs) };
+      // A cache clear invalidates an older in-flight request as well.
+      if (fundingSnapshotInFlight === request) {
+        fundingSnapshotCache = { value, expiresAt: Date.now() + Math.max(0, ttlMs) };
+      }
     },
     () => {
-      fundingSnapshotCache = null;
+      if (fundingSnapshotInFlight === request) fundingSnapshotCache = null;
     },
-  ).finally(() => {
+  ).then(() => {
     if (fundingSnapshotInFlight === request) fundingSnapshotInFlight = null;
-  });
-  return request;
+  }).catch(() => undefined);
+  return rejectImmediatelyOnAbort(request, signal);
 }
 
 async function fetchNativeInstruments(signal?: AbortSignal): Promise<Map<string, OkxNativeInstrumentEntry>> {
   const response = await okxFetch("/api/okx?endpoint=public/instruments&instType=SWAP", { cache: "no-store", signal });
-  if (!response.ok) {
-    return new Map();
-  }
-
-  const payload = (await response.json()) as { data?: OkxNativeInstrumentEntry[] };
-  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const rows = await readOkxDataArray<OkxNativeInstrumentEntry>(response, "public/instruments");
+  throwIfOkxAborted(signal);
+  const usableRows = requireUsableOkxRows(
+    rows,
+    "public/instruments",
+    (row) => row.instId?.endsWith("-USDT-SWAP") === true && row.state === "live",
+    "response contained no live USDT swap instruments",
+  );
   return new Map(
-    rows
-      .filter((row) => row.instId?.endsWith("-SWAP") && row.state === "live")
+    usableRows
       .map((row) => [row.instId as string, row]),
   );
 }
 
 async function fetchNativeTickers(signal?: AbortSignal): Promise<Map<string, OkxNativeTickerEntry>> {
   const response = await okxFetch("/api/okx?endpoint=market/tickers&instType=SWAP", { cache: "no-store", signal });
-  if (!response.ok) {
-    return new Map();
-  }
-
-  const payload = (await response.json()) as { data?: OkxNativeTickerEntry[] };
-  const rows = Array.isArray(payload.data) ? payload.data : [];
-  return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
+  const rows = await readOkxDataArray<OkxNativeTickerEntry>(response, "market/tickers");
+  throwIfOkxAborted(signal);
+  const usableRows = requireUsableOkxRows(
+    rows,
+    "market/tickers",
+    (row) => row.instId?.endsWith("-USDT-SWAP") === true,
+    "response contained no usable USDT swap tickers",
+  );
+  return new Map(usableRows.map((row) => [row.instId as string, row]));
 }
 
 async function fetchNativeOpenInterest(signal?: AbortSignal): Promise<Map<string, OkxNativeOpenInterestEntry>> {
-  const response = await okxFetch("/api/okx?endpoint=public/open-interest&instType=SWAP", { cache: "no-store", signal });
-  if (!response.ok) {
+  try {
+    const response = await okxFetch("/api/okx?endpoint=public/open-interest&instType=SWAP", { cache: "no-store", signal });
+    const rows = await readOkxDataArray<OkxNativeOpenInterestEntry>(response, "public/open-interest");
+    return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
+  } catch (error) {
+    if (signal?.aborted) throwIfOkxAborted(signal);
+    warnOkxOptionalDegradation("public/open-interest", error);
     return new Map();
   }
-
-  const payload = (await response.json()) as { data?: OkxNativeOpenInterestEntry[] };
-  const rows = Array.isArray(payload.data) ? payload.data : [];
-  return new Map(rows.filter((row) => row.instId).map((row) => [row.instId as string, row]));
 }
 
 async function fetchNativeIndexPrices(signal?: AbortSignal): Promise<Map<string, number>> {
-  const response = await okxFetch("/api/okx?endpoint=market/index-tickers&quoteCcy=USDT", {
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok) {
+  try {
+    const response = await okxFetch("/api/okx?endpoint=market/index-tickers&quoteCcy=USDT", {
+      cache: "no-store",
+      signal,
+    });
+    const rows = await readOkxDataArray<OkxNativeIndexTickerEntry>(response, "market/index-tickers");
+    const result = new Map<string, number>();
+    for (const row of rows) {
+      if (!row.instId || !row.idxPx) continue;
+      const price = parseOptionalNumber(row.idxPx);
+      if (price != null && price > 0) {
+        result.set(row.instId, price);
+      }
+    }
+    return result;
+  } catch (error) {
+    if (signal?.aborted) throwIfOkxAborted(signal);
+    warnOkxOptionalDegradation("market/index-tickers", error);
     return new Map();
   }
-
-  const payload = (await response.json()) as { data?: OkxNativeIndexTickerEntry[] };
-  const rows = Array.isArray(payload.data) ? payload.data : [];
-  const result = new Map<string, number>();
-  for (const row of rows) {
-    if (!row.instId || !row.idxPx) continue;
-    const price = parseOptionalNumber(row.idxPx);
-    if (price != null && price > 0) {
-      result.set(row.instId, price);
-    }
-  }
-  return result;
 }
 
 async function fetchNativeRates(signal?: AbortSignal): Promise<CanonicalFundingRateRow[]> {
@@ -575,6 +631,7 @@ async function fetchNativeRates(signal?: AbortSignal): Promise<CanonicalFundingR
     fetchNativeOpenInterest(signal),
     fetchNativeIndexPrices(signal),
   ]);
+  throwIfOkxAborted(signal);
 
   return Array.from(fundingSnapshot.entries())
     .filter(([instId, row]) => (
@@ -673,18 +730,30 @@ export async function fetchOkxCanonicalDetail(
   const asOfMs = Number.isFinite(asOf) ? asOf as number : Date.now();
   const historicalSettlementBufferMs = 8 * 60 * 60 * 1000;
   const cutoffTimestamp = asOfMs - 30 * 24 * 60 * 60 * 1000 - historicalSettlementBufferMs;
-  const [fundingHistory, candlesRes, snapshot] = await Promise.all([
+  const [historyResult, candlesResult, snapshotResult] = await rejectImmediatelyOnAbort(Promise.allSettled([
     fetchOkxFundingHistory(rawSymbol, fundingIntervalSeconds, signal, 30, cutoffTimestamp, false, asOfMs),
     okxFetch(`/api/okx?endpoint=market/history-candles&instId=${encodeURIComponent(rawSymbol)}&bar=${encodeURIComponent(toOkxBar(interval))}&limit=300`, { cache: "no-store", signal }),
     fetchNativeFundingSnapshot(signal),
-  ]);
+  ]), signal);
+  throwIfOkxAborted(signal);
 
-  if (!candlesRes.ok) {
-    throw new Error("Failed to fetch OKX native detail data");
+  const fundingHistory = historyResult.status === "fulfilled" ? historyResult.value : [];
+  if (historyResult.status === "rejected") {
+    console.warn("[OKX] public/funding-rate-history detail branch failed:", historyResult.reason);
   }
 
-  const candlePayload = (await candlesRes.json()) as { data?: OkxNativeCandleRow[] };
-  const candleRows = Array.isArray(candlePayload.data) ? candlePayload.data : [];
+  let candleRows: OkxNativeCandleRow[] = [];
+  if (candlesResult.status === "fulfilled") {
+    try {
+      candleRows = await readOkxDataArray<OkxNativeCandleRow>(candlesResult.value, "market/history-candles");
+    } catch (error) {
+      throwIfOkxAborted(signal);
+      console.warn("[OKX] market/history-candles detail branch failed:", error);
+    }
+  } else {
+    console.warn("[OKX] market/history-candles detail branch failed:", candlesResult.reason);
+  }
+  throwIfOkxAborted(signal);
 
   const candles = candleRows
     .map((item) => ({
@@ -701,7 +770,10 @@ export async function fetchOkxCanonicalDetail(
     .sort((a, b) => a.openTime - b.openTime)
     .slice(-30);
 
-  const native = snapshot.get(rawSymbol);
+  const native = snapshotResult.status === "fulfilled" ? snapshotResult.value.get(rawSymbol) : undefined;
+  if (snapshotResult.status === "rejected") {
+    console.warn("[OKX] public/funding-rate detail branch failed:", snapshotResult.reason);
+  }
   const latestHistory = fundingHistory.length > 0 ? fundingHistory[fundingHistory.length - 1] : null;
 
   return {

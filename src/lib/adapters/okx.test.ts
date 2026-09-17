@@ -194,6 +194,96 @@ describe.serial("OKX funding snapshot cache", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  test("creator abort does not cancel the shared request or prevent caching", async () => {
+    let resolveResponse: ((value: Response) => void) | undefined;
+    let resolveStarted: (() => void) | undefined;
+    let requestSignal: AbortSignal | undefined;
+    const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+    const fetchMock = mock((_url: string, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      resolveStarted?.();
+      return new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const creator = new AbortController();
+    const creatorRequest = fetchNativeFundingSnapshot(creator.signal, 1_000);
+    creator.abort();
+    await expect(creatorRequest).rejects.toMatchObject({ name: "AbortError" });
+
+    await started;
+    expect(requestSignal).not.toBe(creator.signal);
+    expect(requestSignal?.aborted).toBe(false);
+    resolveResponse?.(response(200, undefined, {
+      data: [{ instId: "BTC-USDT-SWAP", fundingRate: "0.001" }],
+    }));
+
+    const sharedResult = await fetchNativeFundingSnapshot(undefined, 1_000);
+    const cached = await fetchNativeFundingSnapshot(undefined, 1_000);
+    expect(sharedResult.get("BTC-USDT-SWAP")?.fundingRate).toBe("0.001");
+    expect(cached).toBe(sharedResult);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects a critical funding snapshot bulk failure instead of returning an empty universe", async () => {
+    globalThis.fetch = mock(() => Promise.resolve(response(400))) as typeof fetch;
+
+    await expect(fetchOkxCanonicalRates()).rejects.toThrow("OKX public/funding-rate request failed (HTTP 400)");
+  });
+
+  test.each([
+    ["public/funding-rate", "OKX public/funding-rate response contained no usable funding rows"],
+    ["public/instruments", "OKX public/instruments response contained no live USDT swap instruments"],
+    ["market/tickers", "OKX market/tickers response contained no usable USDT swap tickers"],
+  ])("rejects an HTTP 200 empty %s bulk payload", async (failedEndpoint, expectedError) => {
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes(failedEndpoint)) return response(200, undefined, { data: [] });
+      if (text.includes("public/funding-rate")) return response(200, undefined, {
+        data: [{ instId: "BTC-USDT-SWAP", instType: "SWAP", fundingRate: "0.001" }],
+      });
+      if (text.includes("public/instruments")) return response(200, undefined, {
+        data: [{ instId: "BTC-USDT-SWAP", state: "live" }],
+      });
+      if (text.includes("market/tickers")) return response(200, undefined, {
+        data: [{ instId: "BTC-USDT-SWAP", last: "100" }],
+      });
+      if (text.includes("public/open-interest") || text.includes("market/index-tickers")) {
+        return response(200, undefined, { data: [] });
+      }
+      throw new Error(`Unexpected OKX test URL: ${text}`);
+    }) as typeof fetch;
+
+    await expect(fetchOkxCanonicalRates()).rejects.toThrow(expectedError);
+  });
+
+  test.each([
+    ["public/instruments", "OKX public/instruments response contained no live USDT swap instruments"],
+    ["market/tickers", "OKX market/tickers response contained no usable USDT swap tickers"],
+  ])("rejects %s rows that cannot populate the USDT swap universe", async (failedEndpoint, expectedError) => {
+    globalThis.fetch = mock(async (url) => {
+      const text = String(url);
+      if (text.includes(failedEndpoint)) return response(200, undefined, {
+        data: [{ instId: "BTC-USD-SWAP", state: "suspend" }],
+      });
+      if (text.includes("public/funding-rate")) return response(200, undefined, {
+        data: [{ instId: "BTC-USDT-SWAP", instType: "SWAP", fundingRate: "0.001" }],
+      });
+      if (text.includes("public/instruments")) return response(200, undefined, {
+        data: [{ instId: "BTC-USDT-SWAP", state: "live" }],
+      });
+      if (text.includes("market/tickers")) return response(200, undefined, {
+        data: [{ instId: "BTC-USDT-SWAP", last: "100" }],
+      });
+      if (text.includes("public/open-interest") || text.includes("market/index-tickers")) {
+        return response(200, undefined, { data: [] });
+      }
+      throw new Error(`Unexpected OKX test URL: ${text}`);
+    }) as typeof fetch;
+
+    await expect(fetchOkxCanonicalRates()).rejects.toThrow(expectedError);
+  });
+
   test("maps the PONS upcoming fundingRate instead of next or settled funding", async () => {
     const now = originalDateNow();
     const entries = [
@@ -361,6 +451,9 @@ describe.serial("OKX funding history pagination", () => {
           ],
         });
       }
+      if (text.includes("public/funding-rate")) {
+        return response(200, undefined, { data: [{ instId: "BTC-USDT-SWAP" }] });
+      }
       return response(200, undefined, { data: [] });
     }) as typeof fetch;
 
@@ -381,7 +474,7 @@ describe.serial("OKX funding history pagination", () => {
         ],
       });
       if (text.includes("funding-rate-history")) return response(200, undefined, { data: [] });
-      if (text.includes("public/funding-rate")) return response(200, undefined, { data: [] });
+      if (text.includes("public/funding-rate")) return response(200, undefined, { data: [{ instId: "BTC-USDT-SWAP" }] });
       return response(200, undefined, { data: [] });
     }) as typeof fetch;
 
@@ -391,5 +484,48 @@ describe.serial("OKX funding history pagination", () => {
       expect.objectContaining({ volume: "25" }),
     ]);
     expect(detail.candles[1].quoteVolume).toBeUndefined();
+  });
+
+  test("canonical detail degrades failed branches while retaining independent detail data", async () => {
+    const now = originalDateNow();
+    Date.now = () => now;
+    const originalWarn = console.warn;
+    console.warn = () => {};
+
+    try {
+      for (const failedBranch of ["history", "candles", "snapshot"] as const) {
+        clearOkxFundingSnapshotCache();
+        globalThis.fetch = mock(async (url) => {
+          const text = String(url);
+          if (text.includes("funding-rate-history")) {
+            return failedBranch === "history"
+              ? response(400)
+              : response(200, undefined, { data: [{ fundingTime: String(now - 60_000), fundingRate: "0.1" }] });
+          }
+          if (text.includes("history-candles")) {
+            return failedBranch === "candles"
+              ? response(400)
+              : response(200, undefined, { data: [[String(now), "1", "2", "0.5", "1.5", "10", "25"]] });
+          }
+          if (text.includes("public/funding-rate")) {
+            return failedBranch === "snapshot"
+              ? response(400)
+              : response(200, undefined, {
+                data: [{ instId: "BTC-USDT-SWAP", settState: "settled", settFundingRate: "0.25" }],
+              });
+          }
+          throw new Error(`Unexpected OKX test URL: ${text}`);
+        }) as typeof fetch;
+
+        const detail = await fetchOkxCanonicalDetail("BTC-USDT-SWAP", "1d", undefined, undefined, { asOf: now });
+        expect(detail.fundingHistory).toEqual(failedBranch === "history"
+          ? []
+          : [{ timestamp: now - 60_000, fundingRate: 0.1 }]);
+        expect(detail.candles).toHaveLength(failedBranch === "candles" ? 0 : 1);
+        expect(detail.lastSettlementRate).toBe(failedBranch === "history" ? 0.25 : 0.1);
+      }
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });

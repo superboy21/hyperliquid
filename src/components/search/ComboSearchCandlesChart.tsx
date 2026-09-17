@@ -10,25 +10,24 @@ import {
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { type ComboCandleResult, type ComboFundingLegObservation } from "@/lib/combo";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
-import { combineWeightedOhlc, type AppliedCombinationWeightSnapshot } from "@/lib/combo-weighting";
-import { CombinationWeightControls, useCombinationWeighting } from "@/components/spot-perp-arbitrage/CombinationWeightControls";
+import { combineWeightedOhlc, type CombinationViewMode, type CombinationWeightMode, type CombinationWeights } from "@/lib/combo-weighting";
 import { chartIntlTimeZone, chartWeekday, chartYear, type ChartTimeZone } from "@/lib/chart-timezone";
+import type { PairAnalysis } from "@/lib/spot-perp-arbitrage/pair-statistics";
 
 // ==================== Types ====================
 
-type ChartRange = "all" | "3y" | "1y" | "6m" | "1m" | "1d" | "4h";
-
 interface Props {
   data: ComboCandleResult;
+  /** One result from pair-statistics; the chart does not recalculate it. */
+  pairAnalysis?: PairAnalysis | null;
   interval: SearchChartInterval;
-  timeRange: ChartRange;
-  onTimeRangeChange: (range: ChartRange) => void;
   showVolume: boolean;
   onToggleVolume: () => void;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
-  weightSnapshotKey?: string;
-  onAppliedWeightsChange?: (snapshot: AppliedCombinationWeightSnapshot) => void;
+  view: CombinationViewMode;
+  mode: CombinationWeightMode;
+  weights: CombinationWeights;
   timeZone: ChartTimeZone;
 }
 
@@ -179,23 +178,41 @@ function buildYearAwareCategories(candles: SearchCandlePoint[], interval: Search
   });
 }
 
+// ==================== Regression (OLS) view helpers ====================
+
+function modelValue<T>(stat: unknown): T | null {
+  if (stat && typeof stat === "object" && "value" in stat) return (stat as { value?: T | null }).value ?? null;
+  return stat as T | null;
+}
+function modelDetails(analysis: PairAnalysis | null | undefined) {
+  const model = modelValue<{ kind?: string; alpha?: number; beta?: number }>(analysis?.model);
+  return { kind: model?.kind === "custom" ? "自定义 A:B" : "OLS", alpha: model?.alpha, beta: model?.beta };
+}
+function numberText(value: number | null | undefined, digits = 4): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "--";
+}
+function timeLabel(time: number, interval: SearchChartInterval, timeZone: ChartTimeZone): string {
+  return new Date(time).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", ...(interval === "1d" || interval === "1w" ? {} : { hour: "2-digit", minute: "2-digit" }), hour12: false, timeZone: chartIntlTimeZone(timeZone) });
+}
+
 // ==================== Component ====================
 
 export default function ComboSearchCandlesChart({
   data,
+  pairAnalysis,
   interval,
   showVolume,
   onToggleVolume,
   timeSelection = null,
   onTimeSelectionChange,
-  weightSnapshotKey,
-  onAppliedWeightsChange,
+  view,
+  mode: weightMode,
+  weights,
   timeZone,
 }: Props) {
-  const weighting = useCombinationWeighting(data.leg1Points, data.leg2Points);
   const weightedData = useMemo(() => {
     const combinationMode = data.mode;
-    if (weighting.mode === "none" || !data.leg1Points || !data.leg2Points || !combinationMode) return data;
+    if (weightMode === "none" || !data.leg1Points || !data.leg2Points || !combinationMode) return data;
     const firstByTime = new Map(data.leg1Points.map((point) => [point.openTime, point]));
     const secondByTime = new Map(data.leg2Points.map((point) => [point.openTime, point]));
     return {
@@ -203,11 +220,11 @@ export default function ComboSearchCandlesChart({
       candles: data.candles.map((candle) => {
         const first = firstByTime.get(candle.openTime);
         const second = secondByTime.get(candle.openTime);
-        const combined = first && second ? combineWeightedOhlc(first, second, combinationMode, weighting.weights) : null;
+        const combined = first && second ? combineWeightedOhlc(first, second, combinationMode, weights) : null;
         return combined ? { ...candle, open: String(combined.open), high: String(combined.high), low: String(combined.low), close: String(combined.close) } : candle;
       }),
     };
-  }, [data, weighting.mode, weighting.weights]);
+  }, [data, weightMode, weights]);
   const chartRef = useRef<HTMLDivElement | null>(null);
   const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
   const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
@@ -215,31 +232,13 @@ export default function ComboSearchCandlesChart({
   const selectionRef = useRef(timeSelection);
   const selectionChangeRef = useRef(onTimeSelectionChange);
   const zoomRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
-  const weightingModeRef = useRef(weighting.mode);
-  const recomputeParityRef = useRef(weighting.recomputeParity);
-  const weightingInputKeyRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    weightingModeRef.current = weighting.mode;
-    recomputeParityRef.current = weighting.recomputeParity;
-  }, [weighting.mode, weighting.recomputeParity]);
   useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
   useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
   useEffect(() => { zoomRangeRef.current = null; }, [data]);
-  useEffect(() => {
-    if (!weightSnapshotKey || !onAppliedWeightsChange) return;
-    // The weighting hook resets after its raw input changes. Do not publish
-    // the previous pair/range's mode during that one render.
-    const inputChanged = weightingInputKeyRef.current !== weightSnapshotKey;
-    weightingInputKeyRef.current = weightSnapshotKey;
-    onAppliedWeightsChange({
-      key: weightSnapshotKey,
-      mode: inputChanged ? "none" : weighting.mode,
-      weights: inputChanged || weighting.mode === "none" ? { first: 1, second: 1 } : weighting.weights,
-    });
-  }, [onAppliedWeightsChange, weightSnapshotKey, weighting.mode, weighting.weights]);
 
+  // ---------- plain view: classic spread/ratio candlestick ----------
   useEffect(() => {
-    if (!chartRef.current) return;
+    if (view !== "plain" || !chartRef.current) return;
 
     const chart = echarts.init(chartRef.current);
     const { candles, fundingRates, mode, firstSymbol, firstExchange, secondSymbol, secondExchange } = weightedData;
@@ -659,6 +658,8 @@ export default function ComboSearchCandlesChart({
     selectAtPixelRef.current = (point) => { if (!chart.containPixel({ gridIndex: 0 }, point) || openTimes.length === 0) return; const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point); const value = Array.isArray(converted) ? converted[0] : converted; const resolved = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value)); const start = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(openTimes.length - 1, resolved)) : 0; const nearest = openTimes.reduce((best, _candle, candidate) => { const px = Number(chart.convertToPixel({ xAxisIndex: 0 }, candidate)); const bestPx = Number(chart.convertToPixel({ xAxisIndex: 0 }, best)); return Number.isFinite(px) && Math.abs(px - point[0]) < Math.abs(bestPx - point[0]) ? candidate : best; }, start); commit(nearest, nearest, true); };
     if (typeof onTimeSelectionChange === "function") { chart.on("brushEnd", brushEnd); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); }
 
+    // Keep the visible zoom across re-renders/data changes; plain view never
+    // triggers any recomputation.
     const onDataZoom = (event: any) => {
       const zoom = event?.batch?.[0] ?? event;
       const optionZoom = (chart.getOption().dataZoom as any[] | undefined)?.[0] ?? {};
@@ -671,9 +672,6 @@ export default function ComboSearchCandlesChart({
       const previous = zoomRangeRef.current;
       if (previous?.startIndex === start && previous?.endIndex === end) return;
       zoomRangeRef.current = { startIndex: start, endIndex: end };
-      if (weightingModeRef.current === "parity" && openTimes[start] !== undefined && openTimes[end] !== undefined) {
-        recomputeParityRef.current(openTimes[start], openTimes[end]);
-      }
     };
     chart.on("dataZoom", onDataZoom);
     const resizeObserver = new ResizeObserver(() => {
@@ -689,57 +687,109 @@ export default function ComboSearchCandlesChart({
       selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [weightedData, interval, showVolume, onTimeSelectionChange, timeZone]);
+  }, [view, weightedData, interval, showVolume, onTimeSelectionChange, timeZone]);
 
+  // ---------- ols view: log-price regression residual + rolling Z ----------
+  useEffect(() => {
+    if (view !== "ols" || !chartRef.current || !pairAnalysis?.points.length) return;
+    const chart = echarts.init(chartRef.current);
+    const points = pairAnalysis.points;
+    const labels = points.map((point) => timeLabel(point.time, interval, timeZone));
+    const details = modelDetails(pairAnalysis);
+    const title = `${data.firstSymbol} (${data.firstExchange}) ~ ${data.secondSymbol} (${data.secondExchange}) · ${details.kind}`;
+    const residualData = points.map((point) => point.residual);
+    const zData = points.map((point) => point.zScore);
+    const times = points.map((point) => point.time);
+    const tooltip = (params: any) => {
+      const index = (Array.isArray(params) ? params[0] : params)?.dataIndex ?? 0;
+      const point = points[index];
+      if (!point) return "";
+      return [`<strong>${title}</strong>`, `${timeLabel(point.time, interval, timeZone)} · ${timeZone}`, `残差 ε：${numberText(point.residual, 6)}`, `模型偏离：${numberText(point.modelDeviationPercent, 2)}%`, `Rolling Z：${numberText(point.zScore, 2)}`, `α：${numberText(details.alpha, 6)}`, `β：${numberText(details.beta, 6)}`].join("<br/>");
+    };
+    chart.setOption({
+      animation: false, backgroundColor: "transparent",
+      title: { text: title, left: 16, top: 6, textStyle: { color: "#e5e7eb", fontSize: 13, fontWeight: 600 } },
+      legend: { data: ["对数价格回归残差 ε", "Rolling Z-score"], top: 5, right: 18, textStyle: { color: "#9ca3af", fontSize: 10 } },
+      grid: [{ left: 58, right: 20, top: 42, height: "35%" }, { left: 58, right: 20, top: "57%", height: "31%" }],
+      axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+      tooltip: { trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "rgba(17,24,39,.97)", borderColor: "#374151", textStyle: { color: "#e5e7eb", fontSize: 12 }, formatter: tooltip },
+      dataZoom: [{ type: "inside", xAxisIndex: [0, 1], moveOnMouseMove: false }, { type: "slider", xAxisIndex: [0, 1], bottom: 3, height: 15, borderColor: "#374151", fillerColor: "rgba(139,92,246,.14)" }],
+      ...(typeof onTimeSelectionChange === "function" ? { brush: { brushType: "lineX", brushMode: "single", removeOnClick: false, xAxisIndex: [0, 1], brushLink: "all" } } : {}),
+      xAxis: [0, 1].map((gridIndex) => ({ type: "category", gridIndex, data: labels, boundaryGap: true, axisLine: { lineStyle: { color: "#4b5563" } }, axisLabel: gridIndex ? { color: "#9ca3af", interval: Math.max(0, Math.floor(points.length / 8)), fontSize: 10, margin: 16 } : { show: false } })),
+      yAxis: [
+        { scale: true, position: "right", axisLine: { show: false }, axisLabel: { color: "#9ca3af", formatter: (value: number) => value.toFixed(3) }, splitLine: { lineStyle: { color: "rgba(75,85,99,.3)" } } },
+        { gridIndex: 1, scale: true, position: "right", axisLine: { show: false }, axisLabel: { color: "#9ca3af", formatter: (value: number) => value.toFixed(1) }, splitLine: { lineStyle: { color: "rgba(75,85,99,.3)" } } },
+      ],
+      series: [
+        { id: "exact-selection-residual", type: "line", name: "对数价格回归残差 ε", data: residualData, showSymbol: false, connectNulls: false, lineStyle: { color: "#a78bfa", width: 1.6 }, markLine: { silent: true, symbol: "none", label: { show: true, formatter: "ε = 0", color: "#9ca3af", fontSize: 10 }, data: [{ yAxis: 0, lineStyle: { color: "#64748b", type: "dashed" } }] } },
+        { type: "line", name: "Rolling Z-score", xAxisIndex: 1, yAxisIndex: 1, data: zData, showSymbol: false, connectNulls: false, lineStyle: { color: "#22d3ee", width: 1.6 }, markLine: { silent: true, symbol: "none", label: { color: "#9ca3af", fontSize: 10 }, data: [0, 1, -1, 2, -2].map((value) => ({ yAxis: value, label: { formatter: value === 0 ? "0" : `${value > 0 ? "+" : ""}${value}σ` }, lineStyle: { color: value === 0 ? "#64748b" : Math.abs(value) === 2 ? "#f59e0b" : "#475569", type: "dashed" } })) } },
+      ],
+    });
+    const focus = (selection: ChartTimeSelection | null, showTip = false) => {
+      if (!selection) { chart.setOption({ series: [{ id: "exact-selection-residual", markArea: { data: [] } }] }); return; }
+      const selected = chartSelectionIndices(times, selection); if (!selected) return;
+      chart.setOption({ series: [{ id: "exact-selection-residual", markArea: { silent: true, itemStyle: { color: "rgba(139,92,246,.1)" }, label: { show: false }, data: [[{ xAxis: selected.startIndex }, { xAxis: selected.endIndex }]] } }] });
+      if (showTip) chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: selected.cursorIndex });
+    };
+    applySelectionRef.current = focus;
+    selectAtPixelRef.current = (point) => {
+      if (!chart.containPixel({ gridIndex: 0 }, point) || times.length === 0) return;
+      const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point);
+      const value = Array.isArray(converted) ? converted[0] : converted;
+      const resolved = typeof value === "number" ? Math.round(value) : labels.indexOf(String(value));
+      const index = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(times.length - 1, resolved)) : 0;
+      const selection = chartTimeSelectionFromIndices(times, index, index);
+      if (selection) { selectionRef.current = selection; selectionChangeRef.current?.(selection); focus(selection, true); }
+    };
+    const brushEnd = (event: any) => { const range = event?.areas?.[0]?.coordRange; if (!Array.isArray(range)) return; const selected = chartTimeSelectionFromIndices(times, Math.round(range[0]), Math.round(range[1])); if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); focus(selected); } chart.dispatchAction({ type: "brush", areas: [] }); };
+    if (typeof onTimeSelectionChange === "function") chart.on("brushEnd", brushEnd);
+    const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
+    return () => { observer.disconnect(); if (typeof onTimeSelectionChange === "function") chart.off("brushEnd", brushEnd); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
+  }, [view, data.firstExchange, data.firstSymbol, data.secondExchange, data.secondSymbol, interval, onTimeSelectionChange, pairAnalysis, timeZone]);
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
+  const hasAnalysis = Boolean(pairAnalysis?.points.length);
+  const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
+  const isPlain = view === "plain";
+  const chartVisible = isPlain ? data.candles.length > 0 : hasAnalysis;
+  const selectionTimes = isPlain ? data.candles.map((candle) => candle.openTime) : (pairAnalysis?.points.map((point) => point.time) ?? []);
   const hasFunding = data.fundingRates.length > 0 && interval !== "1m";
   const isSparseFunding = hasFunding
     && SETTLEMENT_POINT_INTERVALS.has(interval)
     && isGenuinelySparseFunding(data.fundingRates);
   const { mode } = data;
+  const selectPoint = (event: React.PointerEvent<HTMLDivElement>) => {
+    const pointer = pointerRef.current; pointerRef.current = null;
+    if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged || !chartRef.current) return;
+    const rect = chartRef.current.getBoundingClientRect();
+    selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]);
+  };
   return (
     <div className="relative">
-      <CombinationWeightControls
-        firstLabel={`${data.firstExchange} ${data.firstSymbol}`}
-        secondLabel={`${data.secondExchange} ${data.secondSymbol}`}
-        mode={weighting.mode}
-        weights={weighting.weights}
-        parity={weighting.parity}
-        error={weighting.error}
-        customOpen={weighting.customOpen}
-        firstDraft={weighting.firstDraft}
-        secondDraft={weighting.secondDraft}
-        onToggleParity={() => {
-          const zoom = zoomRangeRef.current;
-          weighting.toggleParity(zoom ? data.candles[zoom.startIndex]?.openTime : undefined, zoom ? data.candles[zoom.endIndex]?.openTime : undefined);
-        }}
-        onToggleCustom={weighting.toggleCustom}
-        onFirstDraftChange={weighting.setFirstDraft}
-        onSecondDraftChange={weighting.setSecondDraft}
-        onApplyCustom={weighting.applyCustom}
-      />
-      <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": "Perpetual combination candlestick chart", "aria-describedby": "combo-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+      {chartVisible ? <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": isPlain ? "组合价差/比值 K 线图" : "配对回归残差与 Z-score 图表", "aria-describedby": "combo-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: selectPoint, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-        const times = data.candles.map((candle) => candle.openTime);
         event.preventDefault();
-        const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
+        const selected = moveChartTimeSelection(selectionTimes, selectionRef.current, event.key, event.shiftKey);
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
-      } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
+      } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" /> : <div className="flex h-[260px] items-center justify-center rounded border border-dashed border-gray-700 bg-gray-900/35 px-6 text-center text-sm text-gray-400" role="status" aria-live="polite">{isPlain ? "没有可绘制的组合蜡烛数据。" : analysisNotice}</div>}
       <ChartSourceCaption legProvenance={data.legProvenance} />
-      {typeof onTimeSelectionChange === "function" && <><p id="combo-chart-instructions" className="sr-only">Drag to select an exact {timeZone} range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p><p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p><p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>}
-      {/* 图表说明注释 */}
-      <div className="mt-2 px-4 py-2 text-xs text-gray-500 bg-gray-900/50 rounded">
-        <p className="font-medium text-gray-400 mb-1">📊 图表说明：</p>
-        <p>• 主图：{mode === "spread" ? "价差 (first - second)" : "价比 (first / second)"}，仅显示开盘/收盘</p>
-        <p>• 副图1：{showVolume ? "较小成交量" : "较小成交额"} = min(第一交易对, 第二交易对)</p>
-        {hasFunding && !isSparseFunding && <p>• 副图2：资金费率差 = 第一交易对年化费率 - 第二交易对年化费率</p>}
-        {hasFunding && isSparseFunding && (
-          <p>• 副图2：资金费率差（结算点）＝ 第一交易对年化费率 − 第二交易对年化费率；圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），缺失时段留空</p>
-        )}
-        {data.fundingRates.some((point) => point.sampleCount !== 0 && ((point.firstFunding == null) !== (point.secondFunding == null))) && <p>• 黄色菱形：一条腿的显式 sampleCount=0 按临时 0 计算的费率差，仅用于图表展示，不计入历史资金费率平均值。</p>}
-        <p>• 数据对齐：仅保留两个交易对共同存在的时间戳（交集）</p>
-      </div>
+      <p id="combo-chart-instructions" className="sr-only">{isPlain ? `拖动选择精确 ${timeZone} 区间，点击 K 线选择时间；左右方向键移动，Shift 加方向键扩展区间。` : "拖动选择精确区间，点击数据点选择时间；左右方向键移动，Shift 加方向键扩展区间。"}</p>
+      {typeof onTimeSelectionChange === "function" && <>{isPlain && <p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p>}<p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>}
+      {isPlain ? (
+        <div className="mt-2 rounded bg-gray-900/50 px-4 py-2 text-xs text-gray-500">
+          <p className="mb-1 font-medium text-gray-400">图表说明：</p>
+          <p>• 主图：{mode === "spread" ? "价差 (first - second)" : "价比 (first / second)"}，仅显示开盘/收盘</p>
+          <p>• 副图1：{showVolume ? "较小成交量" : "较小成交额"} = min(第一交易对, 第二交易对)</p>
+          {hasFunding && !isSparseFunding && <p>• 副图2：资金费率差 = 第一交易对年化费率 - 第二交易对年化费率</p>}
+          {hasFunding && isSparseFunding && (
+            <p>• 副图2：资金费率差（结算点）＝ 第一交易对年化费率 − 第二交易对年化费率；圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），缺失时段留空</p>
+          )}
+          {data.fundingRates.some((point) => point.sampleCount !== 0 && ((point.firstFunding == null) !== (point.secondFunding == null))) && <p>• 黄色菱形：一条腿的显式 sampleCount=0 按临时 0 计算的费率差，仅用于图表展示，不计入历史资金费率平均值。</p>}
+          <p>• 数据对齐：仅保留两个交易对共同存在的时间戳（交集）</p>
+        </div>
+      ) : (
+        <div className="mt-2 rounded bg-gray-900/60 px-4 py-2 text-xs leading-5 text-gray-500"><p className="font-medium text-gray-400">配对回归视图</p><p>上轨为对数价格回归残差 ε（零线）；下轨为 rolling Z-score（0、±1、±2）。缺失数据保留断点，不连接。</p><p>全预设范围一次拟合，历史残差包含全样本参数，不构成无前视交易回测。</p></div>
+      )}
     </div>
   );
 }

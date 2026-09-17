@@ -9,5 +9,7 @@ export * from "./query";
 export * from "./selection";
 export * from "./series";
 export * from "./single-market-analytics";
+export * from "./pair-statistics";
+export * from "./pair-adapter";
 export * from "./strategy";
 export * from "../combo-weighting";

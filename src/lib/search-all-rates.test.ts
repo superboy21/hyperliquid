@@ -193,4 +193,51 @@ describe("fetchAllRates integration", () => {
       bitgetPredictedFundingRate = -0.0004;
     }
   });
+
+  test("passes the universe AbortSignal to injected exchange fetchers", async () => {
+    const controller = new AbortController();
+    const received: Array<AbortSignal | undefined> = [];
+    const fetcher = async (signal?: AbortSignal) => {
+      received.push(signal);
+      return [];
+    };
+    const dependencies: SearchRateDependencies = {
+      fetchHyperliquidRates: fetcher,
+      fetchGateioRates: fetcher,
+      fetchBinanceRates: fetcher,
+      fetchOkxRates: fetcher,
+      fetchBitgetRates: fetcher,
+      fetchBybitRates: fetcher,
+      lighterFetch: async (_endpoint, _params, init) => {
+        received.push(init?.signal ?? undefined);
+        return Response.json({ funding_rates: [], order_book_stats: [], order_book_details: [] });
+      },
+    };
+
+    await fetchAllRates(dependencies, controller.signal);
+    expect(received).toHaveLength(9);
+    expect(received.every((signal) => signal === controller.signal)).toBe(true);
+  });
+
+  test("rejects the aggregate universe load after cancellation", async () => {
+    const controller = new AbortController();
+    const waitForAbort = (signal?: AbortSignal) => new Promise<SearchExchangeRate[]>((_, reject) => {
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+    const dependencies: SearchRateDependencies = {
+      fetchHyperliquidRates: waitForAbort,
+      fetchGateioRates: waitForAbort,
+      fetchBinanceRates: waitForAbort,
+      fetchOkxRates: waitForAbort,
+      fetchBitgetRates: waitForAbort,
+      fetchBybitRates: waitForAbort,
+      lighterFetch: async (_endpoint, _params, init) => new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }),
+    };
+
+    const load = fetchAllRates(dependencies, controller.signal);
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    await expect(load).rejects.toMatchObject({ name: "AbortError" });
+  });
 });

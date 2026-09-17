@@ -8,7 +8,7 @@ import {
 import { asPerpMarket, asSpotMarket } from "./model";
 import type { SearchExchangeRate } from "../search";
 import type { SpotMarketRow } from "../spot-search";
-import { calculateVolatilityParity, isCurrentCombinationWeightSnapshot, type CombinationWeights } from "../combo-weighting";
+import type { CombinationWeights } from "../combo-weighting";
 
 const perp = asPerpMarket({
   exchange: "Binance", exchangeColor: "yellow", symbol: "BTC", fundingRate: 0, markPrice: 1,
@@ -274,11 +274,6 @@ describe("legacy combo range", () => {
     const visible = filterLegacyComboRange(legacy, "1d");
     expect(visible.leg1Points?.map((point) => point.openTime)).toEqual([start, start + hour, start + 2 * hour]);
     expect(visible.leg2Points?.map((point) => point.openTime)).toEqual([start, start + hour, start + 2 * hour]);
-    const parity = calculateVolatilityParity(visible.leg1Points ?? [], visible.leg2Points ?? []);
-    const all = calculateVolatilityParity(legacy.leg1Points ?? [], legacy.leg2Points ?? []);
-    expect(parity.ok).toBe(true);
-    expect(all.ok).toBe(true);
-    expect(parity.first.percent).not.toBe(all.first.percent);
   });
 });
 
@@ -619,12 +614,5 @@ describe("two-leg dashboard analytics", () => {
     expect(dashboard.currentDerivedClose.value).toBeNull();
     expect(dashboard.leg1Turnover).toEqual({ mean: 20, count: 3 });
     expect(dashboard.leg2Turnover).toEqual({ mean: 40, count: 1 });
-  });
-
-  test("applied snapshots are accepted only for the current chart payload key", () => {
-    const snapshot = { key: "pair-a", mode: "none" as const, weights: { first: 1, second: 1 } };
-    expect(isCurrentCombinationWeightSnapshot(snapshot, "pair-a")).toBeTrue();
-    expect(isCurrentCombinationWeightSnapshot(snapshot, "pair-b")).toBeFalse();
-    expect(isCurrentCombinationWeightSnapshot(snapshot, null)).toBeFalse();
   });
 });

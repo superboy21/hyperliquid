@@ -8,16 +8,19 @@ import {
 } from "@/lib/spot-perp-arbitrage";
 import ChartSourceCaption from "@/components/ChartSourceCaption";
 import { chartSelectionIndices, chartTimeSelectionFromIndices, formatChartTimeSelection, moveChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
-import { combineWeightedOhlc, type AppliedCombinationWeightSnapshot } from "@/lib/combo-weighting";
-import { CombinationWeightControls, useCombinationWeighting } from "./CombinationWeightControls";
+import { combineWeightedOhlc, type CombinationViewMode, type CombinationWeightMode, type CombinationWeights } from "@/lib/combo-weighting";
 import { chartIntlTimeZone, type ChartTimeZone } from "@/lib/chart-timezone";
+import type { PairAnalysis } from "@/lib/spot-perp-arbitrage/pair-statistics";
 
 interface Props {
   result: SpotContainingCombinationResult;
+  /** One shared pair-statistics result. It is never recalculated in this view. */
+  pairAnalysis?: PairAnalysis | null;
   timeSelection?: ChartTimeSelection | null;
   onTimeSelectionChange?: (selection: ChartTimeSelection | null) => void;
-  weightSnapshotKey?: string;
-  onAppliedWeightsChange?: (snapshot: AppliedCombinationWeightSnapshot) => void;
+  view: CombinationViewMode;
+  mode: CombinationWeightMode;
+  weights: CombinationWeights;
   timeZone: ChartTimeZone;
 }
 
@@ -117,22 +120,31 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-export default function SpotContainingCombinationChart({ result: sourceResult, timeSelection = null, onTimeSelectionChange, weightSnapshotKey, onAppliedWeightsChange, timeZone }: Props) {
+// ==================== Regression (OLS) view helpers ====================
+
+function statValue<T>(value: unknown): T | null {
+  if (value && typeof value === "object" && "value" in value) return (value as { value?: T | null }).value ?? null;
+  return value as T | null;
+}
+function finiteText(value: number | null | undefined, digits: number): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "--";
+}
+
+export default function SpotContainingCombinationChart({ result: sourceResult, pairAnalysis, timeSelection = null, onTimeSelectionChange, view, mode, weights, timeZone }: Props) {
   const firstLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg1Point ? [point.leg1Point] : []), [sourceResult.points]);
   const secondLegPoints = useMemo(() => sourceResult.points.flatMap((point) => point.leg2Point ? [point.leg2Point] : []), [sourceResult.points]);
-  const weighting = useCombinationWeighting(firstLegPoints, secondLegPoints);
   const weightedResult = useMemo(() => {
-    if (weighting.mode === "none") return sourceResult;
+    if (mode !== "custom") return sourceResult;
     return {
       ...sourceResult,
       points: sourceResult.points.map((point) => {
         const combined = point.leg1Point && point.leg2Point
-          ? combineWeightedOhlc(point.leg1Point, point.leg2Point, sourceResult.mode, weighting.weights)
+          ? combineWeightedOhlc(point.leg1Point, point.leg2Point, sourceResult.mode, weights)
           : null;
         return combined ? { ...point, open: combined.open, high: combined.high, low: combined.low, close: combined.close } : point;
       }),
     };
-  }, [sourceResult, weighting.mode, weighting.weights]);
+  }, [sourceResult, mode, weights]);
   const result = weightedResult;
   const chartRef = useRef<HTMLDivElement | null>(null);
   const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
@@ -141,43 +153,25 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
   const selectionRef = useRef(timeSelection);
   const selectionChangeRef = useRef(onTimeSelectionChange);
   const zoomRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
-  const weightingModeRef = useRef(weighting.mode);
-  const recomputeParityRef = useRef(weighting.recomputeParity);
-  const weightingInputKeyRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    weightingModeRef.current = weighting.mode;
-    recomputeParityRef.current = weighting.recomputeParity;
-  }, [weighting.mode, weighting.recomputeParity]);
   useEffect(() => { selectionRef.current = timeSelection; }, [timeSelection]);
   useEffect(() => { selectionChangeRef.current = onTimeSelectionChange; }, [onTimeSelectionChange]);
   useEffect(() => { zoomRangeRef.current = null; }, [sourceResult]);
-  useEffect(() => {
-    if (!weightSnapshotKey || !onAppliedWeightsChange) return;
-    // The weighting hook resets after its raw input changes. Do not publish
-    // the previous pair/range's mode during that one render.
-    const inputChanged = weightingInputKeyRef.current !== weightSnapshotKey;
-    weightingInputKeyRef.current = weightSnapshotKey;
-    onAppliedWeightsChange({
-      key: weightSnapshotKey,
-      mode: inputChanged ? "none" : weighting.mode,
-      weights: inputChanged || weighting.mode === "none" ? { first: 1, second: 1 } : weighting.weights,
-    });
-  }, [onAppliedWeightsChange, weightSnapshotKey, weighting.mode, weighting.weights]);
-  const leg1Label = `${result.leg1.source.exchange} ${marketDisplaySymbol(result.leg1)}`;
-  const leg2Label = `${result.leg2.source.exchange} ${marketDisplaySymbol(result.leg2)}`;
+  const leg1Label = `${sourceResult.leg1.source.exchange} ${marketDisplaySymbol(sourceResult.leg1)}`;
+  const leg2Label = `${sourceResult.leg2.source.exchange} ${marketDisplaySymbol(sourceResult.leg2)}`;
   const showAllSymbol =
-    SETTLEMENT_POINT_INTERVALS.has(result.interval)
-    && result.composition !== "spot-spot"
-    && hasFundingGaps(result.points, result.funding);
+    SETTLEMENT_POINT_INTERVALS.has(sourceResult.interval)
+    && sourceResult.composition !== "spot-spot"
+    && hasFundingGaps(sourceResult.points, sourceResult.funding);
 
   const turnoverNotes = useMemo(() => {
-    const leg1Estimated = result.points.some((point) => point.leg1Turnover?.provenance === "estimated-base-close");
-    const leg2Estimated = result.points.some((point) => point.leg2Turnover?.provenance === "estimated-base-close");
+    const leg1Estimated = sourceResult.points.some((point) => point.leg1Turnover?.provenance === "estimated-base-close");
+    const leg2Estimated = sourceResult.points.some((point) => point.leg2Turnover?.provenance === "estimated-base-close");
     return { leg1Estimated, leg2Estimated };
-  }, [result.points]);
+  }, [sourceResult.points]);
 
+  // ---------- plain view: classic spread/ratio candlestick ----------
   useEffect(() => {
-    if (!chartRef.current || result.points.length === 0) return;
+    if (view !== "plain" || !chartRef.current || result.points.length === 0) return;
     const chart = echarts.init(chartRef.current);
     const categories = result.points.map((point) => dateLabel(point.openTime, result.interval, timeZone));
     const axisInterval = Math.max(0, Math.floor(result.points.length / 8));
@@ -187,19 +181,19 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
     }));
     const risingColors = result.points.map((point) => point.close >= point.open ? "rgba(139,92,246,.58)" : "rgba(239,68,68,.52)");
 
-    const showAllSymbol =
+    const plainShowAllSymbol =
       SETTLEMENT_POINT_INTERVALS.has(result.interval)
       && result.composition !== "spot-spot"
       && hasFundingGaps(result.points, result.funding);
     const firstSubLabel = result.composition === "spot-spot" ? "腿1报价币成交额" : "较小报价币成交额";
     const secondSubLabel = result.composition === "spot-spot"
       ? "腿2报价币成交额"
-      : showAllSymbol
+      : plainShowAllSymbol
         ? "有符号年化资金费率(结算点)"
         : "有符号年化资金费率";
     const secondTooltipLabel = result.composition === "spot-spot"
       ? secondSubLabel
-      : showAllSymbol
+      : plainShowAllSymbol
         ? "年化资金费率(结算点)"
         : "年化资金费率";
     const firstSubData = result.points.map((point, index) => ({
@@ -359,8 +353,8 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
               // as a visible point (showAllSymbol) so isolated observations
               // surrounded by gaps stay discoverable. Dense data and 1d/1w keep
               // the continuous line with no symbols.
-              symbol: showAllSymbol ? "circle" : "none",
-              ...(showAllSymbol
+              symbol: plainShowAllSymbol ? "circle" : "none",
+              ...(plainShowAllSymbol
                 ? {
                     showSymbol: true,
                     showAllSymbol: true,
@@ -389,6 +383,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
     selectAtPixelRef.current = (point) => { if (!chart.containPixel({ gridIndex: 0 }, point) || openTimes.length === 0) return; const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point); const value = Array.isArray(converted) ? converted[0] : converted; const resolved = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value)); const start = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(openTimes.length - 1, resolved)) : 0; const nearest = openTimes.reduce((best, _candle, candidate) => { const px = Number(chart.convertToPixel({ xAxisIndex: 0 }, candidate)); const bestPx = Number(chart.convertToPixel({ xAxisIndex: 0 }, best)); return Number.isFinite(px) && Math.abs(px - point[0]) < Math.abs(bestPx - point[0]) ? candidate : best; }, start); commit(nearest, nearest, true); };
     if (typeof onTimeSelectionChange === "function") { chart.on("brushEnd", brushEnd); chart.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } }); }
 
+    // Plain view only keeps the visible zoom; it never triggers a recompute.
     const onDataZoom = (event: any) => {
       const zoom = event?.batch?.[0] ?? event;
       const optionZoom = (chart.getOption().dataZoom as any[] | undefined)?.[0] ?? {};
@@ -401,9 +396,6 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
       const previous = zoomRangeRef.current;
       if (previous?.startIndex === start && previous?.endIndex === end) return;
       zoomRangeRef.current = { startIndex: start, endIndex: end };
-      if (weightingModeRef.current === "parity" && openTimes[start] !== undefined && openTimes[end] !== undefined) {
-        recomputeParityRef.current(openTimes[start], openTimes[end]);
-      }
     };
     chart.on("dataZoom", onDataZoom);
     const resizeObserver = new ResizeObserver(() => chart.resize());
@@ -416,60 +408,109 @@ export default function SpotContainingCombinationChart({ result: sourceResult, t
       selectAtPixelRef.current = null;
       chart.dispose();
     };
-  }, [leg1Label, leg2Label, weightedResult, result.composition, result.funding, result.interval, result.mode, result.points, onTimeSelectionChange, timeZone]);
+  }, [view, leg1Label, leg2Label, weightedResult, result.composition, result.funding, result.interval, result.mode, result.points, onTimeSelectionChange, timeZone]);
 
+  // ---------- ols view: log-price regression residual + rolling Z ----------
+  useEffect(() => {
+    if (view !== "ols" || !chartRef.current || !pairAnalysis?.points.length) return;
+    const chart = echarts.init(chartRef.current);
+    const points = pairAnalysis.points;
+    const times = points.map((point) => point.time);
+    const categories = points.map((point) => dateLabel(point.time, sourceResult.interval, timeZone));
+    const model = statValue<{ kind?: string; alpha?: number; beta?: number }>(pairAnalysis.model);
+    const modelName = model?.kind === "custom" ? "自定义 A:B" : "OLS";
+    const title = `${leg1Label} ~ ${leg2Label} · ${modelName}`;
+    const formatter = (params: any) => {
+      const index = (Array.isArray(params) ? params[0] : params)?.dataIndex ?? 0;
+      const point = points[index]; if (!point) return "";
+      return [`<strong>${title}</strong>`, `${dateLabel(point.time, sourceResult.interval, timeZone)} · ${timeZone}`, `残差 ε：${finiteText(point.residual, 6)}`, `模型偏离：${finiteText(point.modelDeviationPercent, 2)}%`, `Rolling Z：${finiteText(point.zScore, 2)}`, `α：${finiteText(model?.alpha, 6)}`, `β：${finiteText(model?.beta, 6)}`].join("<br/>");
+    };
+    chart.setOption({
+      animation: false, backgroundColor: "transparent",
+      title: { text: title, left: 16, top: 6, textStyle: { color: "#e5e7eb", fontSize: 13, fontWeight: 600 } },
+      legend: { data: ["对数价格回归残差 ε", "Rolling Z-score"], top: 5, right: 18, textStyle: { color: "#9ca3af", fontSize: 10 } },
+      grid: [{ left: 58, right: 20, top: 42, height: "35%" }, { left: 58, right: 20, top: "57%", height: "31%" }],
+      axisPointer: { link: [{ xAxisIndex: [0, 1] }] },
+      tooltip: { trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "rgba(17,24,39,.97)", borderColor: "#374151", textStyle: { color: "#e5e7eb", fontSize: 12 }, formatter },
+      dataZoom: [{ type: "inside", xAxisIndex: [0, 1], moveOnMouseMove: false }, { type: "slider", xAxisIndex: [0, 1], bottom: 3, height: 15, borderColor: "#374151", fillerColor: "rgba(139,92,246,.14)" }],
+      ...(typeof onTimeSelectionChange === "function" ? { brush: { brushType: "lineX", brushMode: "single", removeOnClick: false, xAxisIndex: [0, 1], brushLink: "all" } } : {}),
+      xAxis: [0, 1].map((gridIndex) => ({ type: "category", gridIndex, data: categories, boundaryGap: true, axisLine: { lineStyle: { color: "#4b5563" } }, axisLabel: gridIndex ? { color: "#9ca3af", interval: Math.max(0, Math.floor(points.length / 8)), fontSize: 10, margin: 16 } : { show: false } })),
+      yAxis: [
+        { scale: true, position: "right", axisLine: { show: false }, axisLabel: { color: "#9ca3af", formatter: (value: number) => value.toFixed(3) }, splitLine: { lineStyle: { color: "rgba(75,85,99,.3)" } } },
+        { gridIndex: 1, scale: true, position: "right", axisLine: { show: false }, axisLabel: { color: "#9ca3af", formatter: (value: number) => value.toFixed(1) }, splitLine: { lineStyle: { color: "rgba(75,85,99,.3)" } } },
+      ],
+      series: [
+        { id: "exact-selection-residual", type: "line", name: "对数价格回归残差 ε", data: points.map((point) => point.residual), showSymbol: false, connectNulls: false, lineStyle: { color: "#a78bfa", width: 1.6 }, markLine: { silent: true, symbol: "none", label: { show: true, formatter: "ε = 0", color: "#9ca3af", fontSize: 10 }, data: [{ yAxis: 0, lineStyle: { color: "#64748b", type: "dashed" } }] } },
+        { type: "line", name: "Rolling Z-score", xAxisIndex: 1, yAxisIndex: 1, data: points.map((point) => point.zScore), showSymbol: false, connectNulls: false, lineStyle: { color: "#22d3ee", width: 1.6 }, markLine: { silent: true, symbol: "none", label: { color: "#9ca3af", fontSize: 10 }, data: [0, 1, -1, 2, -2].map((value) => ({ yAxis: value, label: { formatter: value === 0 ? "0" : `${value > 0 ? "+" : ""}${value}σ` }, lineStyle: { color: value === 0 ? "#64748b" : Math.abs(value) === 2 ? "#f59e0b" : "#475569", type: "dashed" } })) } },
+      ],
+    });
+    const focus = (selection: ChartTimeSelection | null, showTip = false) => {
+      if (!selection) { chart.setOption({ series: [{ id: "exact-selection-residual", markArea: { data: [] } }] }); return; }
+      const selected = chartSelectionIndices(times, selection); if (!selected) return;
+      chart.setOption({ series: [{ id: "exact-selection-residual", markArea: { silent: true, itemStyle: { color: "rgba(139,92,246,.1)" }, label: { show: false }, data: [[{ xAxis: selected.startIndex }, { xAxis: selected.endIndex }]] } }] });
+      if (showTip) chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: selected.cursorIndex });
+    };
+    applySelectionRef.current = focus;
+    selectAtPixelRef.current = (point) => {
+      if (!chart.containPixel({ gridIndex: 0 }, point) || times.length === 0) return;
+      const converted = chart.convertFromPixel({ xAxisIndex: 0 }, point);
+      const value = Array.isArray(converted) ? converted[0] : converted;
+      const resolved = typeof value === "number" ? Math.round(value) : categories.indexOf(String(value));
+      const index = Number.isFinite(resolved) && resolved >= 0 ? Math.max(0, Math.min(times.length - 1, resolved)) : 0;
+      const selection = chartTimeSelectionFromIndices(times, index, index);
+      if (selection) { selectionRef.current = selection; selectionChangeRef.current?.(selection); focus(selection, true); }
+    };
+    const brushEnd = (event: any) => { const range = event?.areas?.[0]?.coordRange; if (!Array.isArray(range)) return; const next = chartTimeSelectionFromIndices(times, Math.round(range[0]), Math.round(range[1])); if (next) { selectionRef.current = next; selectionChangeRef.current?.(next); focus(next); } chart.dispatchAction({ type: "brush", areas: [] }); };
+    if (typeof onTimeSelectionChange === "function") chart.on("brushEnd", brushEnd);
+    const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
+    return () => { observer.disconnect(); if (typeof onTimeSelectionChange === "function") chart.off("brushEnd", brushEnd); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
+  }, [view, leg1Label, leg2Label, onTimeSelectionChange, pairAnalysis, sourceResult.interval, timeZone]);
   useEffect(() => { applySelectionRef.current?.(timeSelection); }, [timeSelection]);
 
+  const hasAnalysis = Boolean(pairAnalysis?.points.length);
+  const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
+  const isPlain = view === "plain";
+  const chartVisible = isPlain ? sourceResult.points.length > 0 : hasAnalysis;
+  const selectionTimes = isPlain ? sourceResult.points.map((point) => point.openTime) : (pairAnalysis?.points.map((point) => point.time) ?? []);
+  const selectPoint = (event: React.PointerEvent<HTMLDivElement>) => {
+    const pointer = pointerRef.current; pointerRef.current = null;
+    if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged || !chartRef.current) return;
+    const rect = chartRef.current.getBoundingClientRect();
+    selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]);
+  };
   return (
     <div>
-      <CombinationWeightControls
-        firstLabel={leg1Label}
-        secondLabel={leg2Label}
-        mode={weighting.mode}
-        weights={weighting.weights}
-        parity={weighting.parity}
-        error={weighting.error}
-        customOpen={weighting.customOpen}
-        firstDraft={weighting.firstDraft}
-        secondDraft={weighting.secondDraft}
-        onToggleParity={() => {
-          const zoom = zoomRangeRef.current;
-          weighting.toggleParity(zoom ? result.points[zoom.startIndex]?.openTime : undefined, zoom ? result.points[zoom.endIndex]?.openTime : undefined);
-        }}
-        onToggleCustom={weighting.toggleCustom}
-        onFirstDraftChange={weighting.setFirstDraft}
-        onSecondDraftChange={weighting.setSecondDraft}
-        onApplyCustom={weighting.applyCustom}
-      />
-      <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": `${leg1Label} and ${leg2Label} combination candlestick chart`, "aria-describedby": "spot-combo-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; pointerRef.current = null; if (!pointer || pointer.pointerId !== event.pointerId || pointer.dragged) return; const rect = chartRef.current?.getBoundingClientRect(); if (rect) selectAtPixelRef.current?.([event.clientX - rect.left, event.clientY - rect.top]); }, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+      {chartVisible ? <div ref={chartRef} {...(typeof onTimeSelectionChange === "function" ? { tabIndex: 0, role: "region", "aria-label": isPlain ? `${leg1Label} 与 ${leg2Label} 的组合 K 线图` : `${leg1Label} 与 ${leg2Label} 的配对回归残差与 Z-score 图表`, "aria-describedby": "spot-combo-chart-instructions", onPointerDownCapture: (event: React.PointerEvent<HTMLDivElement>) => { chartRef.current?.focus({ preventScroll: true }); pointerRef.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, dragged: false }; }, onPointerMoveCapture: (event: React.PointerEvent<HTMLDivElement>) => { const pointer = pointerRef.current; if (pointer?.pointerId === event.pointerId && Math.hypot(event.clientX - pointer.clientX, event.clientY - pointer.clientY) > 5) pointer.dragged = true; }, onPointerUpCapture: selectPoint, onPointerCancelCapture: () => { pointerRef.current = null; }, onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-        const times = result.points.map((point) => point.openTime);
         event.preventDefault();
-        const selected = moveChartTimeSelection(times, selectionRef.current, event.key, event.shiftKey);
+        const selected = moveChartTimeSelection(selectionTimes, selectionRef.current, event.key, event.shiftKey);
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
-      } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" />
-      <ChartSourceCaption legProvenance={result.legProvenance} />
-      <p id="spot-combo-chart-instructions" className="sr-only">Drag to select an exact {timeZone} range. Click a candle to select it. Left and right arrows move the candle; Shift plus arrows extends the range.</p>
-      <p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p>
-      <p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p>
-      <div className="mt-2 rounded bg-gray-900/60 px-4 py-2 text-xs leading-5 text-gray-500">
-        <p>主图：{result.mode === "spread" ? "腿1 − 腿2 的价差" : "腿1 ÷ 腿2 的比值"}，仅使用共同时间点。</p>
-        {result.composition === "spot-spot" ? (
-          <>
-            <p>副图1：{leg1Label} 报价币成交额{turnoverNotes.leg1Estimated ? "（部分为基础币成交量 × 收盘价估算）" : "（官方）"}</p>
-            <p>副图2：{leg2Label} 报价币成交额{turnoverNotes.leg2Estimated ? "（部分为基础币成交量 × 收盘价估算）" : "（官方）"}</p>
-          </>
-        ) : (
-          <>
-            <p>副图1：同一时间点 Spot 与 Perp 报价币成交额的较小值。</p>
-            {showAllSymbol ? (
-              <p>副图2：有符号年化 Perp 资金费率（结算点）；Perp 位于腿2时已按组合方向取反。圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），无样本时段留空、不插值。</p>
-            ) : (
-              <p>副图2：有符号年化 Perp 资金费率；Perp 位于腿2时已按组合方向取反。</p>
-            )}
-          </>
-        )}
-      </div>
+      } } : {})} className="h-[520px] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800" /> : <div className="flex h-[260px] items-center justify-center rounded border border-dashed border-gray-700 bg-gray-900/35 px-6 text-center text-sm text-gray-400" role="status" aria-live="polite">{isPlain ? "没有可绘制的组合蜡烛数据。" : analysisNotice}</div>}
+      <ChartSourceCaption legProvenance={sourceResult.legProvenance} />
+      <p id="spot-combo-chart-instructions" className="sr-only">{isPlain ? `拖动选择精确 ${timeZone} 区间，点击 K 线选择时间；左右方向键移动，Shift 加方向键扩展区间。` : "拖动选择精确区间，点击数据点选择时间；左右方向键移动，Shift 加方向键扩展区间。"}</p>
+      <>{isPlain && <p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p>}<p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>
+      {isPlain ? (
+        <div className="mt-2 rounded bg-gray-900/60 px-4 py-2 text-xs leading-5 text-gray-500">
+          <p>主图：{sourceResult.mode === "spread" ? "腿1 − 腿2 的价差" : "腿1 ÷ 腿2 的比值"}，仅使用共同时间点。</p>
+          {sourceResult.composition === "spot-spot" ? (
+            <>
+              <p>副图1：{leg1Label} 报价币成交额{turnoverNotes.leg1Estimated ? "（部分为基础币成交量 × 收盘价估算）" : "（官方）"}</p>
+              <p>副图2：{leg2Label} 报价币成交额{turnoverNotes.leg2Estimated ? "（部分为基础币成交量 × 收盘价估算）" : "（官方）"}</p>
+            </>
+          ) : (
+            <>
+              <p>副图1：同一时间点 Spot 与 Perp 报价币成交额的较小值。</p>
+              {showAllSymbol ? (
+                <p>副图2：有符号年化 Perp 资金费率（结算点）；Perp 位于腿2时已按组合方向取反。圆点仅在数据含缺失结算时段时启用（连续数据仍为连续线），无样本时段留空、不插值。</p>
+              ) : (
+                <p>副图2：有符号年化 Perp 资金费率；Perp 位于腿2时已按组合方向取反。</p>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2 rounded bg-gray-900/60 px-4 py-2 text-xs leading-5 text-gray-500"><p className="font-medium text-gray-400">配对回归视图</p><p>上轨为对数价格回归残差 ε（零线）；下轨为 rolling Z-score（0、±1、±2）。缺失数据保留断点，不连接。</p><p>全预设范围一次拟合，历史残差包含全样本参数，不构成无前视交易回测。</p></div>
+      )}
     </div>
   );
 }

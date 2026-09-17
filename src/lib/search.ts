@@ -322,16 +322,19 @@ export function computeAvgFundingRate2d(
 // ==================== Fetch All Rates ====================
 
 export interface SearchRateDependencies {
-  fetchHyperliquidRates?: () => Promise<SearchExchangeRate[]>;
-  fetchGateioRates?: () => Promise<SearchExchangeRate[]>;
-  fetchBinanceRates?: () => Promise<SearchExchangeRate[]>;
-  fetchOkxRates?: () => Promise<SearchExchangeRate[]>;
-  fetchBitgetRates?: () => Promise<SearchExchangeRate[]>;
-  fetchBybitRates?: () => Promise<SearchExchangeRate[]>;
+  fetchHyperliquidRates?: (signal?: AbortSignal) => Promise<SearchExchangeRate[]>;
+  fetchGateioRates?: (signal?: AbortSignal) => Promise<SearchExchangeRate[]>;
+  fetchBinanceRates?: (signal?: AbortSignal) => Promise<SearchExchangeRate[]>;
+  fetchOkxRates?: (signal?: AbortSignal) => Promise<SearchExchangeRate[]>;
+  fetchBitgetRates?: (signal?: AbortSignal) => Promise<SearchExchangeRate[]>;
+  fetchBybitRates?: (signal?: AbortSignal) => Promise<SearchExchangeRate[]>;
   lighterFetch?: typeof lighterFetch;
 }
 
-export async function fetchAllRates(dependencies: SearchRateDependencies = {}): Promise<SearchExchangeRate[]> {
+export async function fetchAllRates(
+  dependencies: SearchRateDependencies = {},
+  signal?: AbortSignal,
+): Promise<SearchExchangeRate[]> {
   const fetchHyperliquid = dependencies.fetchHyperliquidRates ?? fetchHyperliquidRates;
   const fetchGateio = dependencies.fetchGateioRates ?? fetchGateioRates;
   const fetchBinance = dependencies.fetchBinanceRates ?? fetchBinanceRates;
@@ -341,14 +344,16 @@ export async function fetchAllRates(dependencies: SearchRateDependencies = {}): 
   const fetchBybit = dependencies.fetchBybitRates ?? fetchBybitRates;
 
   const [hyperliquidRates, gateioRates, binanceRates, lighterRates, okxRates, bitgetRates, bybitRates] = await Promise.allSettled([
-    fetchHyperliquid(),
-    fetchGateio(),
-    fetchBinance(),
-    fetchLighterRates(fetchLighter),
-    fetchOkx(),
-    fetchBitget(),
-    fetchBybit(),
+    fetchHyperliquid(signal),
+    fetchGateio(signal),
+    fetchBinance(signal),
+    fetchLighterRates(fetchLighter, signal),
+    fetchOkx(signal),
+    fetchBitget(signal),
+    fetchBybit(signal),
   ]);
+
+  throwIfAborted(signal);
 
   const results: SearchExchangeRate[] = [];
 
@@ -423,20 +428,24 @@ export function mapHyperliquidSearchRate(r: HlFundingRate): SearchExchangeRate {
   };
 }
 
-async function fetchHyperliquidRates(): Promise<SearchExchangeRate[]> {
+async function fetchHyperliquidRates(signal?: AbortSignal): Promise<SearchExchangeRate[]> {
+  throwIfAborted(signal);
   const rates = await getAllFundingRatesWithHistory();
+  throwIfAborted(signal);
   return rates.map(mapHyperliquidSearchRate);
 }
 
 // ==================== Gate.io Rates ====================
 
-async function fetchGateioRates(): Promise<SearchExchangeRate[]> {
+async function fetchGateioRates(signal?: AbortSignal): Promise<SearchExchangeRate[]> {
+  throwIfAborted(signal);
   return fetchGateSearchRates();
 }
 
 // ==================== Binance Rates ====================
 
-async function fetchBinanceRates(): Promise<SearchExchangeRate[]> {
+async function fetchBinanceRates(signal?: AbortSignal): Promise<SearchExchangeRate[]> {
+  throwIfAborted(signal);
   return fetchBinanceSearchRates();
 }
 
@@ -455,8 +464,8 @@ const symbols = binanceRates.map((rate) => rate.symbol);
 
 // ==================== OKX Rates ====================
 
-async function fetchOkxRates(): Promise<SearchExchangeRate[]> {
-  const rows = await fetchOkxCanonicalRates();
+async function fetchOkxRates(signal?: AbortSignal): Promise<SearchExchangeRate[]> {
+  const rows = await fetchOkxCanonicalRates(signal);
   return rows.map((row) => ({
     exchange: "OKX" as const,
     exchangeColor: "emerald",
@@ -502,8 +511,8 @@ export function mapBitgetSearchRate(row: CanonicalFundingRateRow): SearchExchang
   };
 }
 
-async function fetchBitgetRates(): Promise<SearchExchangeRate[]> {
-  const rows = await fetchBitgetCanonicalRates();
+async function fetchBitgetRates(signal?: AbortSignal): Promise<SearchExchangeRate[]> {
+  const rows = await fetchBitgetCanonicalRates(signal);
   return rows.map(mapBitgetSearchRate);
 }
 
@@ -531,19 +540,23 @@ export function mapBybitSearchRate(row: CanonicalFundingRateRow): SearchExchange
   };
 }
 
-async function fetchBybitRates(): Promise<SearchExchangeRate[]> {
-  const rows = await fetchBybitCanonicalRates();
+async function fetchBybitRates(signal?: AbortSignal): Promise<SearchExchangeRate[]> {
+  const rows = await fetchBybitCanonicalRates(signal);
   return rows.map(mapBybitSearchRate);
 }
 
 // ==================== Lighter Rates ====================
 
-async function fetchLighterRates(fetchLighter: typeof lighterFetch = lighterFetch): Promise<SearchExchangeRate[]> {
+async function fetchLighterRates(
+  fetchLighter: typeof lighterFetch = lighterFetch,
+  signal?: AbortSignal,
+): Promise<SearchExchangeRate[]> {
   const [fundingRes, statsRes, orderBookRes] = await Promise.allSettled([
-    fetchLighter("funding-rates"),
-    fetchLighter("exchangeStats"),
-    fetchLighter("orderBookDetails", "filter=perp"),
+    fetchLighter("funding-rates", "", { signal }),
+    fetchLighter("exchangeStats", "", { signal }),
+    fetchLighter("orderBookDetails", "filter=perp", { signal }),
   ]);
+  throwIfAborted(signal);
 
   if (fundingRes.status !== "fulfilled" || !fundingRes.value.ok) {
     throw new Error("Lighter funding-rates fetch failed");

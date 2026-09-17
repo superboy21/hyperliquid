@@ -30,14 +30,10 @@ import { fetchSpotImpactSpreadDetail } from "@/lib/spot-impact-price";
 import { hasRpiEndpoint, type BookMode } from "@/lib/rpi-book";
 import { fetchOfficialPremium, prefetchOfficialPremiumContext } from "@/lib/official-premium";
 import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
-import type { SearchCandleResult, SearchChartInterval } from "@/lib/search-candles";
+import { getSearchIntervalMs, type SearchCandleResult, type SearchChartInterval } from "@/lib/search-candles";
 import type { SpotCandleResult } from "@/lib/spot-search-candles";
 import type { ComboCandleResult } from "@/lib/combo";
-import {
-  isCurrentCombinationWeightSnapshot,
-  type AppliedCombinationWeightSnapshot,
-  type CombinationWeights,
-} from "@/lib/combo-weighting";
+import type { CombinationWeights } from "@/lib/combo-weighting";
 import {
   DEFAULT_SPOT_QUOTE_FILTER,
   EMPTY_SELECTION,
@@ -72,6 +68,13 @@ import {
   type StrategyRecommendationLimit,
   type StrategyChartOverride,
   type StrategyRecommendation,
+  analyzePair,
+  alignedPairCloses,
+  timedClosesFromPairLeg,
+  timedClosesFromLoadedLeg,
+  type PairAnalysis,
+  type PairModelSpec,
+  type TimedClose,
 } from "@/lib/spot-perp-arbitrage";
 import { filterInChartTimeSelection, filterTimedInChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import { createChartRequestWindow } from "@/lib/chart-request-window";
@@ -84,6 +87,7 @@ import StrategyRecommendations from "./StrategyRecommendations";
 import SpotContainingCombinationChart from "./SpotContainingCombinationChart";
 import MixedAnalyticsDashboard from "./MixedAnalyticsDashboard";
 import SingleMarketAnalyticsDashboard from "./SingleMarketAnalyticsDashboard";
+import { CombinationWeightControls, useCombinationWeighting } from "./CombinationWeightControls";
 
 type UniverseState = "loading" | "ready" | "error";
 type SpreadMode = "top" | "impact";
@@ -270,6 +274,7 @@ export default function SpotPerpArbitrageController() {
   const [perpUniverseState, setPerpUniverseState] = useState<UniverseState>("loading");
   const [spotUniverseState, setSpotUniverseState] = useState<UniverseState>("loading");
   const universeGenerationRef = useRef(0);
+  const universeAbortRef = useRef<AbortController | null>(null);
   const oiAbortRef = useRef<AbortController | null>(null);
   const oiGenerationRef = useRef(0);
   const oiResultContractRef = useRef("");
@@ -340,18 +345,20 @@ export default function SpotPerpArbitrageController() {
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartRetry, setChartRetry] = useState(0);
   const [exactTimeSelection, setExactTimeSelection] = useState<ChartTimeSelection | null>(null);
-  const [appliedWeightSnapshot, setAppliedWeightSnapshot] = useState<AppliedCombinationWeightSnapshot | null>(null);
-  const currentWeightSnapshotKeyRef = useRef<string | null>(null);
   const chartAbortRef = useRef<AbortController | null>(null);
+  const btcAbortRef = useRef<AbortController | null>(null);
   const chartGenerationRef = useRef(0);
+  const [btcCloses, setBtcCloses] = useState<readonly TimedClose[] | undefined>(undefined);
+  const [btcSource, setBtcSource] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const generation = ++universeGenerationRef.current;
     const controller = new AbortController();
+    universeAbortRef.current = controller;
     setPerpUniverseState("loading");
     setSpotUniverseState("loading");
     void Promise.allSettled([
-      fetchAllRates(),
+      fetchAllRates({}, controller.signal),
       fetchAllSpotMarkets(controller.signal),
     ]).then(([perpResult, spotResult]) => {
       if (controller.signal.aborted || generation !== universeGenerationRef.current) return;
@@ -370,7 +377,10 @@ export default function SpotPerpArbitrageController() {
       }
       setUniverse(markets);
     });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (universeAbortRef.current === controller) universeAbortRef.current = null;
+    };
   }, [refreshTick]);
 
   useEffect(() => {
@@ -384,6 +394,7 @@ export default function SpotPerpArbitrageController() {
     setStrategyChartOverride(null);
     setSelectedRecommendationKey(null);
     chartAbortRef.current?.abort();
+    btcAbortRef.current?.abort();
     chartGenerationRef.current += 1;
     setChartPayload(null);
     setChartLoading(false);
@@ -703,7 +714,9 @@ export default function SpotPerpArbitrageController() {
     chartAbortRef.current?.abort();
     const generation = ++chartGenerationRef.current;
     const plan = effectiveChartPlan;
-    setAppliedWeightSnapshot(null);
+    btcAbortRef.current?.abort();
+    setBtcCloses(undefined);
+    setBtcSource(undefined);
     if (!plan) {
       setChartPayload(null);
       setChartLoading(false);
@@ -751,11 +764,13 @@ export default function SpotPerpArbitrageController() {
   }, [chartInterval, chartTransportRange, chartRetry, effectiveChartPlan]);
 
   useEffect(() => () => {
+    universeAbortRef.current?.abort();
     oiAbortRef.current?.abort();
     detailAbortRef.current?.abort();
     impactAbortRef.current?.abort();
     premiumIndexAbortRef.current?.abort();
     chartAbortRef.current?.abort();
+    btcAbortRef.current?.abort();
   }, []);
 
   const activeChartRange = normalizeChartRange(chartInterval, chartRange, singleSpotChart);
@@ -838,21 +853,69 @@ export default function SpotPerpArbitrageController() {
     }
     return null;
   }, [activeChartRange, visiblePerpCombo, visibleSpotCombo]);
-  currentWeightSnapshotKeyRef.current = comboWeightSnapshotKey;
-  const dashboardWeights: CombinationWeights = appliedWeightSnapshot && isCurrentCombinationWeightSnapshot(appliedWeightSnapshot, comboWeightSnapshotKey)
-    ? appliedWeightSnapshot.weights
-    : { first: 1, second: 1 };
-  const onAppliedWeightsChange = useCallback((snapshot: AppliedCombinationWeightSnapshot) => {
-    if (!isCurrentCombinationWeightSnapshot(snapshot, currentWeightSnapshotKeyRef.current)) return;
-    setAppliedWeightSnapshot((current) => (
-      current?.key === snapshot.key
-      && current.mode === snapshot.mode
-      && current.weights.first === snapshot.weights.first
-      && current.weights.second === snapshot.weights.second
-        ? current
-        : snapshot
-    ));
-  }, []);
+
+  // Single source of truth for the combination view and A:B weighting. The
+  // snapshot key resets it to plain/1:1 whenever the chart payload changes.
+  const weighting = useCombinationWeighting(comboWeightSnapshotKey ?? undefined);
+
+  // Memoized so the pair analysis (and the ECharts it feeds) is not rebuilt
+  // on every render; the OLS spec is a stable module constant.
+  const pairModelSpec: PairModelSpec = useMemo(
+    () => weighting.mode === "custom"
+      ? { mode: "custom", first: weighting.weights.first, second: weighting.weights.second }
+      : { mode: "ols" },
+    [weighting.mode, weighting.weights],
+  );
+  const pairInput = useMemo(() => visiblePerpCombo ? alignedPairCloses(visiblePerpCombo) : visibleSpotCombo ? alignedPairCloses(visibleSpotCombo) : [], [visiblePerpCombo, visibleSpotCombo]);
+  const pairAnalysis = useMemo<PairAnalysis | null>(() => {
+    if (!visiblePerpCombo && !visibleSpotCombo) return null;
+    return analyzePair(pairInput, pairModelSpec, { intervalMs: getSearchIntervalMs(chartInterval), btcCloses, btcSource });
+  }, [btcCloses, btcSource, chartInterval, pairInput, pairModelSpec, visiblePerpCombo, visibleSpotCombo]);
+  const dashboardPairAnalysis = useMemo<PairAnalysis | null>(() => {
+    if (!pairAnalysis || !exactTimeSelection) return pairAnalysis;
+    const points = pairAnalysis.points.filter((point) => point.time >= exactTimeSelection.startTime && point.time <= exactTimeSelection.endTime);
+    return { ...pairAnalysis, points, residuals: points };
+  }, [exactTimeSelection, pairAnalysis]);
+  // Plain view keeps the raw A:B weights (1:1 when inactive); the OLS view uses
+  // the normalized 1:beta form so funding/market lanes follow the hedge ratio.
+  const dashboardWeights: CombinationWeights = weighting.view === "plain"
+    ? weighting.mode === "custom"
+      ? weighting.weights
+      : { first: 1, second: 1 }
+    : weighting.mode === "custom"
+      ? { first: 1, second: weighting.weights.second / weighting.weights.first }
+      : pairAnalysis?.model.value
+        ? { first: 1, second: pairAnalysis.model.value.beta }
+        : { first: 1, second: 1 };
+
+  useEffect(() => {
+    btcAbortRef.current?.abort();
+    setBtcCloses(undefined); setBtcSource(undefined);
+    if (!chartPayload || chartPayload.kind === "single" || !effectiveChartPlan || effectiveChartPlan.kind !== "combo") return;
+    const isBtc = (market: ArbitrageMarket) => market.kind === "spot"
+      ? market.source.baseAsset === "BTC"
+      : market.source.symbol === "BTC";
+    const selectedIndex = isBtc(effectiveChartPlan.leg1) ? 1 : isBtc(effectiveChartPlan.leg2) ? 2 : null;
+    const selected = selectedIndex === 1 ? effectiveChartPlan.leg1 : selectedIndex === 2 ? effectiveChartPlan.leg2 : undefined;
+    const fallback = universe.find((market) => market.kind === "spot" && (market.source.exchange === "Binance" || market.source.exchange === "OKX") && market.source.baseAsset === "BTC" && market.source.quoteAsset === "USDT")
+      ?? universe.find((market) => market.kind === "perp" && market.source.exchange === "Binance" && market.source.symbol === "BTC");
+    const market = selected ?? fallback;
+    if (!market) return;
+    const controller = new AbortController(); btcAbortRef.current = controller;
+    const generation = chartGenerationRef.current;
+    const source = `${market.source.exchange} ${market.kind === "spot" ? "Spot" : "Perp"} BTC benchmark`;
+    if (selectedIndex !== null) {
+      setBtcCloses(timedClosesFromPairLeg(chartPayload.result, selectedIndex, source)); setBtcSource(source);
+      return;
+    }
+    const window = createChartRequestWindow(chartTransportRange, SINGLE_RANGE_MS, Date.now());
+    void loadMarketCandles(market, chartInterval, controller.signal, { purpose: "combo", window }).then((loaded) => {
+      if (!controller.signal.aborted && generation === chartGenerationRef.current) {
+        setBtcCloses(timedClosesFromLoadedLeg(loaded, source)); setBtcSource(source);
+      }
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [chartInterval, chartPayload, chartTransportRange, effectiveChartPlan, universe]);
 
   const selectMarket = (market: ArbitrageMarket) => {
     setStrategyChartOverride(null);
@@ -866,6 +929,7 @@ export default function SpotPerpArbitrageController() {
 
   const clearStrategyChart = () => {
     chartAbortRef.current?.abort();
+    btcAbortRef.current?.abort();
     chartGenerationRef.current += 1;
     setStrategyChartOverride(null);
     setStrategyChartMode("ratio");
@@ -874,6 +938,8 @@ export default function SpotPerpArbitrageController() {
     setChartLoading(false);
     setChartError(null);
     setExactTimeSelection(null);
+    setBtcCloses(undefined);
+    setBtcSource(undefined);
   };
 
   const selectRecommendation = (recommendation: StrategyRecommendation) => {
@@ -947,6 +1013,13 @@ export default function SpotPerpArbitrageController() {
   };
 
   const refreshSearch = () => {
+    // Cancel all work derived from the old universe before starting the next
+    // generation, so stale per-market work cannot overlap the refresh.
+    universeAbortRef.current?.abort();
+    detailAbortRef.current?.abort();
+    impactAbortRef.current?.abort();
+    premiumIndexAbortRef.current?.abort();
+    oiAbortRef.current?.abort();
     const nextImpactNotional = impactNotionalRef.current;
     appliedImpactNotionalRef.current = nextImpactNotional;
     setAppliedImpactNotional(nextImpactNotional);
@@ -989,7 +1062,7 @@ export default function SpotPerpArbitrageController() {
   })();
 
   const selectedTitle = effectiveChartPlan?.kind === "combo"
-    ? `${effectiveChartPlan.leg1.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg1)} ${effectiveChartPlan.mode === "spread" ? "−" : "÷"} ${effectiveChartPlan.leg2.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg2)}`
+    ? `${effectiveChartPlan.leg1.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg1)} ~ ${effectiveChartPlan.leg2.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg2)} 配对回归`
     : effectiveChartPlan?.kind === "single"
       ? `${effectiveChartPlan.leg1.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg1)}`
       : "";
@@ -1155,12 +1228,30 @@ export default function SpotPerpArbitrageController() {
               <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="min-w-0">
                   <h2 id="arbitrage-chart-title" className="truncate text-sm font-semibold text-white">{selectedTitle}</h2>
-                  {effectiveChartPlan.kind === "combo" && effectiveChartPlan.source === "strategy" && <p className="mt-1 text-xs text-violet-300">A 买入 · B 卖出 · {effectiveChartPlan.mode === "spread" ? "A − B Spread" : "A / B Ratio"}</p>}
+                  {effectiveChartPlan.kind === "combo" && effectiveChartPlan.source === "strategy" && <p className="mt-1 text-xs text-violet-300">策略腿位用于资金与流动性汇总；主图可切换普通价差图 / OLS 回归。</p>}
                   <p className="mt-1 text-xs text-gray-500">{chartPayload?.kind === "perp-combo" ? `${visiblePerpCombo?.candles.length ?? 0} 个共同时间点` : chartPayload?.kind === "spot-combo" ? `${visibleSpotCombo?.points.length ?? 0} 个共同时间点` : "单市场原始图表"}</p>
-                  <p className="mt-1 text-xs text-cyan-300/80">图表时间：{chartTimeZone} · 拖动选择精确区间；点击 K 线，方向键移动，Shift + 方向键扩展。</p>
+                  <p className="mt-1 text-xs text-cyan-300/80">图表时间：{chartTimeZone} · 拖动选择精确区间；方向键移动，Shift + 方向键扩展。</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-1">
-                  {chartPayload?.kind !== "spot-combo" && (
+                  {effectiveChartPlan?.kind === "combo" && (
+                    <CombinationWeightControls
+                      firstLabel={`${effectiveChartPlan.leg1.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg1)}`}
+                      secondLabel={`${effectiveChartPlan.leg2.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg2)}`}
+                      view={weighting.view}
+                      mode={weighting.mode}
+                      weights={weighting.weights}
+                      error={weighting.error}
+                      customOpen={weighting.customOpen}
+                      firstDraft={weighting.firstDraft}
+                      secondDraft={weighting.secondDraft}
+                      onSetView={weighting.setView}
+                      onToggleCustom={weighting.toggleCustom}
+                      onFirstDraftChange={weighting.setFirstDraft}
+                      onSecondDraftChange={weighting.setSecondDraft}
+                      onApplyCustom={weighting.applyCustom}
+                    />
+                  )}
+                  {(chartPayload?.kind === "single" || (chartPayload?.kind === "perp-combo" && weighting.view === "plain")) && (
                     <div className="mr-1 inline-flex rounded bg-gray-900/70 p-0.5" aria-label="成交数据类型">
                       <button type="button" aria-pressed={!showBaseVolume} onClick={() => setShowBaseVolume(false)} className={`rounded px-2 py-1 text-xs ${!showBaseVolume ? "bg-emerald-600 text-white" : "text-gray-500 hover:text-gray-300"}`}>成交额</button>
                       <button type="button" aria-pressed={showBaseVolume} onClick={() => setShowBaseVolume(true)} className={`rounded px-2 py-1 text-xs ${showBaseVolume ? "bg-emerald-600 text-white" : "text-gray-500 hover:text-gray-300"}`}>成交量</button>
@@ -1192,7 +1283,7 @@ export default function SpotPerpArbitrageController() {
                       {interval}
                     </button>
                   ))}
-                  <button type="button" onClick={() => { setExactTimeSelection(null); setStrategyChartOverride(null); setSelectedRecommendationKey(null); setSelection(EMPTY_SELECTION); }} aria-label="关闭图表" className="ml-1 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">✕</button>
+                  <button type="button" onClick={() => { btcAbortRef.current?.abort(); setBtcCloses(undefined); setBtcSource(undefined); setExactTimeSelection(null); setStrategyChartOverride(null); setSelectedRecommendationKey(null); setSelection(EMPTY_SELECTION); }} aria-label="关闭图表" className="ml-1 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">✕</button>
                 </div>
               </div>
 
@@ -1205,26 +1296,26 @@ export default function SpotPerpArbitrageController() {
               ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "spot" && visibleSingleSpot && visibleSingleSpot.candles.length > 0 ? (
                 <><SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} provenance={chartPayload.leg.original.provenance} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} timeZone={chartTimeZone} /><SingleMarketAnalyticsDashboard candles={visibleSingleSpot.candles} selection={exactTimeSelection} marketLabel={`${visibleSingleSpot.exchange} ${visibleSingleSpot.symbol} Spot`} marketKind="spot" timeZone={chartTimeZone} /></>
               ) : chartPayload?.kind === "perp-combo" && visiblePerpCombo && visiblePerpCombo.candles.length > 1 ? (
-                <ComboSearchCandlesChart data={visiblePerpCombo} interval={chartInterval} timeRange={activeChartRange} onTimeRangeChange={(range) => { setExactTimeSelection(null); setChartRange(normalizeChartRange(chartInterval, range, singleSpotChart)); }} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} weightSnapshotKey={comboWeightSnapshotKey ?? undefined} onAppliedWeightsChange={onAppliedWeightsChange} timeZone={chartTimeZone} />
+                <ComboSearchCandlesChart data={visiblePerpCombo} pairAnalysis={pairAnalysis} interval={chartInterval} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} view={weighting.view} mode={weighting.mode} weights={weighting.weights} timeZone={chartTimeZone} />
               ) : chartPayload?.kind === "spot-combo" && visibleSpotCombo && visibleSpotCombo.points.length > 1 ? (
-                <SpotContainingCombinationChart result={visibleSpotCombo} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} weightSnapshotKey={comboWeightSnapshotKey ?? undefined} onAppliedWeightsChange={onAppliedWeightsChange} timeZone={chartTimeZone} />
+                <SpotContainingCombinationChart result={visibleSpotCombo} pairAnalysis={pairAnalysis} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} view={weighting.view} mode={weighting.mode} weights={weighting.weights} timeZone={chartTimeZone} />
               ) : (
                 <div className="flex h-[520px] items-center justify-center" role="status"><div className="text-center"><p className="text-gray-400">当前区间没有足够的重叠数据</p><p className="mt-1 text-sm text-gray-600">可尝试更长历史范围或其他K线周期。</p></div></div>
               )}
             </section>
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "spot-combo" && exactSpotCombo && (
-            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={exactSpotCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
+            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={exactSpotCombo} pairAnalysis={dashboardPairAnalysis} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "perp-combo" && exactPerpCombo && (
-            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={exactPerpCombo} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
+            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={exactPerpCombo} pairAnalysis={dashboardPairAnalysis} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
           )}
           {comboMode && (
             <div className="flex flex-col gap-2 rounded-lg border border-violet-500/25 bg-violet-950/15 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-gray-400">按点击顺序选腿：</span>
-                <span className={`rounded px-2 py-1 ${selection.leg1 ? "bg-indigo-500/20 text-indigo-200" : "border border-dashed border-gray-600 text-gray-500"}`}>腿1 · {selection.leg1 ? `${selection.leg1.source.exchange} ${marketDisplaySymbol(selection.leg1)}` : "先选择被减数 / 分子"}</span>
-                <span className={`rounded px-2 py-1 ${selection.leg2 ? "bg-fuchsia-500/20 text-fuchsia-200" : "border border-dashed border-gray-600 text-gray-500"}`}>腿2 · {selection.leg2 ? `${selection.leg2.source.exchange} ${marketDisplaySymbol(selection.leg2)}` : "再选择减数 / 分母"}</span>
+                <span className={`rounded px-2 py-1 ${selection.leg1 ? "bg-indigo-500/20 text-indigo-200" : "border border-dashed border-gray-600 text-gray-500"}`}>腿1 · {selection.leg1 ? `${selection.leg1.source.exchange} ${marketDisplaySymbol(selection.leg1)}` : "先选择腿1"}</span>
+                <span className={`rounded px-2 py-1 ${selection.leg2 ? "bg-fuchsia-500/20 text-fuchsia-200" : "border border-dashed border-gray-600 text-gray-500"}`}>腿2 · {selection.leg2 ? `${selection.leg2.source.exchange} ${marketDisplaySymbol(selection.leg2)}` : "再选择腿2"}</span>
               </div>
               <span className="text-gray-600">选满两腿后，第三次点击会被忽略；先点已选腿可移除。</span>
             </div>
