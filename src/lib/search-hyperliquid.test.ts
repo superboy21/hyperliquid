@@ -29,7 +29,9 @@ describe("Hyperliquid search row prediction mapping", () => {
     expect(mapHyperliquidSearchRate(rate("Infinity")).predictedFundingRate).toBeNull();
   });
 
-  test("does not attach a perp prediction to a HIP-3 row", () => {
-    expect(mapHyperliquidSearchRate({ ...rate("0.001"), coin: "xyz:TSLA", isSpot: true }).predictedFundingRate).toBeNull();
+  test("keeps the prediction on a HIP-3 row instead of dropping it", () => {
+    const row = mapHyperliquidSearchRate({ ...rate("0.00000625"), coin: "xyz:NVDA", isSpot: true });
+    expect(row.predictedFundingRate).toBe(0.00000625);
+    expect(row.rawSymbol).toBe("xyz:NVDA");
   });
 });

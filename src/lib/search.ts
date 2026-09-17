@@ -411,7 +411,10 @@ export function mapHyperliquidSearchRate(r: HlFundingRate): SearchExchangeRate {
     symbol: toDisplaySymbol(r.coin),
     rawSymbol: r.coin,
     fundingRate: parseFloat(r.fundingRate),
-    predictedFundingRate: r.isSpot ? null : parseSearchFundingRate(r.predictedFundingRate),
+    // Native perps carry the official HlPerp prediction; HIP-3 dex rows carry their live
+    // hourly rate instead, because predictedFundings has no builder-dex coverage. `isSpot`
+    // marks a HIP-3 row here, so it must not gate funding fields.
+    predictedFundingRate: parseSearchFundingRate(r.predictedFundingRate),
     markPrice: parseFloat(r.markPrice),
     indexPrice: parseFloat(r.indexPrice || "0") || null,
     lastPrice: parseFloat(r.markPrice),

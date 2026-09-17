@@ -6,6 +6,7 @@ import {
   getAllFundingRates,
   getFundingHistory,
   getFundingHistoryRange,
+  getHip3FundingRates,
   HYPERLIQUID_FUNDING_PAGE_MS,
   HYPERLIQUID_FUNDING_MAX_PAGES,
   getMeta,
@@ -324,6 +325,43 @@ describe("Hyperliquid direct-first transport", () => {
       await expect(getAllFundingRates()).resolves.toEqual([
         expect.objectContaining({ coin: "BTC", fundingRate: "0.001" }),
       ]);
+    } finally {
+      restore();
+    }
+  });
+
+  test("serves every HIP-3 dex its live rate as the predicted funding fallback", async () => {
+    const restore = mockFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { type: string; dex?: string };
+      if (body.type !== "metaAndAssetCtxs") return jsonResponse({});
+      if (body.dex === "xyz") {
+        return jsonResponse([
+          { universe: [{ name: "xyz:NVDA" }, { name: "xyz:DROPPED" }] },
+          [{ funding: "0.00000625" }, { funding: "" }],
+        ]);
+      }
+      if (body.dex === "para") {
+        return jsonResponse([
+          { universe: [{ name: "para:AVGO" }] },
+          [{ funding: 0.0000075 }],
+        ]);
+      }
+      return jsonResponse([
+        { universe: [{ name: "hyna:BTC" }] },
+        [{ funding: "0.0" }],
+      ]);
+    });
+
+    try {
+      const rates = await getHip3FundingRates();
+      expect(rates).toHaveLength(3);
+      expect(rates.find((rate) => rate.coin === "xyz:NVDA")).toMatchObject({
+        fundingRate: "0.00000625",
+        predictedFundingRate: "0.00000625",
+        isSpot: true,
+      });
+      expect(rates.find((rate) => rate.coin === "para:AVGO")?.predictedFundingRate).toBe("0.0000075");
+      expect(rates.find((rate) => rate.coin === "hyna:BTC")?.predictedFundingRate).toBe("0.0");
     } finally {
       restore();
     }

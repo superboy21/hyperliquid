@@ -361,6 +361,11 @@ async function getHip3MarketData(dex: "xyz" | "para" | "hyna"): Promise<Map<stri
       marketData.set(market.name, {
         coin: market.name,
         fundingRate: String(ctx.funding),
+        // HIP-3 dexes are outside predictedFundings coverage: that endpoint only serves the
+        // first perp dex, and passing `dex` is silently ignored. The live hourly rate is the
+        // only published equivalent, and it is the value the funding page already labels as
+        // 预测费率, so both pages stay on the same footing.
+        predictedFundingRate: String(ctx.funding),
         markPrice: ctx?.markPx || "0",
         indexPrice: ctx?.oraclePx || "0",
         premium: ctx?.premium || "0",
@@ -390,6 +395,7 @@ async function getDexFundingRates(dex: "xyz" | "para" | "hyna"): Promise<Funding
     rates.push({
       coin,
       fundingRate: String(marketInfo.fundingRate),
+      predictedFundingRate: marketInfo.predictedFundingRate,
       markPrice: marketInfo.markPrice || "0",
       indexPrice: marketInfo.indexPrice || "0",
       premium: marketInfo.premium || "0",
