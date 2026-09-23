@@ -1,5 +1,7 @@
-export type CombinationViewMode = "plain" | "ols";
-export type CombinationWeightMode = "none" | "custom";
+export type CombinationViewMode = "plain" | "ols" | "pair-trade";
+
+/** Y-axis unit for the pair-trade PnL line: entry-relative percent or USD. */
+export type CombinationValueUnit = "percent" | "usd";
 
 export interface CombinationWeights {
   first: number;

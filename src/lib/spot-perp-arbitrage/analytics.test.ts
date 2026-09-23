@@ -3,6 +3,7 @@ import type { ComboCandleResult } from "../combo";
 import type { MixedCombinationResult, SpotSpotCombinationResult } from "./combine";
 import {
   dashboardAnalytics, distributionAnalytics, filterAlignedRange, filterLegacyComboRange, pairDashboardAnalytics,
+  postEntryPairFundingAnalytics,
   relativeGapPercent, visibleDashboardAnalytics, visiblePairDashboardAnalytics, type TailTrimPercent,
 } from "./analytics";
 import { asPerpMarket, asSpotMarket } from "./model";
@@ -614,5 +615,61 @@ describe("two-leg dashboard analytics", () => {
     expect(dashboard.currentDerivedClose.value).toBeNull();
     expect(dashboard.leg1Turnover).toEqual({ mean: 20, count: 3 });
     expect(dashboard.leg2Turnover).toEqual({ mean: 40, count: 1 });
+  });
+});
+
+describe("post-entry pair funding analytics", () => {
+  const yearMs = 365 * 24 * 60 * 60 * 1000;
+  const perpCombo = (fundingRates: ComboCandleResult["fundingRates"]): ComboCandleResult => ({
+    candles: [0, 10, 20].map((time) => ({
+      openTime: time, closeTime: time + 10, open: "1", high: "1", low: "1", close: "1", volume: "1",
+    })),
+    fundingRates,
+    interval: "1h", exchange: "Binance", symbol: "BTC-ETH", mode: "spread",
+    firstSymbol: "BTC", firstExchange: "Binance", secondSymbol: "ETH", secondExchange: "OKX",
+    legProvenance: [] as never,
+  });
+
+  test("perp pair annualizes both actual legs over shared coverage without requiring same-bucket settlement", () => {
+    const combo = perpCombo([
+      { time: 10, rate: 0.5, annualizedRate: 1, firstFunding: { rate: 0.5, annualizedRate: 1 }, secondFunding: null },
+      { time: 15, rate: 0, annualizedRate: 0, firstFunding: null, secondFunding: { rate: 0.003, annualizedRate: 1 } },
+      { time: 20, rate: 0, annualizedRate: 0, firstFunding: { rate: 0.02, annualizedRate: 1, sampleCount: 2 }, secondFunding: null },
+      { time: 25, rate: 0, annualizedRate: 0, firstFunding: null, secondFunding: { rate: 0.004, annualizedRate: 1 } },
+      { time: 30, rate: 0.9, annualizedRate: 1, firstFunding: { rate: 0.9, annualizedRate: 1 }, secondFunding: { rate: 0.1, annualizedRate: 1 } },
+    ]);
+    const result = postEntryPairFundingAnalytics(combo, 10, { first: 1, second: 2 });
+    expect(result).toMatchObject({
+      available: true, reason: null, count: 4, coverageStartTime: 15,
+      windowStartTime: 10, windowEndTime: 30,
+    });
+    expect(result.mean).toBeCloseTo((0.02 - 2 * (0.003 + 0.004)) * yearMs / 15);
+  });
+
+  test("mixed pair signs funding by perp leg and excludes the entry candle bucket", () => {
+    const mixed = result([0, 10, 20]);
+    mixed.leg1 = spot;
+    mixed.leg2 = perp;
+    mixed.funding = [
+      { time: 0, rate: -0.8, annualizedRate: -1, sampleCount: 1, perpLeg: 2 },
+      { time: 10, rate: -0.02, annualizedRate: -1, sampleCount: 2, perpLeg: 2 },
+      { time: 20, rate: -0.01, annualizedRate: -1, sampleCount: 1, perpLeg: 2 },
+      { time: 30, rate: -0.9, annualizedRate: -1, sampleCount: 1, perpLeg: 2 },
+    ];
+    const analytics = postEntryPairFundingAnalytics(mixed, 10, { first: 3, second: 2 });
+    expect(analytics).toMatchObject({ available: true, count: 3, coverageStartTime: 10, windowStartTime: 10, windowEndTime: 30 });
+    expect(analytics.mean).toBeCloseTo(-(0.02 + 0.01) * 2 * yearMs / 20);
+  });
+
+  test("returns unavailable for spot-spot, missing funding, invalid weights, or no post-entry candle", () => {
+    const spotPair: SpotSpotCombinationResult = {
+      kind: "spot-containing", composition: "spot-spot", mode: "ratio", interval: "1h", leg1: spot, leg2: secondSpot,
+      points: [{ openTime: 0, closeTime: 10, open: 1, close: 1, leg1Turnover: null, leg2Turnover: null, minimumTurnover: null }],
+      funding: [], legProvenance: [] as never,
+    };
+    expect(postEntryPairFundingAnalytics(spotPair, 0)).toMatchObject({ available: false, reason: "spot-spot-no-funding", mean: null, count: 0 });
+    expect(postEntryPairFundingAnalytics(perpCombo([]), 0)).toMatchObject({ available: false, reason: "missing-real-funding", mean: null, count: 0 });
+    expect(postEntryPairFundingAnalytics(perpCombo([]), 30)).toMatchObject({ available: false, reason: "no-post-entry-window", windowStartTime: 30, windowEndTime: 30 });
+    expect(postEntryPairFundingAnalytics(perpCombo([]), 0, { first: 1, second: Number.NaN }).reason).toBe("invalid-weights");
   });
 });

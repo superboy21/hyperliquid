@@ -70,15 +70,19 @@ import {
   type StrategyRecommendation,
   analyzePair,
   alignedPairCloses,
+  pairEntryFundingCloseTime,
   timedClosesFromPairLeg,
   timedClosesFromLoadedLeg,
+  calculatePairTradeSeries,
   type PairAnalysis,
-  type PairModelSpec,
+  type PairTradeSeries,
   type TimedClose,
 } from "@/lib/spot-perp-arbitrage";
 import { filterInChartTimeSelection, filterTimedInChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
+import { selectPairFitWindow, type PairFitWindowMode, type PairFitWindowSpec } from "@/lib/spot-perp-arbitrage/pair-fit-window";
+import { analyzePairViewport } from "@/lib/spot-perp-arbitrage/pair-statistics";
 import { createChartRequestWindow } from "@/lib/chart-request-window";
-import { CHART_TIME_ZONES, type ChartTimeZone } from "@/lib/chart-timezone";
+import { CHART_TIME_ZONES, formatChartDateTime, type ChartTimeZone } from "@/lib/chart-timezone";
 import SearchCandlesChart from "@/components/search/SearchCandlesChart";
 import ComboSearchCandlesChart from "@/components/search/ComboSearchCandlesChart";
 import SpotSearchCandlesChart from "@/components/spot-perp-arbitrage/SpotSearchCandlesChart";
@@ -87,7 +91,7 @@ import StrategyRecommendations from "./StrategyRecommendations";
 import SpotContainingCombinationChart from "./SpotContainingCombinationChart";
 import MixedAnalyticsDashboard from "./MixedAnalyticsDashboard";
 import SingleMarketAnalyticsDashboard from "./SingleMarketAnalyticsDashboard";
-import { CombinationWeightControls, useCombinationWeighting } from "./CombinationWeightControls";
+import { CombinationWeightControls, DEFAULT_PAIR_FIT_WINDOW_SPEC, fitWindowPreset, fitWindowSetEnd, fitWindowSetStart, fitWindowUnavailableCopy, resolvePairModelSpec, resolvePairTradeEntryTime, selectedEntryTime, useCombinationWeighting, type PairTradeEntryChoice } from "./CombinationWeightControls";
 
 type UniverseState = "loading" | "ready" | "error";
 type SpreadMode = "top" | "impact";
@@ -345,6 +349,7 @@ export default function SpotPerpArbitrageController() {
   const [chartError, setChartError] = useState<string | null>(null);
   const [chartRetry, setChartRetry] = useState(0);
   const [exactTimeSelection, setExactTimeSelection] = useState<ChartTimeSelection | null>(null);
+  const [pairViewportState, setPairViewportState] = useState<{ snapshotKey: string; selection: ChartTimeSelection | null }>({ snapshotKey: "", selection: null });
   const chartAbortRef = useRef<AbortController | null>(null);
   const btcAbortRef = useRef<AbortController | null>(null);
   const chartGenerationRef = useRef(0);
@@ -853,40 +858,142 @@ export default function SpotPerpArbitrageController() {
     }
     return null;
   }, [activeChartRange, visiblePerpCombo, visibleSpotCombo]);
+  const entrySnapshotKey = comboWeightSnapshotKey ?? "";
+  const pairViewport = pairViewportState.snapshotKey === entrySnapshotKey ? pairViewportState.selection : null;
+  const viewportPerpCombo = useMemo(() => {
+    if (!visiblePerpCombo || !pairViewport) return visiblePerpCombo;
+    return {
+      ...visiblePerpCombo,
+      candles: filterInChartTimeSelection(visiblePerpCombo.candles, pairViewport),
+      ...(visiblePerpCombo.leg1Points ? { leg1Points: filterInChartTimeSelection(visiblePerpCombo.leg1Points, pairViewport) } : {}),
+      ...(visiblePerpCombo.leg2Points ? { leg2Points: filterInChartTimeSelection(visiblePerpCombo.leg2Points, pairViewport) } : {}),
+      fundingRates: filterTimedInChartTimeSelection(visiblePerpCombo.fundingRates, pairViewport),
+      ...(visiblePerpCombo.firstQuoteTurnover ? { firstQuoteTurnover: filterTimedInChartTimeSelection(visiblePerpCombo.firstQuoteTurnover, pairViewport) } : {}),
+      ...(visiblePerpCombo.secondQuoteTurnover ? { secondQuoteTurnover: filterTimedInChartTimeSelection(visiblePerpCombo.secondQuoteTurnover, pairViewport) } : {}),
+      ...(visiblePerpCombo.dashboardFundingRates ? { dashboardFundingRates: filterTimedInChartTimeSelection(visiblePerpCombo.dashboardFundingRates, pairViewport) } : {}),
+    };
+  }, [pairViewport, visiblePerpCombo]);
+  const viewportSpotCombo = useMemo(() => {
+    if (!visibleSpotCombo || !pairViewport) return visibleSpotCombo;
+    return { ...visibleSpotCombo, points: filterInChartTimeSelection(visibleSpotCombo.points, pairViewport), funding: filterTimedInChartTimeSelection(visibleSpotCombo.funding, pairViewport) };
+  }, [pairViewport, visibleSpotCombo]);
+  const onPairViewportChange = useCallback((next: ChartTimeSelection | null) => {
+    const snapshotKey = entrySnapshotKey;
+    if (!snapshotKey) return;
+    setPairViewportState((previous) => {
+      if (previous.snapshotKey === snapshotKey
+        && previous.selection?.startTime === next?.startTime
+        && previous.selection?.endTime === next?.endTime) return previous;
+      return { snapshotKey, selection: next ? { startTime: next.startTime, endTime: next.endTime } : null };
+    });
+  }, [entrySnapshotKey]);
+  const [customEntry, setCustomEntry] = useState<PairTradeEntryChoice | null>(null);
+  // Treat a previous chart's entry as absent immediately when preset, interval,
+  // or market identity changes; the effect then clears the stored choice too.
+  const customEntryTime = resolvePairTradeEntryTime(customEntry, entrySnapshotKey, null);
+  useEffect(() => {
+    setCustomEntry(null);
+  }, [entrySnapshotKey]);
 
-  // Single source of truth for the combination view and A:B weighting. The
-  // snapshot key resets it to plain/1:1 whenever the chart payload changes.
-  const weighting = useCombinationWeighting(comboWeightSnapshotKey ?? undefined);
+  // The view follows the selected pair, not a candle request: changing the
+  // preset or interval resets β/entry/fit data without changing OLS/pair-trade.
+  const comboViewResetKey = effectiveChartPlan?.kind === "combo"
+    ? [effectiveChartPlan.source, effectiveChartPlan.mode, String(marketId(effectiveChartPlan.leg1)), String(marketId(effectiveChartPlan.leg2))].join("|")
+    : null;
+  const weighting = useCombinationWeighting(comboWeightSnapshotKey ?? undefined, comboViewResetKey);
+  const dashboardPerpCombo = weighting.view === "pair-trade" ? viewportPerpCombo : exactPerpCombo;
+  const dashboardSpotCombo = weighting.view === "pair-trade" ? viewportSpotCombo : exactSpotCombo;
 
-  // Memoized so the pair analysis (and the ECharts it feeds) is not rebuilt
-  // on every render; the OLS spec is a stable module constant.
-  const pairModelSpec: PairModelSpec = useMemo(
-    () => weighting.mode === "custom"
-      ? { mode: "custom", first: weighting.weights.first, second: weighting.weights.second }
-      : { mode: "ols" },
-    [weighting.mode, weighting.weights],
-  );
+  const [fitWindowState, setFitWindowState] = useState<{ snapshotKey: string; spec: PairFitWindowSpec }>({ snapshotKey: "", spec: DEFAULT_PAIR_FIT_WINDOW_SPEC });
+  const fitWindowSpec = fitWindowState.snapshotKey === entrySnapshotKey ? fitWindowState.spec : DEFAULT_PAIR_FIT_WINDOW_SPEC;
+  useEffect(() => {
+    setFitWindowState({ snapshotKey: entrySnapshotKey, spec: DEFAULT_PAIR_FIT_WINDOW_SPEC });
+  }, [entrySnapshotKey]);
+
+  // The ordinary OLS view remains a full visible-preset fit. Pair-trade beta
+  // and diagnostics are computed separately from only the selected fit window.
   const pairInput = useMemo(() => visiblePerpCombo ? alignedPairCloses(visiblePerpCombo) : visibleSpotCombo ? alignedPairCloses(visibleSpotCombo) : [], [visiblePerpCombo, visibleSpotCombo]);
+  const firstFitTime = pairInput[0]?.closeTime ?? null;
+  const lastFitTime = pairInput[pairInput.length - 1]?.closeTime ?? null;
+  const currentFitWindow = useMemo(() => selectPairFitWindow(pairInput, fitWindowSpec), [fitWindowSpec, pairInput]);
+  const pairFitValue = currentFitWindow.available ? currentFitWindow.value : null;
+  const fitAnalysis = useMemo<PairAnalysis | null>(() => {
+    if (!visiblePerpCombo && !visibleSpotCombo) return null;
+    if (!pairFitValue || pairFitValue.points.length < 20) return null;
+    return analyzePair(pairFitValue.points, resolvePairModelSpec("pair-trade", weighting.customBeta), { intervalMs: getSearchIntervalMs(chartInterval), btcCloses, btcSource });
+  }, [btcCloses, btcSource, chartInterval, pairFitValue, visiblePerpCombo, visibleSpotCombo, weighting.customBeta]);
   const pairAnalysis = useMemo<PairAnalysis | null>(() => {
     if (!visiblePerpCombo && !visibleSpotCombo) return null;
-    return analyzePair(pairInput, pairModelSpec, { intervalMs: getSearchIntervalMs(chartInterval), btcCloses, btcSource });
-  }, [btcCloses, btcSource, chartInterval, pairInput, pairModelSpec, visiblePerpCombo, visibleSpotCombo]);
+    return analyzePair(pairInput, { mode: "ols" }, { intervalMs: getSearchIntervalMs(chartInterval), btcCloses, btcSource });
+  }, [btcCloses, btcSource, chartInterval, pairInput, visiblePerpCombo, visibleSpotCombo]);
   const dashboardPairAnalysis = useMemo<PairAnalysis | null>(() => {
-    if (!pairAnalysis || !exactTimeSelection) return pairAnalysis;
-    const points = pairAnalysis.points.filter((point) => point.time >= exactTimeSelection.startTime && point.time <= exactTimeSelection.endTime);
-    return { ...pairAnalysis, points, residuals: points };
-  }, [exactTimeSelection, pairAnalysis]);
-  // Plain view keeps the raw A:B weights (1:1 when inactive); the OLS view uses
-  // the normalized 1:beta form so funding/market lanes follow the hedge ratio.
-  const dashboardWeights: CombinationWeights = weighting.view === "plain"
-    ? weighting.mode === "custom"
-      ? weighting.weights
-      : { first: 1, second: 1 }
-    : weighting.mode === "custom"
-      ? { first: 1, second: weighting.weights.second / weighting.weights.first }
-      : pairAnalysis?.model.value
-        ? { first: 1, second: pairAnalysis.model.value.beta }
-        : { first: 1, second: 1 };
+    if (weighting.view === "pair-trade") {
+      if (!fitAnalysis) return null;
+      return analyzePairViewport(pairInput, fitAnalysis, pairViewport, { intervalMs: getSearchIntervalMs(chartInterval), btcCloses, btcSource });
+    }
+    const source = pairAnalysis;
+    if (!source || !exactTimeSelection) return source;
+    const points = source.points.filter((point) => point.time >= exactTimeSelection.startTime && point.time <= exactTimeSelection.endTime);
+    return { ...source, points, residuals: points };
+  }, [btcCloses, btcSource, chartInterval, exactTimeSelection, fitAnalysis, pairAnalysis, pairInput, pairViewport, weighting.view]);
+
+  const entryCandidateTime = selectedEntryTime(pairInput.map((point) => point.closeTime), exactTimeSelection);
+  const defaultEntryTime = pairAnalysis?.aligned[0]?.closeTime ?? null;
+  const appliedEntryTime = resolvePairTradeEntryTime(customEntry, entrySnapshotKey, defaultEntryTime);
+  const pairTradeEntryCloseTime = visiblePerpCombo
+    ? pairEntryFundingCloseTime(visiblePerpCombo, appliedEntryTime)
+    : visibleSpotCombo ? pairEntryFundingCloseTime(visibleSpotCombo, appliedEntryTime) : null;
+  const entryCandidateLabel = entryCandidateTime === null ? null : formatChartDateTime(entryCandidateTime, chartTimeZone);
+  const appliedEntryLabel = appliedEntryTime === null ? null : formatChartDateTime(appliedEntryTime, chartTimeZone);
+  const entryIsCustom = customEntryTime !== null;
+  const setSelectedEntry = () => {
+    if (entryCandidateTime === null || entrySnapshotKey === "") return;
+    setCustomEntry({ snapshotKey: entrySnapshotKey, time: entryCandidateTime });
+  };
+  const setFitPreset = (mode: PairFitWindowMode) => setFitWindowState({ snapshotKey: entrySnapshotKey, spec: fitWindowPreset(mode, firstFitTime, lastFitTime, fitWindowSpec) });
+  const setFitStart = () => {
+    if (entryCandidateTime === null) return;
+    const effectiveEnd = pairFitValue?.endTime ?? (fitWindowSpec.endTime ?? lastFitTime);
+    setFitWindowState({ snapshotKey: entrySnapshotKey, spec: fitWindowSetStart({ ...fitWindowSpec, endTime: effectiveEnd }, entryCandidateTime) });
+  };
+  const setFitEnd = () => {
+    if (entryCandidateTime === null) return;
+    setFitWindowState({ snapshotKey: entrySnapshotKey, spec: fitWindowSetEnd(fitWindowSpec, entryCandidateTime, firstFitTime) });
+  };
+
+  // The pair-trade scenario is derived from preset-range aligned closes and the
+  // applied β. Entry is the first aligned close unless a selected candle was
+  // explicitly applied; zoom/brush alone never changes entry or refits β.
+  const customBetaValid = weighting.view === "pair-trade"
+    && weighting.customBeta !== null
+    && Number.isFinite(weighting.customBeta)
+    && weighting.customBeta > 0;
+  const pairTradeResult = useMemo(() => {
+    const modelBeta = fitAnalysis?.model.value?.beta ?? null;
+    const beta = customBetaValid ? weighting.customBeta : modelBeta;
+    if (beta === null || !Number.isFinite(beta) || beta <= 0) {
+      const reason = customBetaValid
+        ? "invalid-beta"
+        : currentFitWindow.available && (currentFitWindow.value?.points.length ?? 0) < 20 ? "insufficient-fit-points" : currentFitWindow.reason ?? fitAnalysis?.model.reason ?? "model-unavailable";
+      return { available: false as const, value: null, reason };
+    }
+    return calculatePairTradeSeries(pairInput, beta, 10000, customEntryTime ?? undefined);
+  }, [customBetaValid, customEntryTime, fitAnalysis, pairInput, weighting.customBeta, currentFitWindow]);
+  const pairTrade: PairTradeSeries | null = pairTradeResult.available ? pairTradeResult.value : null;
+  const pairTradeReason = pairTradeResult.available ? null : pairTradeResult.reason;
+  const pairTradeBetaSource: "custom" | "auto" = customBetaValid ? "custom" : "auto";
+
+  // Plain is always a raw 1:1 spread/ratio. The OLS and pair-trade views let the
+  // market lanes follow the applied hedge ratio. A custom β only applies while
+  // the pair-trade view is active; OLS always uses its own automatic fit, so a
+  // preserved draft β never leaks into the OLS dashboard.
+  const appliedBeta = weighting.view === "pair-trade"
+    ? weighting.customBeta ?? fitAnalysis?.model.value?.beta ?? null
+    : pairAnalysis?.model.value?.beta ?? null;
+  const pairTradeBetaValid = appliedBeta !== null && Number.isFinite(appliedBeta) && appliedBeta > 0;
+  const dashboardWeights: CombinationWeights = weighting.view === "plain" || appliedBeta === null || (weighting.view === "pair-trade" && !pairTradeBetaValid)
+    ? { first: 1, second: 1 }
+    : { first: 1, second: appliedBeta };
 
   useEffect(() => {
     btcAbortRef.current?.abort();
@@ -1225,65 +1332,98 @@ export default function SpotPerpArbitrageController() {
           )}
           {effectiveChartPlan && (
             <section className="rounded-lg border border-gray-700 bg-gray-800 p-3 sm:p-4" aria-labelledby="arbitrage-chart-title">
-              <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="mb-2 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 id="arbitrage-chart-title" className="truncate text-sm font-semibold text-white">{selectedTitle}</h2>
-                  {effectiveChartPlan.kind === "combo" && effectiveChartPlan.source === "strategy" && <p className="mt-1 text-xs text-violet-300">策略腿位用于资金与流动性汇总；主图可切换普通价差图 / OLS 回归。</p>}
-                  <p className="mt-1 text-xs text-gray-500">{chartPayload?.kind === "perp-combo" ? `${visiblePerpCombo?.candles.length ?? 0} 个共同时间点` : chartPayload?.kind === "spot-combo" ? `${visibleSpotCombo?.points.length ?? 0} 个共同时间点` : "单市场原始图表"}</p>
-                  <p className="mt-1 text-xs text-cyan-300/80">图表时间：{chartTimeZone} · 拖动选择精确区间；方向键移动，Shift + 方向键扩展。</p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] leading-4 text-gray-500">
+                    <span>{chartPayload?.kind === "perp-combo" ? `${visiblePerpCombo?.candles.length ?? 0} 个共同点` : chartPayload?.kind === "spot-combo" ? `${visibleSpotCombo?.points.length ?? 0} 个共同点` : "单市场原始图表"}</span>
+                    <span aria-hidden="true" className="text-gray-700">·</span>
+                    <span className="text-cyan-300/80">{chartTimeZone}</span>
+                    <span aria-hidden="true" className="text-gray-700">·</span>
+                    <span>拖动框选；方向键移动，Shift + 方向键扩展</span>
+                  </div>
+                  {effectiveChartPlan.kind === "combo" && effectiveChartPlan.source === "strategy" && <p className="mt-0.5 text-[11px] leading-4 text-violet-300">策略腿位用于资金与流动性汇总 · 主图支持普通 / OLS / 配对交易视图</p>}
                 </div>
-                <div className="flex flex-wrap items-center gap-1">
-                  {effectiveChartPlan?.kind === "combo" && (
+                <button type="button" onClick={() => { btcAbortRef.current?.abort(); setBtcCloses(undefined); setBtcSource(undefined); setExactTimeSelection(null); setStrategyChartOverride(null); setSelectedRecommendationKey(null); setSelection(EMPTY_SELECTION); }} aria-label="关闭图表" className="shrink-0 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">✕</button>
+              </div>
+              <div className={`grid min-w-0 grid-cols-1 items-start gap-2 ${effectiveChartPlan?.kind === "combo" && weighting.view !== "pair-trade" ? "xl:grid-cols-[auto_minmax(0,1fr)]" : ""}`}>
+                {effectiveChartPlan?.kind === "combo" && (
+                  <div className="min-w-0">
                     <CombinationWeightControls
                       firstLabel={`${effectiveChartPlan.leg1.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg1)}`}
                       secondLabel={`${effectiveChartPlan.leg2.source.exchange} ${marketDisplaySymbol(effectiveChartPlan.leg2)}`}
                       view={weighting.view}
-                      mode={weighting.mode}
-                      weights={weighting.weights}
-                      error={weighting.error}
-                      customOpen={weighting.customOpen}
-                      firstDraft={weighting.firstDraft}
-                      secondDraft={weighting.secondDraft}
-                      onSetView={weighting.setView}
-                      onToggleCustom={weighting.toggleCustom}
-                      onFirstDraftChange={weighting.setFirstDraft}
-                      onSecondDraftChange={weighting.setSecondDraft}
-                      onApplyCustom={weighting.applyCustom}
+                      customBeta={weighting.customBeta}
+                      effectiveBeta={appliedBeta}
+                      betaDraft={weighting.betaDraft}
+                      betaError={weighting.betaError}
+                      entryCandidateLabel={entryCandidateLabel}
+                      entryCandidateIsRange={Boolean(exactTimeSelection && exactTimeSelection.startTime !== exactTimeSelection.endTime)}
+                      appliedEntryLabel={appliedEntryLabel}
+                      entryIsCustom={entryIsCustom}
+                      fitWindow={fitWindowSpec}
+                      fitStartLabel={pairFitValue ? formatChartDateTime(pairFitValue.startTime, chartTimeZone) : fitWindowSpec.startTime ? formatChartDateTime(fitWindowSpec.startTime, chartTimeZone) : null}
+                      fitEndLabel={pairFitValue ? formatChartDateTime(pairFitValue.endTime, chartTimeZone) : fitWindowSpec.endTime ? formatChartDateTime(fitWindowSpec.endTime, chartTimeZone) : null}
+                      fitFirstLabel={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null}
+                      fitLastLabel={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null}
+                      fitPointCount={pairFitValue?.points.length ?? 0}
+                      fitUnavailableReason={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaValid)}
+                      lookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)}
+                      onSetView={(next) => {
+                        if (next === "pair-trade" && weighting.view !== "pair-trade") {
+                          setPairViewportState({ snapshotKey: entrySnapshotKey, selection: null });
+                        }
+                        weighting.setView(next);
+                      }}
+                      onBetaDraftChange={weighting.setBetaDraft}
+                      onApplyBeta={weighting.applyCustomBeta}
+                      onUseAutoBeta={weighting.useAutoBeta}
+                      onSetEntry={setSelectedEntry}
+                      onResetEntry={() => setCustomEntry(null)}
+                      onSetFitMode={setFitPreset}
+                      onSetFitStart={setFitStart}
+                      onSetFitEnd={setFitEnd}
                     />
-                  )}
+                  </div>
+                )}
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                   {(chartPayload?.kind === "single" || (chartPayload?.kind === "perp-combo" && weighting.view === "plain")) && (
-                    <div className="mr-1 inline-flex rounded bg-gray-900/70 p-0.5" aria-label="成交数据类型">
-                      <button type="button" aria-pressed={!showBaseVolume} onClick={() => setShowBaseVolume(false)} className={`rounded px-2 py-1 text-xs ${!showBaseVolume ? "bg-emerald-600 text-white" : "text-gray-500 hover:text-gray-300"}`}>成交额</button>
-                      <button type="button" aria-pressed={showBaseVolume} onClick={() => setShowBaseVolume(true)} className={`rounded px-2 py-1 text-xs ${showBaseVolume ? "bg-emerald-600 text-white" : "text-gray-500 hover:text-gray-300"}`}>成交量</button>
+                    <div className="flex shrink-0 items-center gap-1" role="group" aria-label="成交数据类型">
+                      <span className="text-[10px] leading-none text-gray-500">成交</span>
+                      <button type="button" aria-pressed={!showBaseVolume} onClick={() => setShowBaseVolume(false)} className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${!showBaseVolume ? "bg-emerald-600 text-white" : "text-gray-500 hover:text-gray-300"}`}>成交额</button>
+                      <button type="button" aria-pressed={showBaseVolume} onClick={() => setShowBaseVolume(true)} className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${showBaseVolume ? "bg-emerald-600 text-white" : "text-gray-500 hover:text-gray-300"}`}>成交量</button>
                     </div>
                   )}
-                  <div className="mr-1 flex flex-wrap gap-1">
+                  <div className="flex flex-wrap items-center gap-1" role="group" aria-label="图表显示范围">
+                    <span className="shrink-0 pr-0.5 text-[10px] leading-none text-gray-500">范围</span>
                     {rangeOptions.map((range) => (
                       <button key={range} type="button" aria-pressed={activeChartRange === range} onClick={() => { setExactTimeSelection(null); setChartRange(range); }} className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 ${activeChartRange === range ? "bg-gray-600 text-white" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>{range === "all" ? "全部" : range}</button>
                     ))}
                   </div>
-                  {(["1w", "1d", "4h", "1h", "5m", "1m"] as SearchChartInterval[]).map((interval) => (
-                    <button
-                      key={interval}
-                      type="button"
-                      aria-pressed={chartInterval === interval}
-                      onClick={() => {
-                        if (interval === chartInterval) return;
-                        chartAbortRef.current?.abort();
-                        chartGenerationRef.current += 1;
-                        setChartPayload(null);
-                        setChartLoading(true);
-                        setChartError(null);
-                        setExactTimeSelection(null);
-                        setChartInterval(interval);
-                        setChartRange((current) => normalizeChartRange(interval, current, singleSpotChart));
-                      }}
-                      className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${chartInterval === interval ? "bg-indigo-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200"}`}
-                    >
-                      {interval}
-                    </button>
-                  ))}
-                  <button type="button" onClick={() => { btcAbortRef.current?.abort(); setBtcCloses(undefined); setBtcSource(undefined); setExactTimeSelection(null); setStrategyChartOverride(null); setSelectedRecommendationKey(null); setSelection(EMPTY_SELECTION); }} aria-label="关闭图表" className="ml-1 rounded bg-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-600 hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400">✕</button>
+                  <div className="flex flex-wrap items-center gap-1" role="group" aria-label="K线周期">
+                    <span className="shrink-0 pr-0.5 text-[10px] leading-none text-gray-500">周期</span>
+                    {(["1w", "1d", "4h", "1h", "5m", "1m"] as SearchChartInterval[]).map((interval) => (
+                      <button
+                        key={interval}
+                        type="button"
+                        aria-pressed={chartInterval === interval}
+                        onClick={() => {
+                          if (interval === chartInterval) return;
+                          chartAbortRef.current?.abort();
+                          chartGenerationRef.current += 1;
+                          setChartPayload(null);
+                          setChartLoading(true);
+                          setChartError(null);
+                          setExactTimeSelection(null);
+                          setChartInterval(interval);
+                          setChartRange((current) => normalizeChartRange(interval, current, singleSpotChart));
+                        }}
+                        className={`rounded px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${chartInterval === interval ? "bg-indigo-600 text-white" : "bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200"}`}
+                      >
+                        {interval}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1296,19 +1436,19 @@ export default function SpotPerpArbitrageController() {
               ) : chartPayload?.kind === "single" && chartPayload.leg.kind === "spot" && visibleSingleSpot && visibleSingleSpot.candles.length > 0 ? (
                 <><SpotSearchCandlesChart exchange={visibleSingleSpot.exchange} symbol={visibleSingleSpot.symbol} interval={chartInterval} candles={visibleSingleSpot.candles} showBaseVolume={showBaseVolume} provenance={chartPayload.leg.original.provenance} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} timeZone={chartTimeZone} /><SingleMarketAnalyticsDashboard candles={visibleSingleSpot.candles} selection={exactTimeSelection} marketLabel={`${visibleSingleSpot.exchange} ${visibleSingleSpot.symbol} Spot`} marketKind="spot" timeZone={chartTimeZone} /></>
               ) : chartPayload?.kind === "perp-combo" && visiblePerpCombo && visiblePerpCombo.candles.length > 1 ? (
-                <ComboSearchCandlesChart data={visiblePerpCombo} pairAnalysis={pairAnalysis} interval={chartInterval} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} view={weighting.view} mode={weighting.mode} weights={weighting.weights} timeZone={chartTimeZone} />
+                <ComboSearchCandlesChart data={visiblePerpCombo} pairAnalysis={pairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} interval={chartInterval} showVolume={showBaseVolume} onToggleVolume={() => setShowBaseVolume((current) => !current)} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} onPairViewportChange={weighting.view === "pair-trade" ? onPairViewportChange : undefined} view={weighting.view} timeZone={chartTimeZone} />
               ) : chartPayload?.kind === "spot-combo" && visibleSpotCombo && visibleSpotCombo.points.length > 1 ? (
-                <SpotContainingCombinationChart result={visibleSpotCombo} pairAnalysis={pairAnalysis} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} view={weighting.view} mode={weighting.mode} weights={weighting.weights} timeZone={chartTimeZone} />
+                <SpotContainingCombinationChart result={visibleSpotCombo} pairAnalysis={pairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} timeSelection={exactTimeSelection} onTimeSelectionChange={onExactTimeSelectionChange} onPairViewportChange={weighting.view === "pair-trade" ? onPairViewportChange : undefined} view={weighting.view} timeZone={chartTimeZone} />
               ) : (
                 <div className="flex h-[520px] items-center justify-center" role="status"><div className="text-center"><p className="text-gray-400">当前区间没有足够的重叠数据</p><p className="mt-1 text-sm text-gray-600">可尝试更长历史范围或其他K线周期。</p></div></div>
               )}
             </section>
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "spot-combo" && exactSpotCombo && (
-            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={exactSpotCombo} pairAnalysis={dashboardPairAnalysis} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
+            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={dashboardSpotCombo!} pairAnalysis={dashboardPairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} pairTradeBetaSource={pairTradeBetaSource} pairTradeEntryCustom={entryIsCustom} pairTradeEntryCloseTime={pairTradeEntryCloseTime} pairViewport={weighting.view === "pair-trade" ? pairViewport : null} fitWindowMode={fitWindowSpec.mode} fitWindowStart={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null} fitWindowEnd={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null} fitWindowCount={pairFitValue?.points.length ?? 0} fitWindowUnavailable={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaValid)} pairTradeLookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "perp-combo" && exactPerpCombo && (
-            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={exactPerpCombo} pairAnalysis={dashboardPairAnalysis} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
+            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={dashboardPerpCombo!} pairAnalysis={dashboardPairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} pairTradeBetaSource={pairTradeBetaSource} pairTradeEntryCustom={entryIsCustom} pairTradeEntryCloseTime={pairTradeEntryCloseTime} pairViewport={weighting.view === "pair-trade" ? pairViewport : null} fitWindowMode={fitWindowSpec.mode} fitWindowStart={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null} fitWindowEnd={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null} fitWindowCount={pairFitValue?.points.length ?? 0} fitWindowUnavailable={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaValid)} pairTradeLookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
           )}
           {comboMode && (
             <div className="flex flex-col gap-2 rounded-lg border border-violet-500/25 bg-violet-950/15 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">

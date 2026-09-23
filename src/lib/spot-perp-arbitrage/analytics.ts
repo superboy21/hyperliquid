@@ -73,6 +73,21 @@ export interface PairDashboardAnalytics {
   leg2Turnover: AverageAnalytics;
 }
 
+/**
+ * Post-entry funding estimate, annualized as a decimal over actual shared
+ * funding coverage. This is a rate statistic, not position PnL or cash flow.
+ */
+export interface PostEntryPairFundingAnalytics {
+  available: boolean;
+  reason: string | null;
+  mean: number | null;
+  /** Sum of source sampleCount values for included real settlement observations. */
+  count: number;
+  coverageStartTime: number | null;
+  windowStartTime: number | null;
+  windowEndTime: number | null;
+}
+
 export type PairDashboardResult = ComboCandleResult | SpotSpotCombinationResult;
 
 export function relativeGapPercent(
@@ -310,6 +325,112 @@ function mixedFundingAnalytics(
       : weightedSettledReturn * ANALYTICS_YEAR_MS / fundingDurationMs,
     count,
     coverageStartTime: firstTime,
+  };
+}
+
+function unavailablePostEntryFunding(
+  reason: string,
+  windowStartTime: number | null = null,
+  windowEndTime: number | null = null,
+): PostEntryPairFundingAnalytics {
+  return {
+    available: false,
+    reason,
+    mean: null,
+    count: 0,
+    coverageStartTime: null,
+    windowStartTime,
+    windowEndTime,
+  };
+}
+
+/**
+ * Computes annualized funding after a position entry from a result that is
+ * already filtered to the visible candle range. The interval is
+ * [max(entryCloseTime, firstVisibleOpenTime), lastVisibleCloseTime), using
+ * actual settlement observations only. Returned mean is an annualized decimal
+ * statistic; it does not represent position PnL or cash flow.
+ */
+export function postEntryPairFundingAnalytics(
+  result: ComboCandleResult | SpotContainingCombinationResult,
+  entryCloseTime: number,
+  weights: CombinationWeights = ONE_TO_ONE,
+): PostEntryPairFundingAnalytics {
+  if ("kind" in result && result.composition === "spot-spot") {
+    return unavailablePostEntryFunding("spot-spot-no-funding");
+  }
+  if (!Number.isFinite(weights.first) || !Number.isFinite(weights.second) || weights.first <= 0 || weights.second <= 0) {
+    return unavailablePostEntryFunding("invalid-weights");
+  }
+
+  const candles = "candles" in result ? result.candles : result.points;
+  const visibleWindow = visibleFundingWindow(candles);
+  if (visibleWindow === null) return unavailablePostEntryFunding("no-visible-window");
+  if (!Number.isFinite(entryCloseTime)) return unavailablePostEntryFunding("invalid-entry-time");
+
+  const windowStartTime = Math.max(entryCloseTime, visibleWindow.startTime);
+  const windowEndTime = visibleWindow.endTime;
+  if (windowEndTime <= windowStartTime) {
+    return unavailablePostEntryFunding("no-post-entry-window", windowStartTime, windowEndTime);
+  }
+  const window: FundingWindow = { startTime: windowStartTime, endTime: windowEndTime };
+
+  if ("candles" in result) {
+    const points = [...result.fundingRates].sort((a, b) => a.time - b.time);
+    const first = cumulativeLegFunding(points, "firstFunding", window);
+    const second = cumulativeLegFunding(points, "secondFunding", window);
+    if (first.total === null || second.total === null || first.firstTime === null || second.firstTime === null) {
+      return unavailablePostEntryFunding("missing-real-funding", windowStartTime, windowEndTime);
+    }
+
+    const coverageStartTime = Math.max(first.firstTime, second.firstTime);
+    const coveredWindow: FundingWindow = { startTime: coverageStartTime, endTime: windowEndTime };
+    const coveredFirst = cumulativeLegFunding(points, "firstFunding", coveredWindow);
+    const coveredSecond = cumulativeLegFunding(points, "secondFunding", coveredWindow);
+    const durationMs = windowEndTime - coverageStartTime;
+    if (coveredFirst.total === null || coveredSecond.total === null || durationMs <= 0) {
+      return unavailablePostEntryFunding("missing-real-funding", windowStartTime, windowEndTime);
+    }
+    return {
+      available: true,
+      reason: null,
+      mean: (weights.first * coveredFirst.total - weights.second * coveredSecond.total) * ANALYTICS_YEAR_MS / durationMs,
+      count: coveredFirst.count + coveredSecond.count,
+      coverageStartTime,
+      windowStartTime,
+      windowEndTime,
+    };
+  }
+
+  const weighted = result.funding.filter((point) => (
+    Number.isFinite(point.time)
+    && point.time >= window.startTime
+    && point.time < window.endTime
+    && Number.isFinite(point.rate)
+    && fundingSampleCount(point.sampleCount) !== null
+    && (point.perpLeg === 1 || point.perpLeg === 2)
+  ));
+  if (weighted.length === 0) {
+    return unavailablePostEntryFunding("missing-real-funding", windowStartTime, windowEndTime);
+  }
+  const coverageStartTime = Math.min(...weighted.map((point) => point.time));
+  const durationMs = windowEndTime - coverageStartTime;
+  if (durationMs <= 0) {
+    return unavailablePostEntryFunding("missing-real-funding", windowStartTime, windowEndTime);
+  }
+  // Mixed-combination funding was already signed by perpLeg in combine.ts.
+  const total = weighted.reduce((sum, point) => (
+    sum + point.rate * (point.perpLeg === 1 ? weights.first : weights.second)
+  ), 0);
+  const count = weighted.reduce((sum, point) => sum + (fundingSampleCount(point.sampleCount) ?? 0), 0);
+  return {
+    available: true,
+    reason: null,
+    mean: total * ANALYTICS_YEAR_MS / durationMs,
+    count,
+    coverageStartTime,
+    windowStartTime,
+    windowEndTime,
   };
 }
 

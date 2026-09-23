@@ -12,10 +12,10 @@ export interface TimedClose {
   source?: string;
 }
 
-/** OLS estimates the hedge ratio; custom uses second / first as that ratio. */
+/** OLS estimates the hedge ratio; custom uses a directly supplied finite positive beta. */
 export type PairModelSpec =
   | { mode: "ols" }
-  | { mode: "custom"; first: number; second: number };
+  | { mode: "custom"; beta: number };
 
 export interface StatResult<T> {
   available: boolean;
@@ -191,10 +191,10 @@ export function estimatePairModel(
   let alpha: number;
   let rSquared: number | null;
   if (spec.mode === "custom") {
-    if (!Number.isFinite(spec.first) || !Number.isFinite(spec.second) || spec.first <= 0 || spec.second <= 0) {
-      return unavailable("invalid-custom-ratio");
+    if (!Number.isFinite(spec.beta) || spec.beta <= 0) {
+      return unavailable("invalid-custom-beta");
     }
-    beta = spec.second / spec.first;
+    beta = spec.beta;
     alpha = rows.reduce((sum, row) => sum + row.y - beta * row.x, 0) / rows.length;
     const meanY = rows.reduce((sum, row) => sum + row.y, 0) / rows.length;
     const sse = rows.reduce((sum, row) => sum + (row.y - alpha - beta * row.x) ** 2, 0);
@@ -368,6 +368,54 @@ export function analyzePair(
     rollingBeta, hedgeStability: rollingBeta,
     btcBeta: btcResidualBeta(residuals, options.btcCloses, options.intervalMs, options.btcSource),
     diagnostics: { alignedPointCount: aligned.length, intervalMs: options.intervalMs ?? null },
+  };
+}
+
+/**
+ * Projects a fixed fitted model onto a viewport. Residuals and rolling Z scores
+ * are calculated over the complete supplied preset series before viewport
+ * slicing, while viewport-local diagnostics are recalculated from only the
+ * visible samples. The model and its fitted sample count are never refit.
+ */
+export function analyzePairViewport(
+  fullAligned: readonly AlignedPairClose[],
+  fittedAnalysis: PairAnalysis,
+  viewport: { startTime: number; endTime: number } | null,
+  options: PairAnalysisOptions = {},
+): PairAnalysis | null {
+  const model = fittedAnalysis.model;
+  if (!model.available || model.value === null) return null;
+  if (viewport !== null && (
+    !Number.isFinite(viewport.startTime)
+    || !Number.isFinite(viewport.endTime)
+    || viewport.startTime > viewport.endTime
+  )) return null;
+
+  const aligned = normalizeAlignedPairCloses(fullAligned);
+  const allResiduals = residualPoints(aligned, model.value, options.intervalMs);
+  const visibleAligned = viewport === null
+    ? aligned
+    : aligned.filter((point) => point.closeTime >= viewport.startTime && point.closeTime <= viewport.endTime);
+  if (visibleAligned.length === 0) return null;
+
+  const startTime = viewport?.startTime ?? visibleAligned[0].closeTime;
+  const endTime = viewport?.endTime ?? visibleAligned[visibleAligned.length - 1].closeTime;
+  const visibleResiduals = allResiduals.filter((point) => point.closeTime >= startTime && point.closeTime <= endTime);
+  const stationarity = adf0(visibleResiduals, model.value.kind, options.intervalMs);
+  const rollingBeta = rollingBetaStability(visibleAligned, options.intervalMs);
+
+  return {
+    aligned: visibleAligned,
+    model,
+    residuals: visibleResiduals,
+    points: visibleResiduals,
+    adf: stationarity,
+    stationarity,
+    halfLife: ar1HalfLife(visibleResiduals, options.intervalMs),
+    rollingBeta,
+    hedgeStability: rollingBeta,
+    btcBeta: btcResidualBeta(visibleResiduals, options.btcCloses, options.intervalMs, options.btcSource),
+    diagnostics: { alignedPointCount: visibleAligned.length, intervalMs: options.intervalMs ?? null },
   };
 }
 

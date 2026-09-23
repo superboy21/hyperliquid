@@ -24,6 +24,46 @@ export function alignedPairCloses(result: ComboCandleResult | SpotContainingComb
   });
 }
 
+/**
+ * Returns the later raw-leg close time for an exact aligned candle open. The
+ * result is suitable as a post-entry funding boundary only when both legs
+ * have valid close times strictly after that candle's open.
+ */
+export function pairEntryFundingCloseTime(
+  result: ComboCandleResult | SpotContainingCombinationResult,
+  entryOpenTime: number | null,
+): number | null {
+  if (entryOpenTime === null || !Number.isFinite(entryOpenTime)) return null;
+
+  let firstCloseTime: number | undefined;
+  let secondCloseTime: number | undefined;
+  if ("candles" in result) {
+    const first = result.leg1Points?.find((point) => point.openTime === entryOpenTime);
+    const second = result.leg2Points?.find((point) => point.openTime === entryOpenTime);
+    if (!first || !second || first.openTime !== entryOpenTime || second.openTime !== entryOpenTime) return null;
+    firstCloseTime = first.closeTime;
+    secondCloseTime = second.closeTime;
+  } else {
+    const aligned = result.points.find((point) => point.openTime === entryOpenTime);
+    const first = aligned?.leg1Point;
+    const second = aligned?.leg2Point;
+    if (
+      !first || !second
+      || first.openTime !== entryOpenTime
+      || second.openTime !== entryOpenTime
+    ) return null;
+    firstCloseTime = first.closeTime;
+    secondCloseTime = second.closeTime;
+  }
+
+  if (
+    firstCloseTime === undefined || secondCloseTime === undefined
+    || !Number.isFinite(firstCloseTime) || !Number.isFinite(secondCloseTime)
+    || firstCloseTime <= entryOpenTime || secondCloseTime <= entryOpenTime
+  ) return null;
+  return Math.max(firstCloseTime, secondCloseTime);
+}
+
 export function timedClosesFromLoadedLeg(leg: LoadedLeg, source: string): TimedClose[] {
   return leg.series.points.map((point) => ({ closeTime: point.openTime, close: point.close, source }));
 }
