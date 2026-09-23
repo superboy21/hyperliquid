@@ -451,7 +451,8 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     const times = points.map((point) => point.time);
     const categories = points.map((point) => dateLabel(point.time, sourceResult.interval, timeZone));
     const model = statValue<{ alpha?: number; beta?: number }>(pairAnalysis.model);
-    const title = `${leg1Label} ~ ${leg2Label} · OLS`;
+    const formula = `ln(${leg1Label}) = ${finiteText(model?.alpha, 6)} + ${finiteText(model?.beta, 6)} · ln(${leg2Label})`;
+    const title = `${leg1Label} ~ ${leg2Label} · OLS · ${formula}`;
     const formatter = (params: any) => {
       const index = (Array.isArray(params) ? params[0] : params)?.dataIndex ?? 0;
       const point = points[index]; if (!point) return "";
@@ -514,7 +515,9 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     const names = ["配对交易 PnL", "原始比值（腿1/腿2）", ...(showFirstRaw ? [`原始 ${leg1Label}`] : []), ...(showSecondRaw ? [`原始 ${leg2Label}`] : [])];
     const indexes = names.map((_name, index) => index);
     const grids = names.map((_name, index) => ({ left: 62, right: 54, top: `${9 + index * (78 / names.length)}%`, height: `${68 / names.length}%` }));
-    const title = `${leg1Label} 多 / ${leg2Label} 空 · β=${pairTrade ? finiteText(pairTrade.beta, 4) : "不可用"}`;
+    let title = `${leg1Label} 多 / ${leg2Label} 空`;
+    const tradeModel = statValue<{ alpha?: number; beta?: number }>(pairAnalysis?.model);
+    if (pairTrade) title += ` · ln(${leg1Label}) = ${finiteText(tradeModel?.alpha, 6)} + ${finiteText(pairTrade.beta, 6)} · ln(${leg2Label})`;
     const pnlData = points.map((point) => pairTradeUnitValue(point, valueUnit));
     const preservedZoom = zoomRangeRef.current;
     const formatter = (params: any) => {
@@ -661,7 +664,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, leg1Label, leg2Label, sourceResult, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, leg1Label, leg2Label, sourceResult, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";

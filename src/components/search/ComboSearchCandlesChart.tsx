@@ -732,7 +732,8 @@ export default function ComboSearchCandlesChart({
     const points = pairAnalysis.points;
     const labels = points.map((point) => timeLabel(point.time, interval, timeZone));
     const details = modelDetails(pairAnalysis);
-    const title = `${data.firstSymbol} (${data.firstExchange}) ~ ${data.secondSymbol} (${data.secondExchange}) · ${details.kind}`;
+    const formula = `ln(${data.firstSymbol}) = ${numberText(details.alpha, 6)} + ${numberText(details.beta, 6)} · ln(${data.secondSymbol})`;
+    const title = `${data.firstSymbol} (${data.firstExchange}) ~ ${data.secondSymbol} (${data.secondExchange}) · ${details.kind} · ${formula}`;
     const residualData = points.map((point) => point.residual);
     const zData = points.map((point) => point.zScore);
     const times = points.map((point) => point.time);
@@ -801,7 +802,10 @@ export default function ComboSearchCandlesChart({
     const grids = paneNames.map((_name, index) => ({ left: 62, right: 54, top: `${9 + index * (78 / paneCount)}%`, height: `${68 / paneCount}%` }));
     const axes = paneNames.map((_name, index) => index);
     const unitLabel = valueUnit === "usd" ? "USDT" : "%";
-    const title = `${data.firstSymbol} (${data.firstExchange}) 多 / ${data.secondSymbol} (${data.secondExchange}) 空 · β=${pairTrade ? numberText(pairTrade.beta, 4) : "不可用"}`;
+    let title = `${data.firstSymbol} (${data.firstExchange}) 多 / ${data.secondSymbol} (${data.secondExchange}) 空`;
+    const tradeModel = modelDetails(pairAnalysis);
+    const formula = pairTrade ? `ln(${data.firstSymbol}) = ${numberText(tradeModel.alpha, 6)} + ${numberText(pairTrade.beta, 6)} · ln(${data.secondSymbol})` : null;
+    if (formula) title += ` · ${formula}`;
     const pnlData = points.map((point) => pairTradeUnitValue(point, valueUnit));
     const preservedZoom = zoomRangeRef.current;
     const tooltip = (params: any) => {
@@ -951,7 +955,7 @@ export default function ComboSearchCandlesChart({
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, data, interval, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
