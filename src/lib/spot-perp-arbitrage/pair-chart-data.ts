@@ -62,3 +62,64 @@ export function alignedPairChartSamples(
     };
   });
 }
+
+function finitePositive(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Derives one composite candle endpoint pair from the raw leg open/close at an
+ * exact open time. Only raw open and close are consulted; raw highs and lows are
+ * deliberately ignored so a missing/invalid wick never invalidates an otherwise
+ * valid derived candle. Ratio requires a strictly positive finite denominator
+ * (and positive finite numerator); spread allows any finite derived value,
+ * including zero and negative. Non-finite results collapse to a null gap.
+ */
+function deriveEndpoints(
+  first: RawLegPoint | undefined,
+  second: RawLegPoint | undefined,
+  mode: "ratio" | "spread",
+): [open: number, close: number] | null {
+  if (!first || !second) return null;
+  const { open: firstOpen, close: firstClose } = first;
+  const { open: secondOpen, close: secondClose } = second;
+  if (!finitePositive(firstOpen) || !finitePositive(firstClose)) return null;
+  if (!finitePositive(secondOpen) || !finitePositive(secondClose)) return null;
+
+  const open = mode === "ratio" ? firstOpen / secondOpen : firstOpen - secondOpen;
+  const close = mode === "ratio" ? firstClose / secondClose : firstClose - secondClose;
+  if (!Number.isFinite(open) || !Number.isFinite(close)) return null;
+  return [open, close];
+}
+
+/**
+ * Builds ECharts-order derived candles ([open, close, low, high]) for the
+ * requested open times. Each entry is computed from the raw leg open/close via
+ * the given ratio or spread mode, with the body itself acting as the wick:
+ * low is min(open, close) and high is max(open, close), so no individual leg
+ * high/low ever leaks into the composite. Missing, invalid, or non-finite
+ * endpoints become null gaps. Inputs are never mutated.
+ */
+export function alignedPairDerivedCandles(
+  result: ComboCandleResult | SpotContainingCombinationResult,
+  alignedTimes: readonly number[],
+  mode: "ratio" | "spread",
+): ([number, number, number, number] | null)[] {
+  let firstByTime: Map<number, RawLegPoint>;
+  let secondByTime: Map<number, RawLegPoint>;
+
+  if ("candles" in result) {
+    firstByTime = new Map((result.leg1Points ?? []).map((point) => [point.openTime, point]));
+    secondByTime = new Map((result.leg2Points ?? []).map((point) => [point.openTime, point]));
+  } else {
+    firstByTime = new Map(result.points.flatMap((point) => point.leg1Point ? [[point.openTime, point.leg1Point] as const] : []));
+    secondByTime = new Map(result.points.flatMap((point) => point.leg2Point ? [[point.openTime, point.leg2Point] as const] : []));
+  }
+
+  return alignedTimes.map((time) => {
+    const endpoints = deriveEndpoints(firstByTime.get(time), secondByTime.get(time), mode);
+    if (!endpoints) return null;
+    const [open, close] = endpoints;
+    return [open, close, Math.min(open, close), Math.max(open, close)];
+  });
+}

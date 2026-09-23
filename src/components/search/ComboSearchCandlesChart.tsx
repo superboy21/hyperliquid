@@ -14,7 +14,7 @@ import { type CombinationValueUnit, type CombinationViewMode } from "@/lib/combo
 import { chartIntlTimeZone, chartWeekday, chartYear, type ChartTimeZone } from "@/lib/chart-timezone";
 import type { PairAnalysis } from "@/lib/spot-perp-arbitrage/pair-statistics";
 import type { PairTradeSeries } from "@/lib/spot-perp-arbitrage/pair-trade";
-import { alignedPairChartSamples } from "@/lib/spot-perp-arbitrage/pair-chart-data";
+import { alignedPairChartSamples, alignedPairDerivedCandles } from "@/lib/spot-perp-arbitrage/pair-chart-data";
 import { alignedPairCloses } from "@/lib/spot-perp-arbitrage/pair-adapter";
 import { formatRawPriceAxis, pairTradeUnavailableReason, selectionFromPlotPixelX } from "@/components/spot-perp-arbitrage/CombinationWeightControls";
 
@@ -247,6 +247,7 @@ export default function ComboSearchCandlesChart({
   const [valueUnit, setValueUnit] = useState<CombinationValueUnit>("percent");
   const [showFirstRaw, setShowFirstRaw] = useState(false);
   const [showSecondRaw, setShowSecondRaw] = useState(false);
+  const [comparisonMode, setComparisonMode] = useState<"ratio" | "spread">("ratio");
   const chartRef = useRef<HTMLDivElement | null>(null);
   const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
   const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
@@ -260,10 +261,11 @@ export default function ComboSearchCandlesChart({
   useEffect(() => { pairViewportChangeRef.current = onPairViewportChange; }, [onPairViewportChange]);
   useEffect(() => {
     // Chart identity changed: drop the preserved viewport and reset the
-    // pair-trade axis unit to its default.
+    // pair-trade axis unit and comparison mode to their defaults.
     zoomRangeRef.current = null;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setValueUnit("percent");
+    setComparisonMode("ratio");
   }, [data]);
   useEffect(() => {
     // Plain, OLS, and pair-trade have independent viewport state at the
@@ -796,8 +798,12 @@ export default function ComboSearchCandlesChart({
     const rawSamples = alignedPairChartSamples(data, times);
     const rawFirstData = rawSamples.map((sample) => sample.firstOhlc);
     const rawSecondData = rawSamples.map((sample) => sample.secondOhlc);
-    const ratioData = rawSamples.map((sample) => sample.ratio);
-    const paneNames = ["配对交易 PnL", "原始比值（腿1/腿2）", ...(showFirstRaw ? [`原始 ${data.firstSymbol}`] : []), ...(showSecondRaw ? [`原始 ${data.secondSymbol}`] : [])];
+    // Endpoint-only composite candles: open/close derived from the two raw leg
+    // endpoints, with low/high collapsed onto the body. The derived pane never
+    // draws a wick that the raw legs do not actually support.
+    const derivedCandles = alignedPairDerivedCandles(data, times, comparisonMode);
+    const derivedPaneName = comparisonMode === "ratio" ? "原始比值（腿1/腿2）" : "原始价差（腿1−腿2）";
+    const paneNames = ["配对交易 PnL", derivedPaneName, ...(showFirstRaw ? [`原始 ${data.firstSymbol}`] : []), ...(showSecondRaw ? [`原始 ${data.secondSymbol}`] : [])];
     const paneCount = paneNames.length;
     const grids = paneNames.map((_name, index) => ({ left: 62, right: 54, top: `${9 + index * (78 / paneCount)}%`, height: `${68 / paneCount}%` }));
     const axes = paneNames.map((_name, index) => index);
@@ -813,7 +819,16 @@ export default function ComboSearchCandlesChart({
       const point = points[index];
       if (!point) return "";
       const sample = rawSamples[index];
-      const lines = [`<strong>${title}</strong>`, `${timeLabel(point.time, interval, timeZone)} · ${timeZone}`, `原始腿比值（腿1/腿2）：${sample?.ratio === null || sample?.ratio === undefined ? "无数据" : sample.ratio.toPrecision(7)}`];
+      const derived = derivedCandles[index];
+      const derivedLine = derived
+        ? `${derivedPaneName}（端点）：开 ${formatRawPriceAxis(derived[0])} · 收 ${formatRawPriceAxis(derived[1])}`
+        : `${derivedPaneName}：无数据`;
+      const lines = [`<strong>${title}</strong>`, `${timeLabel(point.time, interval, timeZone)} · ${timeZone}`, derivedLine];
+      // The raw close ratio only adds information in spread mode; in ratio mode
+      // it would just repeat the derived close, so keep one authoritative mode.
+      if (comparisonMode === "spread") {
+        lines.push(`原始收盘价比值（腿1/腿2）：${sample?.ratio === null || sample?.ratio === undefined ? "无数据" : sample.ratio.toPrecision(7)}`);
+      }
       for (const [label, ohlc] of [[data.firstSymbol, sample?.firstOhlc], [data.secondSymbol, sample?.secondOhlc]] as const) {
         if (ohlc) lines.push(`${label} 原始 OHLC：${ohlc.map((value) => numberText(value, 6)).join(" / ")}`);
         else lines.push(`${label} 原始 OHLC：无数据`);
@@ -874,7 +889,7 @@ export default function ComboSearchCandlesChart({
           data: pairTrade ? [{ coord: [pairTrade.entryIndex, 0] }] : [],
         },
       },
-      { type: "line", name: paneNames[1], xAxisIndex: 1, yAxisIndex: 1, data: ratioData, showSymbol: false, connectNulls: false, lineStyle: { color: "#22d3ee", width: 1.5 } },
+      { type: "candlestick", name: paneNames[1], xAxisIndex: 1, yAxisIndex: 1, data: derivedCandles, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } },
       ...(showFirstRaw ? [{ type: "candlestick", name: `原始 ${data.firstSymbol}`, xAxisIndex: showSecondRaw ? 2 : 2, yAxisIndex: 2, data: rawFirstData, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } }] : []),
       ...(showSecondRaw ? [{ type: "candlestick", name: `原始 ${data.secondSymbol}`, xAxisIndex: showFirstRaw ? 3 : 2, yAxisIndex: showFirstRaw ? 3 : 2, data: rawSecondData, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } }] : []),
       ],
@@ -955,7 +970,7 @@ export default function ComboSearchCandlesChart({
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
@@ -997,13 +1012,14 @@ export default function ComboSearchCandlesChart({
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
       } } : {})} className={`w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 ${isPairTrade && (showFirstRaw || showSecondRaw) ? "h-[700px]" : "h-[520px]"}`} /> : <div className="flex h-[260px] items-center justify-center rounded border border-dashed border-gray-700 bg-gray-900/35 px-6 text-center text-sm text-gray-400" role="status" aria-live="polite">{isPlain ? "没有可绘制的组合蜡烛数据。" : isPairTrade ? pairTradeNotice : analysisNotice}</div>}
       <ChartSourceCaption legProvenance={data.legProvenance} />
-      <p id="combo-chart-instructions" className="sr-only">{isPlain ? `拖动选择精确 ${timeZone} 区间，点击 K 线选择时间；左右方向键移动，Shift 加方向键扩展区间。` : isPairTrade ? "在任一面板拖动即可缩放到所选时间范围；缩放滑块和内部缩放会刷新可见范围诊断。点击或用方向键只选择候选 K 线，不改变视图范围、入场或拟合。点击设为入场点后才会改变入场。入场前 PnL 留空。" : "拖动选择精确区间，点击数据点选择时间；左右方向键移动，Shift 加方向键扩展区间。"}</p>
+      <p id="combo-chart-instructions" className="sr-only">{isPlain ? `拖动选择精确 ${timeZone} 区间，点击 K 线选择时间；左右方向键移动，Shift 加方向键扩展区间。` : isPairTrade ? "在任一面板拖动即可缩放到所选时间范围；缩放滑块和内部缩放会刷新可见范围诊断。点击或用方向键只选择候选 K 线，不改变视图范围、入场或拟合。点击设为入场点后才会改变入场。入场前 PnL 留空。第二个面板为端点 K 线，可在腿1原始K线开关左侧的按钮切换比值与价差，均取两条腿的原始开收盘、不含影线。" : "拖动选择精确区间，点击数据点选择时间；左右方向键移动，Shift 加方向键扩展区间。"}</p>
       {isPairTrade && chartVisible && (
         <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="配对交易图表控制">
           <span className="text-xs text-gray-500">纵轴</span>
           <button type="button" aria-pressed={valueUnit === "percent"} onClick={() => setValueUnit("percent")} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${valueUnit === "percent" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>%（相对 $10,000）</button>
           <button type="button" aria-pressed={valueUnit === "usd"} onClick={() => setValueUnit("usd")} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${valueUnit === "usd" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>USDT</button>
           <span className="text-[11px] text-gray-500">USDT 显示绝对盈亏，不换算为百分比。</span>
+          <button type="button" aria-pressed={comparisonMode === "ratio"} aria-label={comparisonMode === "ratio" ? "当前为比值 K 线子图，点击切换为价差 K 线子图" : "当前为价差 K 线子图，点击切换为比值 K 线子图"} onClick={() => setComparisonMode((current) => (current === "ratio" ? "spread" : "ratio"))} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${comparisonMode === "ratio" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>{comparisonMode === "ratio" ? "子图：比值K线" : "子图：价差K线"}</button>
           <label className="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" checked={showFirstRaw} onChange={(event) => setShowFirstRaw(event.target.checked)} />腿1原始K线</label>
           <label className="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" checked={showSecondRaw} onChange={(event) => setShowSecondRaw(event.target.checked)} />腿2原始K线</label>
         </div>
@@ -1026,6 +1042,7 @@ export default function ComboSearchCandlesChart({
           <p className="font-medium text-gray-400">配对交易情景视图</p>
           <p>{hasPairTrade && pairTrade ? `做多 腿1 $${pairTrade.firstNotionalUsd.toLocaleString("en-US")}、做空 腿2 β×$${pairTrade.firstNotionalUsd.toLocaleString("en-US")}（= $${pairTrade.secondNotionalUsd.toLocaleString("en-US")}，β=${numberText(pairTrade.beta, 4)}），入场前点位留空，入场 K 线的收盘价作为基准，曲线入场点为 0。` : pairTradeNotice}</p>
           <p>情景展示区间与入场来自当前预设范围；自动 β 使用上方单独选定的拟合窗口，自定义 β 直接用于情景。拟合结束晚于入场时包含前视信息，不是回测；PnL 不含资金费率、手续费与滑点。</p>
+          <p>第二面板为端点 K 线：开盘/收盘由两条腿的原始开收盘直接推导（默认比值＝腿1开收/腿2开收，可切换为价差＝腿1开收−腿2开收），不取腿1或腿2的高低价，因此没有影线，实体即全部；任一条腿缺失或无效时该点留空。切换只改变此面板的绘制方式，不影响 PnL、入场与 β。</p>
           <p>此图中的精确区间只高亮曲线片段，不会改变入场或 β；下方当前残差/Z 与费率、流动性摘要会按精确区间筛选。</p>
         </div>
       ) : (

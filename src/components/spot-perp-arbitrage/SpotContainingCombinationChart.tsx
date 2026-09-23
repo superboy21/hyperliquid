@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 import {
   marketDisplaySymbol,
+  type CombinationMode,
   type SpotContainingCombinationResult,
 } from "@/lib/spot-perp-arbitrage";
 import ChartSourceCaption from "@/components/ChartSourceCaption";
@@ -12,7 +13,7 @@ import { type CombinationValueUnit, type CombinationViewMode } from "@/lib/combo
 import { chartIntlTimeZone, type ChartTimeZone } from "@/lib/chart-timezone";
 import type { PairAnalysis } from "@/lib/spot-perp-arbitrage/pair-statistics";
 import type { PairTradeSeries } from "@/lib/spot-perp-arbitrage/pair-trade";
-import { alignedPairChartSamples } from "@/lib/spot-perp-arbitrage/pair-chart-data";
+import { alignedPairChartSamples, alignedPairDerivedCandles } from "@/lib/spot-perp-arbitrage/pair-chart-data";
 import { alignedPairCloses } from "@/lib/spot-perp-arbitrage/pair-adapter";
 import { formatRawPriceAxis, pairTradeUnavailableReason, selectionFromPlotPixelX } from "./CombinationWeightControls";
 
@@ -162,6 +163,9 @@ function signedPercentValue(value: number): string {
 
 export default function SpotContainingCombinationChart({ result: sourceResult, pairAnalysis, pairTrade = null, pairTradeReason = null, timeSelection = null, onTimeSelectionChange, onPairViewportChange, view, timeZone }: Props) {
   const [valueUnit, setValueUnit] = useState<CombinationValueUnit>("percent");
+  // Default subplot is the endpoint-only raw ratio; toggling switches the
+  // derived candlestick to the raw spread. Independent from valueUnit.
+  const [comparisonMode, setComparisonMode] = useState<CombinationMode>("ratio");
   const [showFirstRaw, setShowFirstRaw] = useState(false);
   const [showSecondRaw, setShowSecondRaw] = useState(false);
   const result = sourceResult;
@@ -178,10 +182,12 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
   useEffect(() => { pairViewportChangeRef.current = onPairViewportChange; }, [onPairViewportChange]);
   useEffect(() => {
     // Chart identity changed: drop the preserved viewport and reset the
-    // pair-trade axis unit to its default.
+    // pair-trade axis unit to its default. The derived subplot returns to the
+    // raw ratio default too, while valueUnit keeps its own independent state.
     zoomRangeRef.current = null;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setValueUnit("percent");
+    setComparisonMode("ratio");
   }, [sourceResult]);
   useEffect(() => {
     // Plain, OLS, and pair-trade have independent viewport state at the
@@ -511,8 +517,12 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     const rawSamples = alignedPairChartSamples(sourceResult, times);
     const firstBars = rawSamples.map((sample) => sample.firstOhlc);
     const secondBars = rawSamples.map((sample) => sample.secondOhlc);
-    const ratios = rawSamples.map((sample) => sample.ratio);
-    const names = ["配对交易 PnL", "原始比值（腿1/腿2）", ...(showFirstRaw ? [`原始 ${leg1Label}`] : []), ...(showSecondRaw ? [`原始 ${leg2Label}`] : [])];
+    // Endpoint-only candles built from the raw leg endpoints (never β, never
+    // the composite spread/ratio point). Each candle keeps the panel count: the
+    // ratio/spread choice only swaps this one subplot's data and labelling.
+    const derivedCandles = alignedPairDerivedCandles(sourceResult, times, comparisonMode);
+    const derivedLabel = comparisonMode === "ratio" ? "原始比值（腿1/腿2）·端点" : "原始价差（腿1−腿2）·端点";
+    const names = ["配对交易 PnL", derivedLabel, ...(showFirstRaw ? [`原始 ${leg1Label}`] : []), ...(showSecondRaw ? [`原始 ${leg2Label}`] : [])];
     const indexes = names.map((_name, index) => index);
     const grids = names.map((_name, index) => ({ left: 62, right: 54, top: `${9 + index * (78 / names.length)}%`, height: `${68 / names.length}%` }));
     let title = `${leg1Label} 多 / ${leg2Label} 空`;
@@ -525,7 +535,22 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
       const point = points[index];
       if (!point) return "";
       const sample = rawSamples[index];
-      const lines = [`<strong>${escapeHtml(title)}</strong>`, `${dateLabel(point.time, sourceResult.interval, timeZone)} · ${timeZone}`, `原始腿比值（腿1/腿2）：${sample?.ratio == null ? "无数据" : sample.ratio.toPrecision(7)}`];
+      const derived = derivedCandles[index];
+      const derivedLines = derived
+        // Endpoint-only candles carry open/close only: no high/low is drawn or
+        // reported, so the tooltip never implies a wick.
+        ? [`${derivedLabel} 开盘：${derivedValue(derived[0], comparisonMode)}`, `${derivedLabel} 收盘：${derivedValue(derived[1], comparisonMode)}`, `${comparisonMode === "ratio" ? "比值" : "价差"}涨跌幅：${formatChangePercent(derived[0], derived[1])}`]
+        : [`${derivedLabel}：无数据（原始开收盘缺失或无效）`];
+      const lines = [
+        `<strong>${escapeHtml(title)}</strong>`,
+        `${dateLabel(point.time, sourceResult.interval, timeZone)} · ${timeZone}`,
+        ...derivedLines,
+      ];
+      // The derived close already is the raw close ratio in ratio mode, so the
+      // raw line would only repeat it; keep it (clearly labelled) for spread.
+      if (comparisonMode === "spread") {
+        lines.push(`原始收盘价比值（腿1/腿2）：${sample?.ratio == null ? "无数据" : sample.ratio.toPrecision(7)}`);
+      }
       for (const [label, ohlc] of [[leg1Label, sample?.firstOhlc], [leg2Label, sample?.secondOhlc]] as const) lines.push(ohlc ? `${escapeHtml(label)} 原始 OHLC：${ohlc.map((value) => finiteText(value, 6)).join(" / ")}` : `${escapeHtml(label)} 原始 OHLC：无数据`);
       if (!pairTrade) { lines.push(pairTradeUnavailableReason(pairTradeReason)); return lines.join("<br/>"); }
       if (point.pnlUsd === null || point.returnPercent === null) {
@@ -583,7 +608,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
           data: pairTrade ? [{ coord: [pairTrade.entryIndex, 0] }] : [],
         },
       },
-      { type: "line", name: names[1], xAxisIndex: 1, yAxisIndex: 1, data: ratios, showSymbol: false, connectNulls: false, lineStyle: { color: "#22d3ee", width: 1.5 } },
+      { type: "candlestick", id: "pair-derived-candles", name: derivedLabel, xAxisIndex: 1, yAxisIndex: 1, data: derivedCandles, itemStyle: { color: "#8b5cf6", color0: "#ef4444", borderColor: "#8b5cf6", borderColor0: "#ef4444" } },
       ...(showFirstRaw ? [{ type: "candlestick", name: `原始 ${leg1Label}`, xAxisIndex: 2, yAxisIndex: 2, data: firstBars, itemStyle: { color: "#8b5cf6", color0: "#ef4444", borderColor: "#8b5cf6", borderColor0: "#ef4444" } }] : []),
       ...(showSecondRaw ? [{ type: "candlestick", name: `原始 ${leg2Label}`, xAxisIndex: showFirstRaw ? 3 : 2, yAxisIndex: showFirstRaw ? 3 : 2, data: secondBars, itemStyle: { color: "#8b5cf6", color0: "#ef4444", borderColor: "#8b5cf6", borderColor0: "#ef4444" } }] : []),
       ],
@@ -664,7 +689,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, leg1Label, leg2Label, sourceResult, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, leg1Label, leg2Label, sourceResult, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
@@ -704,12 +729,13 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
       {isPairTrade && <p className="sr-only">在任一面板拖动即可缩放到所选时间范围；点击或用方向键只选择候选 K 线，不改变视图范围、入场或拟合。</p>}
       <p id="spot-combo-chart-instructions" className="sr-only">{isPlain ? `拖动选择精确 ${timeZone} 区间，点击 K 线选择时间；左右方向键移动，Shift 加方向键扩展区间。` : isPairTrade ? "点击或用方向键选择候选 K 线；点击设为入场点后才会改变入场。拖动区间仅选择光标 K 线作为候选，不会自动改变入场。入场前 PnL 留空。" : "拖动选择精确区间，点击数据点选择时间；左右方向键移动，Shift 加方向键扩展区间。"}</p>
       {isPairTrade && chartVisible && (
-        <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label="配对交易纵轴单位">
+        <div className="mt-2 flex flex-wrap items-center gap-1" role="group" aria-label="配对交易视图控制">
           <span className="text-xs text-gray-500">纵轴</span>
           <button type="button" aria-pressed={valueUnit === "percent"} onClick={() => setValueUnit("percent")} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${valueUnit === "percent" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>%（相对 $10,000）</button>
           <button type="button" aria-pressed={valueUnit === "usd"} onClick={() => setValueUnit("usd")} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${valueUnit === "usd" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>USDT</button>
           <span className="text-[11px] text-gray-500">USDT 显示绝对盈亏，不换算为百分比。</span>
           <span className="text-[11px] text-gray-500">拖动图表或使用缩放滑块/滚轮可更新可见范围诊断；点击与键盘仅选候选 K 线。</span>
+          <button type="button" aria-pressed={comparisonMode === "ratio"} aria-label={`端点副图：当前为${comparisonMode === "ratio" ? "原始比值 K 线" : "原始价差 K 线"}，点击切换为${comparisonMode === "ratio" ? "原始价差 K 线" : "原始比值 K 线"}`} onClick={() => setComparisonMode((mode) => mode === "ratio" ? "spread" : "ratio")} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${comparisonMode === "ratio" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>副图：{comparisonMode === "ratio" ? "原始比值" : "原始价差"}K线</button>
           <label className="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" checked={showFirstRaw} onChange={(event) => setShowFirstRaw(event.target.checked)} />腿1原始K线</label>
           <label className="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" checked={showSecondRaw} onChange={(event) => setShowSecondRaw(event.target.checked)} />腿2原始K线</label>
         </div>
@@ -740,6 +766,8 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
           <p className="font-medium text-gray-400">配对交易情景视图</p>
           <p>{hasPairTrade && pairTrade ? `做多 腿1 $${pairTrade.firstNotionalUsd.toLocaleString("en-US")}、做空 腿2 β×$${pairTrade.firstNotionalUsd.toLocaleString("en-US")}（= $${pairTrade.secondNotionalUsd.toLocaleString("en-US")}，β=${finiteText(pairTrade.beta, 4)}），入场前点位留空，入场 K 线的收盘价作为基准，曲线入场点为 0。` : pairTradeNotice}</p>
           <p>情景展示区间与入场来自当前预设范围；自动 β 使用上方单独选定的拟合窗口，自定义 β 直接用于情景。拟合结束晚于入场时包含前视信息，不是回测；PnL 不含资金费率、手续费与滑点。</p>
+          <p>副图由两腿原始开盘与收盘按{comparisonMode === "ratio" ? "比值（腿1 ÷ 腿2）" : "价差（腿1 − 腿2）"}生成，只画开盘与收盘，没有影线（不表示期间最高/最低）；任一条腿开盘或收盘缺失、无效时该点留空，不插值。</p>
+          <p>“原始比值”与“原始价差”仅切换副图；两者都使用未经 β 加权的原始腿价格，不是组合数据。按钮文字显示当前在用的模式，点一下即可互换。</p>
           <p>此图中的精确区间只高亮曲线片段，不会改变入场或 β；下方当前残差/Z 与费率、流动性摘要会按精确区间筛选。</p>
         </div>
       ) : (
