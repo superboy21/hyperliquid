@@ -25,6 +25,11 @@ interface Props {
   /** One result from pair-statistics; the chart does not recalculate it. */
   pairAnalysis?: PairAnalysis | null;
   /**
+   * The fit-window model behind the pair-trade beta. The pair-trade title only
+   * shows a formula when this model's β matches the applied `pairTrade.beta`.
+   */
+  pairTradeAnalysis?: PairAnalysis | null;
+  /**
    * The pair-trade scenario computed once by the controller from the same
    * aligned closes; null while unavailable or not applicable.
    */
@@ -198,6 +203,22 @@ function modelDetails(analysis: PairAnalysis | null | undefined) {
   const model = modelValue<{ alpha?: number; beta?: number }>(analysis?.model);
   return { kind: "OLS", alpha: model?.alpha, beta: model?.beta };
 }
+/**
+ * The pair-trade title may only claim a formula when the alpha and beta both
+ * come from the model that actually produced the applied `pairTrade.beta`.
+ * A mismatched model (min-variance, unit, or a stale full-preset fit) yields
+ * null so the title keeps only its long/short description.
+ */
+function matchingTradeModel(analysis: PairAnalysis | null | undefined, appliedBeta: number | null | undefined) {
+  if (typeof appliedBeta !== "number" || !Number.isFinite(appliedBeta)) return null;
+  const model = modelValue<{ alpha?: number; beta?: number }>(analysis?.model);
+  const alpha = model?.alpha;
+  const beta = model?.beta;
+  if (typeof alpha !== "number" || !Number.isFinite(alpha)) return null;
+  if (typeof beta !== "number" || !Number.isFinite(beta)) return null;
+  const scale = Math.max(1, Math.abs(appliedBeta), Math.abs(beta));
+  return Math.abs(appliedBeta - beta) <= 1e-9 * scale ? { alpha, beta } : null;
+}
 function numberText(value: number | null | undefined, digits = 4): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "--";
 }
@@ -233,6 +254,7 @@ function signedPercentValue(value: number): string {
 export default function ComboSearchCandlesChart({
   data,
   pairAnalysis,
+  pairTradeAnalysis = null,
   pairTrade = null,
   pairTradeReason = null,
   interval,
@@ -809,9 +831,8 @@ export default function ComboSearchCandlesChart({
     const axes = paneNames.map((_name, index) => index);
     const unitLabel = valueUnit === "usd" ? "USDT" : "%";
     let title = `${data.firstSymbol} (${data.firstExchange}) 多 / ${data.secondSymbol} (${data.secondExchange}) 空`;
-    const tradeModel = modelDetails(pairAnalysis);
-    const formula = pairTrade ? `ln(${data.firstSymbol}) = ${numberText(tradeModel.alpha, 6)} + ${numberText(pairTrade.beta, 6)} · ln(${data.secondSymbol})` : null;
-    if (formula) title += ` · ${formula}`;
+    const tradeModel = pairTrade ? matchingTradeModel(pairTradeAnalysis, pairTrade.beta) : null;
+    if (tradeModel) title += ` · ln(${data.firstSymbol}) = ${numberText(tradeModel.alpha, 6)} + ${numberText(tradeModel.beta, 6)} · ln(${data.secondSymbol})`;
     const pnlData = points.map((point) => pairTradeUnitValue(point, valueUnit));
     const preservedZoom = zoomRangeRef.current;
     const tooltip = (params: any) => {
@@ -970,7 +991,7 @@ export default function ComboSearchCandlesChart({
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairTradeAnalysis, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";

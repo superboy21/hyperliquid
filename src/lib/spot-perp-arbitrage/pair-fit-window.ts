@@ -104,3 +104,45 @@ export function selectPairFitWindow(
     lastPointTime: selected[selected.length - 1].closeTime,
   });
 }
+
+/**
+ * Builds a custom fit spec that copies the currently shown pair-trade viewport.
+ *
+ * A null `viewport` means the full preset is shown, so the bounds become the
+ * first and last aligned closes. A non-null `viewport` is filtered inclusively,
+ * then snapped to the first and last aligned closes actually included so the
+ * resulting `{ mode: "custom", startTime, endTime }` always addresses real
+ * samples (gaps never widen the window silently). Invalid, non-finite, reversed,
+ * or empty viewports return null rather than falling back to "all", so a bad
+ * zoom never silently refits the whole series. A single included candle is
+ * allowed; the fitting operation reports insufficient points honestly.
+ */
+export function fitWindowFromViewport(
+  aligned: readonly AlignedPairClose[],
+  viewport: { startTime: number; endTime: number } | null,
+): PairFitWindowSpec | null {
+  const points = normalizeAlignedPairCloses(aligned);
+  if (points.length === 0) return null;
+
+  if (viewport === null) {
+    return {
+      mode: "custom",
+      startTime: points[0].closeTime,
+      endTime: points[points.length - 1].closeTime,
+    };
+  }
+
+  if (!Number.isFinite(viewport.startTime) || !Number.isFinite(viewport.endTime)) return null;
+  if (viewport.startTime > viewport.endTime) return null;
+
+  const selected = points.filter(
+    (point) => point.closeTime >= viewport.startTime && point.closeTime <= viewport.endTime,
+  );
+  if (selected.length === 0) return null;
+
+  return {
+    mode: "custom",
+    startTime: selected[0].closeTime,
+    endTime: selected[selected.length - 1].closeTime,
+  };
+}

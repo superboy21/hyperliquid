@@ -8,6 +8,20 @@ import { chartSelectionIndices, chartTimeSelectionFromIndices, type ChartTimeSel
 
 export const DEFAULT_PAIR_FIT_WINDOW_SPEC: PairFitWindowSpec = { mode: "all" };
 
+/**
+ * Which β source the pair-trade scenario applies. Presets ("min-variance"/"one")
+ * store only the mode, never a frozen number, so a recomputed fit-window value
+ * always applies without re-entry.
+ */
+export type PairBetaMode = "auto" | "min-variance" | "one" | "custom";
+
+/** Short, honest label for the currently applied β source. */
+export function pairBetaModeLabel(mode: PairBetaMode): string {
+  if (mode === "min-variance") return "最小方差配比";
+  if (mode === "one") return "1";
+  return mode === "custom" ? "自定义" : "自动 OLS 拟合";
+}
+
 interface Props {
   firstLabel: string;
   secondLabel: string;
@@ -16,6 +30,10 @@ interface Props {
   customBeta: number | null;
   /** The currently effective β (custom when applied, otherwise the OLS fit). */
   effectiveBeta: number | null;
+  /** Which β source the pair-trade view currently applies. */
+  betaMode: PairBetaMode;
+  /** Fit-window minimum-variance hedge ratio, or null when unavailable. */
+  minVarianceBeta: number | null;
   betaDraft: string;
   betaError: string | null;
   entryCandidateLabel: string | null;
@@ -30,15 +48,21 @@ interface Props {
   fitPointCount: number;
   fitUnavailableReason: string | null;
   lookahead: boolean;
+  /** Whether the fit window can be reset to the current visible chart range. */
+  canResetFitToViewport: boolean;
   onSetView: (view: CombinationViewMode) => void;
   onBetaDraftChange: (value: string) => void;
   onApplyBeta: () => void;
   onUseAutoBeta: () => void;
+  onUseMinVarianceBeta: () => void;
+  onUseUnitBeta: () => void;
   onSetEntry: () => void;
   onResetEntry: () => void;
   onSetFitMode: (mode: PairFitWindowMode) => void;
   onSetFitStart: () => void;
   onSetFitEnd: () => void;
+  /** Copies the pair-trade chart's visible first/last aligned candle into the fit start/end. */
+  onResetFitToViewport: () => void;
 }
 
 function compactBeta(value: number): string {
@@ -48,6 +72,21 @@ function compactBeta(value: number): string {
 
 function viewButtonClass(active: boolean): string {
   return `rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${active ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`;
+}
+
+function betaModeButtonClass(active: boolean): string {
+  return `h-7 rounded border px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-300 disabled:cursor-not-allowed disabled:opacity-40 ${active ? "border-fuchsia-400/70 bg-fuchsia-500/25 text-fuchsia-100" : "border-gray-600 text-gray-300 hover:bg-gray-700"}`;
+}
+
+/** True only when the fit-window minimum-variance β can actually be applied. */
+function hasMinVarianceBeta(beta: number | null): beta is number {
+  return beta !== null && Number.isFinite(beta) && beta > 0;
+}
+
+function minVarianceBetaTitle(beta: number | null): string {
+  if (beta === null) return "最小方差配比不可用：拟合窗口需要至少 30 个连续相邻 K 线收益样本";
+  if (!Number.isFinite(beta) || beta <= 0) return "最小方差配比不可用：拟合窗口计算出的配比不是正数";
+  return `最小方差配比 β = ${compactBeta(beta)}：按拟合窗口（所选 K 线周期）的简单收益率拟合，在腿1名义固定 $10,000 下最小化每期 PnL 方差；不等同于固定总名义本金下的波动率最小化。拟合窗口变化时自动更新。`;
 }
 
 export function fitWindowModeLabel(mode: PairFitWindowMode): string {
@@ -64,14 +103,16 @@ export function fitWindowModeLabel(mode: PairFitWindowMode): string {
  * PnL scenario. Only the pair-trade view exposes a β input; the plain and OLS
  * views are always automatic (plain is a raw 1:1 price spread/ratio, OLS always
  * fits its own β). Pair analysis uses custom β only while pair-trade is active;
- * switching to OLS restores the automatic fit.
+ * switching to OLS restores the automatic fit. The pair-trade β quick buttons
+ * select a source mode only — the value itself always comes from the controller.
  */
 export function CombinationWeightControls({
   firstLabel,
   secondLabel,
   view,
-  customBeta,
   effectiveBeta,
+  betaMode,
+  minVarianceBeta,
   betaDraft,
   betaError,
   entryCandidateLabel,
@@ -79,15 +120,19 @@ export function CombinationWeightControls({
   appliedEntryLabel,
   entryIsCustom,
   fitWindow, fitStartLabel, fitEndLabel, fitFirstLabel, fitLastLabel, fitPointCount, fitUnavailableReason, lookahead,
+  canResetFitToViewport,
   onSetView,
   onBetaDraftChange,
   onApplyBeta,
   onUseAutoBeta,
+  onUseMinVarianceBeta,
+  onUseUnitBeta,
   onSetEntry,
   onResetEntry,
-  onSetFitStart, onSetFitEnd,
+  onSetFitStart, onSetFitEnd, onResetFitToViewport,
 }: Props) {
   const isPairTrade = view === "pair-trade";
+  const minVarianceAvailable = hasMinVarianceBeta(minVarianceBeta);
 
   return (
     <div className="flex flex-wrap items-center gap-1" role="group" aria-label="组合视图控制">
@@ -125,7 +170,7 @@ export function CombinationWeightControls({
           <label className="flex items-center gap-1 text-xs text-gray-400">
             <span>β</span>
             <input
-              aria-label="自定义 β（腿1 对腿2 的对数回归斜率）"
+              aria-label="自定义 β（腿1 对腿2 的配比；仅在点击“应用 β”后生效）"
               inputMode="decimal"
               type="number"
               min="0"
@@ -143,7 +188,26 @@ export function CombinationWeightControls({
           >
             应用 β
           </button>
-          {customBeta !== null && (
+          <button
+            type="button"
+            aria-pressed={betaMode === "min-variance"}
+            onClick={onUseMinVarianceBeta}
+            disabled={!minVarianceAvailable}
+            title={minVarianceBetaTitle(minVarianceBeta)}
+            className={betaModeButtonClass(betaMode === "min-variance")}
+          >
+            最小方差配比
+          </button>
+          <button
+            type="button"
+            aria-pressed={betaMode === "one"}
+            onClick={onUseUnitBeta}
+            title="设定 β = 1：两腿初始名义本金相等（各 $10,000），不是数量相等；名义金额相等，代币数量按各自价格不同"
+            className={betaModeButtonClass(betaMode === "one")}
+          >
+            1
+          </button>
+          {betaMode !== "auto" && (
             <button
               type="button"
               onClick={onUseAutoBeta}
@@ -152,11 +216,23 @@ export function CombinationWeightControls({
               恢复自动 β
             </button>
           )}
-          <span className="text-xs text-violet-300" title="配对交易使用的 β">
+          <span className="text-xs text-violet-300" title="配对交易当前使用的 β 来源">
             {effectiveBeta === null
-              ? "β 不可用（自动拟合所需样本不足）"
-              : `β = ${compactBeta(effectiveBeta)}（${customBeta !== null ? "自定义" : "自动 OLS 拟合"}）`}
+              ? betaMode === "min-variance"
+                ? "β 不可用（拟合窗口最小方差配比不可用）"
+                : "β 不可用（自动拟合所需样本不足）"
+              : `β = ${compactBeta(effectiveBeta)}（${pairBetaModeLabel(betaMode)}）`}
           </span>
+          {betaMode === "custom" && (
+            <span className="text-[11px] text-gray-500">
+              自定义 β 来自手动输入；OLS β 与对数回归诊断仍以自动拟合为准。
+            </span>
+          )}
+          {betaMode === "min-variance" && (
+            <span className="text-[11px] text-gray-500">
+              按拟合窗口简单收益率拟合，腿1名义固定 $10,000 下最小化每期 PnL 方差；非固定总名义的波动率最小化。
+            </span>
+          )}
           <span className="basis-full text-[11px] text-gray-500">
             固定数量情景：多 {firstLabel} $10,000、空 {secondLabel} β × $10,000；PnL 不含资金费率、手续费与滑点。
           </span>
@@ -168,7 +244,16 @@ export function CombinationWeightControls({
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 <button type="button" onClick={onSetFitStart} disabled={entryCandidateLabel === null} className="rounded border border-cyan-700 px-2 py-1 text-cyan-200 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300">设为拟合起点</button>
                 <button type="button" onClick={onSetFitEnd} disabled={entryCandidateLabel === null} className="rounded border border-cyan-700 px-2 py-1 text-cyan-200 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300">设为拟合终点</button>
-                <span className="text-gray-500">应用于当前候选</span>
+                <button
+                  type="button"
+                  onClick={onResetFitToViewport}
+                  disabled={!canResetFitToViewport}
+                  title="重置拟合范围：把配对交易图当前可视区间的首/末对齐 K 线复制为拟合起止；未缩放时为整段图表。不改变图表视窗或入场，也不使用当前光标候选 K 线。"
+                  className="rounded border border-cyan-700/70 bg-cyan-950/30 px-2 py-1 text-cyan-200 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                >
+                  重置
+                </button>
+                <span className="text-gray-500" title="起点/终点按钮作用于当前光标候选 K 线；「重置」改用图表可视区间。">起止按钮用光标候选；「重置」用可视区间</span>
               </div>
               {fitUnavailableReason && <p className="mt-1 text-amber-300" role="status" aria-live="polite">{fitUnavailableReason}</p>}
               {lookahead && <p className="mt-1 text-amber-300" role="status" aria-live="polite">拟合结束晚于入场，情景含前视信息，非回测。</p>}
@@ -195,18 +280,26 @@ export interface CombinationWeightingState {
   view: CombinationViewMode;
   /** Applied custom β, or null while the automatic OLS fit owns the value. */
   customBeta: number | null;
+  /**
+   * Which β source pair-trade applies. Presets store only the mode so a
+   * recomputed fit-window value always applies without re-entry.
+   */
+  betaMode: PairBetaMode;
   betaDraft: string;
   betaError: string | null;
   setView: (view: CombinationViewMode) => void;
   setBetaDraft: (value: string) => void;
   applyCustomBeta: () => void;
   useAutoBeta: () => void;
+  useMinVarianceBeta: () => void;
+  useUnitBeta: () => void;
 }
 
 /** The view-and-β fields shared by every transition seam. */
 export interface CombinationViewSnapshot {
   view: CombinationViewMode;
   customBeta: number | null;
+  betaMode: PairBetaMode;
 }
 
 export type CombinationViewTransition = CombinationViewSnapshot;
@@ -310,9 +403,9 @@ export function resolvePairTradeEntryTime(
 }
 
 /**
- * Switching the view is intentionally a no-op for the applied custom β: the view
- * change never refits or rebases anything, and the controller only consumes the
- * custom β while the pair-trade view is active.
+ * Switching the view is intentionally a no-op for the applied custom β and the
+ * β mode: the view change never refits or rebases anything, and the controller
+ * only consumes the pair-trade β while that view is active.
  */
 export function setViewTransition(
   snapshot: CombinationViewSnapshot,
@@ -323,10 +416,14 @@ export function setViewTransition(
 
 /** Fresh chart state: classic view, automatic OLS β, no custom input. */
 export function resetCombinationTransition(): CombinationViewSnapshot {
-  return { view: "plain", customBeta: null };
+  return { view: "plain", customBeta: null, betaMode: "auto" };
 }
 
-/** Applies data/preset β resets independently from market/view identity resets. */
+/**
+ * Applies data/preset β resets independently from market/view identity resets.
+ * A data/preset reset returns β to automatic OLS mode; a view-only reset keeps
+ * both the custom β and the β mode.
+ */
 export function combinationResetTransition(
   snapshot: CombinationViewSnapshot,
   resetKeyChanged: boolean,
@@ -335,6 +432,7 @@ export function combinationResetTransition(
   return {
     view: viewResetKeyChanged ? "plain" : snapshot.view,
     customBeta: resetKeyChanged ? null : snapshot.customBeta,
+    betaMode: resetKeyChanged ? "auto" : snapshot.betaMode,
   };
 }
 
@@ -342,13 +440,14 @@ export function combinationResetTransition(
 export function useCombinationWeighting(resetKey?: unknown, viewResetKey: unknown = resetKey): CombinationWeightingState {
   const [view, setViewState] = useState<CombinationViewMode>("plain");
   const [customBeta, setCustomBeta] = useState<number | null>(null);
+  const [betaMode, setBetaMode] = useState<PairBetaMode>("auto");
   const [betaDraft, setBetaDraftState] = useState("");
   const [betaError, setBetaError] = useState<string | null>(null);
   const previousResetKey = useRef(resetKey);
   const previousViewResetKey = useRef(viewResetKey);
 
   const setView = useCallback((next: CombinationViewMode) => {
-    // View only: the applied custom β (if any) stays untouched.
+    // View only: the applied custom β and β mode stay untouched.
     setViewState(next);
     setBetaError(null);
   }, []);
@@ -363,11 +462,25 @@ export function useCombinationWeighting(resetKey?: unknown, viewResetKey: unknow
       return;
     }
     setCustomBeta(parsed);
+    setBetaMode("custom");
     setBetaError(null);
   }, [betaDraft]);
   const useAutoBeta = useCallback(() => {
     setCustomBeta(null);
+    setBetaMode("auto");
     setBetaDraftState("");
+    setBetaError(null);
+  }, []);
+  // Presets record only the source mode; the value is always supplied by the
+  // controller, so a recomputed fit-window minimum-variance β is picked up.
+  const useMinVarianceBeta = useCallback(() => {
+    setCustomBeta(null);
+    setBetaMode("min-variance");
+    setBetaError(null);
+  }, []);
+  const useUnitBeta = useCallback(() => {
+    setCustomBeta(null);
+    setBetaMode("one");
     setBetaError(null);
   }, []);
 
@@ -378,18 +491,20 @@ export function useCombinationWeighting(resetKey?: unknown, viewResetKey: unknow
     previousViewResetKey.current = viewResetKey;
     if (!resetKeyChanged && !viewResetKeyChanged) return;
 
-    const next = combinationResetTransition({ view, customBeta }, resetKeyChanged, viewResetKeyChanged);
-    // Data/preset identity resets β draft/error; only market/view identity
-    // resets the selected view. The one-key API keeps its historical behavior.
+    const next = combinationResetTransition({ view, customBeta, betaMode }, resetKeyChanged, viewResetKeyChanged);
+    // Data/preset identity resets β draft/error and returns β to automatic
+    // mode; only market/view identity resets the selected view. The one-key API
+    // keeps its historical behavior.
     if (next.view !== view) setViewState(next.view);
     if (next.customBeta !== customBeta) setCustomBeta(next.customBeta);
+    if (next.betaMode !== betaMode) setBetaMode(next.betaMode);
     if (resetKeyChanged) {
       setBetaDraftState("");
       setBetaError(null);
     }
-  }, [customBeta, resetKey, view, viewResetKey]);
+  }, [betaMode, customBeta, resetKey, view, viewResetKey]);
 
-  return { view, customBeta, betaDraft, betaError, setView, setBetaDraft, applyCustomBeta, useAutoBeta };
+  return { view, customBeta, betaMode, betaDraft, betaError, setView, setBetaDraft, applyCustomBeta, useAutoBeta, useMinVarianceBeta, useUnitBeta };
 }
 
 /**

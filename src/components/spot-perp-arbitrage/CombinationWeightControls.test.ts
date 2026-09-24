@@ -16,41 +16,46 @@ import {
   formatRawPriceAxis,
   fitWindowSetEnd,
   fitWindowSetStart,
+  pairBetaModeLabel,
   type CombinationViewSnapshot,
 } from "./CombinationWeightControls";
 
 const pairTradeCustom: CombinationViewSnapshot = {
   view: "pair-trade",
   customBeta: 1.5,
+  betaMode: "custom",
 };
 
 describe("combination view switching", () => {
-  test("switching to OLS keeps the applied custom beta untouched", () => {
+  test("switching to OLS keeps the applied custom beta and its mode untouched", () => {
     expect(setViewTransition(pairTradeCustom, "ols")).toEqual({
       view: "ols",
       customBeta: 1.5,
+      betaMode: "custom",
     });
   });
 
-  test("switching back to pair-trade keeps the custom beta", () => {
+  test("switching back to pair-trade keeps the custom beta and mode", () => {
     const ols: CombinationViewSnapshot = { ...pairTradeCustom, view: "ols" };
     expect(setViewTransition(ols, "pair-trade")).toEqual({
       view: "pair-trade",
       customBeta: 1.5,
+      betaMode: "custom",
     });
   });
 
   test("switching view does not invent a custom beta for the automatic state", () => {
-    const initial: CombinationViewSnapshot = { view: "plain", customBeta: null };
-    expect(setViewTransition(initial, "pair-trade")).toEqual({ view: "pair-trade", customBeta: null });
-    expect(setViewTransition(initial, "ols")).toEqual({ view: "ols", customBeta: null });
+    const initial: CombinationViewSnapshot = { view: "plain", customBeta: null, betaMode: "auto" };
+    expect(setViewTransition(initial, "pair-trade")).toEqual({ view: "pair-trade", customBeta: null, betaMode: "auto" });
+    expect(setViewTransition(initial, "ols")).toEqual({ view: "ols", customBeta: null, betaMode: "auto" });
     expect(setViewTransition(initial, "plain")).toEqual(initial);
   });
 
   test("plain and OLS remain automatic: the view transition carries no weighting intent", () => {
-    expect(setViewTransition({ view: "pair-trade", customBeta: 2.5 }, "plain")).toEqual({
+    expect(setViewTransition({ view: "pair-trade", customBeta: 2.5, betaMode: "custom" }, "plain")).toEqual({
       view: "plain",
       customBeta: 2.5,
+      betaMode: "custom",
     });
   });
 
@@ -61,27 +66,49 @@ describe("combination view switching", () => {
   });
 });
 
+describe("pair-trade beta mode transitions", () => {
+  test("mode labels distinguish every source", () => {
+    expect(pairBetaModeLabel("auto")).toBe("自动 OLS 拟合");
+    expect(pairBetaModeLabel("min-variance")).toBe("最小方差配比");
+    expect(pairBetaModeLabel("one")).toBe("1");
+    expect(pairBetaModeLabel("custom")).toBe("自定义");
+  });
+
+  test("a preset mode carries no frozen numeric beta", () => {
+    const preset: CombinationViewSnapshot = { view: "pair-trade", customBeta: null, betaMode: "min-variance" };
+    expect(setViewTransition(preset, "pair-trade")).toEqual({ view: "pair-trade", customBeta: null, betaMode: "min-variance" });
+  });
+
+  test("a data/preset reset returns beta to automatic mode while a view-only reset preserves it", () => {
+    const unit: CombinationViewSnapshot = { view: "pair-trade", customBeta: null, betaMode: "one" };
+    expect(combinationResetTransition(unit, true, false)).toEqual({ view: "pair-trade", customBeta: null, betaMode: "auto" });
+    expect(combinationResetTransition(unit, false, true)).toEqual({ view: "plain", customBeta: null, betaMode: "one" });
+    expect(combinationResetTransition(unit, true, true)).toEqual(resetCombinationTransition());
+  });
+});
+
 describe("reset transition", () => {
   test("reset returns to the plain automatic default with no custom beta", () => {
     expect(resetCombinationTransition()).toEqual({
       view: "plain",
       customBeta: null,
+      betaMode: "auto",
     });
   });
 
-  test("data range or interval resets clear β but preserve OLS and pair-trade views", () => {
-    expect(combinationResetTransition({ view: "ols", customBeta: 1.7 }, true, false)).toEqual({ view: "ols", customBeta: null });
-    expect(combinationResetTransition({ view: "pair-trade", customBeta: 1.7 }, true, false)).toEqual({ view: "pair-trade", customBeta: null });
+  test("data range or interval resets clear β and return the mode to auto while preserving views", () => {
+    expect(combinationResetTransition({ view: "ols", customBeta: 1.7, betaMode: "custom" }, true, false)).toEqual({ view: "ols", customBeta: null, betaMode: "auto" });
+    expect(combinationResetTransition({ view: "pair-trade", customBeta: 1.7, betaMode: "min-variance" }, true, false)).toEqual({ view: "pair-trade", customBeta: null, betaMode: "auto" });
   });
 
   test("market identity changes reset to plain and clear custom β", () => {
-    expect(combinationResetTransition({ view: "pair-trade", customBeta: 2.25 }, true, true)).toEqual({ view: "plain", customBeta: null });
-    expect(combinationResetTransition({ view: "ols", customBeta: null }, false, true)).toEqual({ view: "plain", customBeta: null });
+    expect(combinationResetTransition({ view: "pair-trade", customBeta: 2.25, betaMode: "custom" }, true, true)).toEqual({ view: "plain", customBeta: null, betaMode: "auto" });
+    expect(combinationResetTransition({ view: "ols", customBeta: null, betaMode: "auto" }, false, true)).toEqual({ view: "plain", customBeta: null, betaMode: "auto" });
   });
 
-  test("a view-only reset preserves β, and a single reset key retains legacy full reset semantics", () => {
-    expect(combinationResetTransition({ view: "pair-trade", customBeta: 1.2 }, false, true)).toEqual({ view: "plain", customBeta: 1.2 });
-    expect(combinationResetTransition({ view: "pair-trade", customBeta: 1.2 }, true, true)).toEqual(resetCombinationTransition());
+  test("a view-only reset preserves β and mode, and a single reset key retains legacy full reset semantics", () => {
+    expect(combinationResetTransition({ view: "pair-trade", customBeta: 1.2, betaMode: "custom" }, false, true)).toEqual({ view: "plain", customBeta: 1.2, betaMode: "custom" });
+    expect(combinationResetTransition({ view: "pair-trade", customBeta: 1.2, betaMode: "custom" }, true, true)).toEqual(resetCombinationTransition());
   });
 });
 

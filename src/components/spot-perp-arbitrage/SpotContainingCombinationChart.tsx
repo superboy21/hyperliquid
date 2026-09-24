@@ -21,6 +21,11 @@ interface Props {
   result: SpotContainingCombinationResult;
   /** One shared pair-statistics result. It is never recalculated in this view. */
   pairAnalysis?: PairAnalysis | null;
+  /**
+   * The fit-window model behind the pair-trade beta. The pair-trade title only
+   * shows a formula when this model's β matches the applied `pairTrade.beta`.
+   */
+  pairTradeAnalysis?: PairAnalysis | null;
   /** One shared pair-trade scenario from the controller; never recalculated here. */
   pairTrade?: PairTradeSeries | null;
   /** Honest reason copy when the scenario cannot be built (null when available). */
@@ -137,6 +142,22 @@ function statValue<T>(value: unknown): T | null {
 function finiteText(value: number | null | undefined, digits: number): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "--";
 }
+/**
+ * The pair-trade title may only claim a formula when alpha and beta both come
+ * from the model that actually produced the applied `pairTrade.beta`. A
+ * mismatched model (min-variance, unit, or a stale full-preset fit) yields null
+ * so the title keeps only its long/short description.
+ */
+function matchingTradeModel(analysis: PairAnalysis | null | undefined, appliedBeta: number | null | undefined) {
+  if (typeof appliedBeta !== "number" || !Number.isFinite(appliedBeta)) return null;
+  const model = statValue<{ alpha?: number; beta?: number }>(analysis?.model);
+  const alpha = model?.alpha;
+  const beta = model?.beta;
+  if (typeof alpha !== "number" || !Number.isFinite(alpha)) return null;
+  if (typeof beta !== "number" || !Number.isFinite(beta)) return null;
+  const scale = Math.max(1, Math.abs(appliedBeta), Math.abs(beta));
+  return Math.abs(appliedBeta - beta) <= 1e-9 * scale ? { alpha, beta } : null;
+}
 
 // ==================== Pair-trade view helpers ====================
 
@@ -161,7 +182,7 @@ function signedPercentValue(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
-export default function SpotContainingCombinationChart({ result: sourceResult, pairAnalysis, pairTrade = null, pairTradeReason = null, timeSelection = null, onTimeSelectionChange, onPairViewportChange, view, timeZone }: Props) {
+export default function SpotContainingCombinationChart({ result: sourceResult, pairAnalysis, pairTradeAnalysis = null, pairTrade = null, pairTradeReason = null, timeSelection = null, onTimeSelectionChange, onPairViewportChange, view, timeZone }: Props) {
   const [valueUnit, setValueUnit] = useState<CombinationValueUnit>("percent");
   // Default subplot is the endpoint-only raw ratio; toggling switches the
   // derived candlestick to the raw spread. Independent from valueUnit.
@@ -526,8 +547,8 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     const indexes = names.map((_name, index) => index);
     const grids = names.map((_name, index) => ({ left: 62, right: 54, top: `${9 + index * (78 / names.length)}%`, height: `${68 / names.length}%` }));
     let title = `${leg1Label} 多 / ${leg2Label} 空`;
-    const tradeModel = statValue<{ alpha?: number; beta?: number }>(pairAnalysis?.model);
-    if (pairTrade) title += ` · ln(${leg1Label}) = ${finiteText(tradeModel?.alpha, 6)} + ${finiteText(pairTrade.beta, 6)} · ln(${leg2Label})`;
+    const tradeModel = pairTrade ? matchingTradeModel(pairTradeAnalysis, pairTrade.beta) : null;
+    if (tradeModel) title += ` · ln(${leg1Label}) = ${finiteText(tradeModel.alpha, 6)} + ${finiteText(tradeModel.beta, 6)} · ln(${leg2Label})`;
     const pnlData = points.map((point) => pairTradeUnitValue(point, valueUnit));
     const preservedZoom = zoomRangeRef.current;
     const formatter = (params: any) => {
@@ -689,7 +710,7 @@ export default function SpotContainingCombinationChart({ result: sourceResult, p
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairAnalysis, leg1Label, leg2Label, sourceResult, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairTradeAnalysis, pairAnalysis, leg1Label, leg2Label, sourceResult, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
