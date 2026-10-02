@@ -79,7 +79,7 @@ import {
   type PairTradeSeries,
   type TimedClose,
 } from "@/lib/spot-perp-arbitrage";
-import { estimateDailyPairVaR, estimateSimpleReturnRegression } from "@/lib/spot-perp-arbitrage/pair-risk";
+import { estimateDailyPairVaR, estimatePairHistoricalVolatility, estimateSimpleReturnRegression } from "@/lib/spot-perp-arbitrage/pair-risk";
 import { resolvePairBeta } from "@/lib/spot-perp-arbitrage/pair-beta-selection";
 import { filterInChartTimeSelection, filterTimedInChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import { selectPairFitWindow, fitWindowFromViewport, type PairFitWindowMode, type PairFitWindowSpec } from "@/lib/spot-perp-arbitrage/pair-fit-window";
@@ -1043,21 +1043,25 @@ export default function SpotPerpArbitrageController() {
     ? { first: 1, second: 1 }
     : { first: 1, second: appliedBeta };
 
-  // Historical daily VaR uses the full preset with the currently effective β
-  // (the selected pair-trade β, or the automatic full-preset OLS β otherwise).
-  // Weekly/intraday intervals are rejected inside the estimator, so the card
-  // reports a clear "daily-only" state rather than an estimate.
+  // Pair-trade risk diagnostics use the selected fit window and applied β;
+  // ordinary OLS keeps historical VaR on the complete visible preset.
   const effectiveVarBeta = weighting.view === "pair-trade"
     ? selectedPairBeta
     : pairAnalysis?.model.value?.beta ?? null;
   const dailyVar = useMemo(
-    () => estimateDailyPairVaR(pairInput, effectiveVarBeta, getSearchIntervalMs(chartInterval)),
-    [chartInterval, effectiveVarBeta, pairInput],
+    () => estimateDailyPairVaR(
+      weighting.view === "pair-trade" ? pairFitValue?.points ?? [] : pairInput,
+      effectiveVarBeta,
+      getSearchIntervalMs(chartInterval),
+    ),
+    [chartInterval, effectiveVarBeta, pairFitValue, pairInput, weighting.view],
   );
-  // Dashboard prop selection is identical for both combo branches: in pair-trade
-  // the OLS β/R² and simple-return fit come from the fit window; otherwise they
-  // come from the full preset. VaR stays full-preset in both, so a short fit
-  // window never suppresses it.
+  // Risk diagnostics are fit-window scoped in pair-trade, independent of chart
+  // viewport; the OLS VaR path intentionally remains full-preset.
+  const pairHistoricalVolatility = useMemo(
+    () => estimatePairHistoricalVolatility(pairFitValue?.points ?? [], selectedPairBeta, getSearchIntervalMs(chartInterval)),
+    [chartInterval, pairFitValue, selectedPairBeta],
+  );
   const dashboardOlsModel = weighting.view === "pair-trade" ? fitWindowOlsModel : pairAnalysis?.model ?? null;
   const dashboardSimpleReturnRegression = weighting.view === "pair-trade" ? fitWindowSimpleReturn : pairInputSimpleReturn;
   // Only a positive manual β keeps the scenario runnable when the fit-window
@@ -1520,10 +1524,10 @@ export default function SpotPerpArbitrageController() {
             </section>
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "spot-combo" && exactSpotCombo && (
-            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={dashboardSpotCombo!} pairAnalysis={dashboardPairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} pairTradeBetaSource={weighting.betaMode} olsModel={dashboardOlsModel} simpleReturnRegression={dashboardSimpleReturnRegression} dailyVar={dailyVar} riskBeta={effectiveVarBeta} pairTradeEntryCustom={entryIsCustom} pairTradeEntryCloseTime={pairTradeEntryCloseTime} pairViewport={weighting.view === "pair-trade" ? pairViewport : null} fitWindowMode={fitWindowSpec.mode} fitWindowStart={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null} fitWindowEnd={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null} fitWindowCount={pairFitValue?.points.length ?? 0} fitWindowUnavailable={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaApplied)} pairTradeLookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
+            <MixedAnalyticsDashboard key={`${String(marketId(chartPayload.result.leg1))}:${String(marketId(chartPayload.result.leg2))}`} result={dashboardSpotCombo!} pairAnalysis={dashboardPairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} pairTradeBetaSource={weighting.betaMode} olsModel={dashboardOlsModel} simpleReturnRegression={dashboardSimpleReturnRegression} dailyVar={dailyVar} pairHistoricalVolatility={pairHistoricalVolatility} riskBeta={effectiveVarBeta} pairTradeEntryCustom={entryIsCustom} pairTradeEntryCloseTime={pairTradeEntryCloseTime} pairViewport={weighting.view === "pair-trade" ? pairViewport : null} fitWindowMode={fitWindowSpec.mode} fitWindowStart={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null} fitWindowEnd={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null} fitWindowCount={pairFitValue?.points.length ?? 0} fitWindowUnavailable={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaApplied)} pairTradeLookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
           )}
           {effectiveChartPlan?.kind === "combo" && chartPayload?.kind === "perp-combo" && exactPerpCombo && (
-            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={dashboardPerpCombo!} pairAnalysis={dashboardPairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} pairTradeBetaSource={weighting.betaMode} olsModel={dashboardOlsModel} simpleReturnRegression={dashboardSimpleReturnRegression} dailyVar={dailyVar} riskBeta={effectiveVarBeta} pairTradeEntryCustom={entryIsCustom} pairTradeEntryCloseTime={pairTradeEntryCloseTime} pairViewport={weighting.view === "pair-trade" ? pairViewport : null} fitWindowMode={fitWindowSpec.mode} fitWindowStart={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null} fitWindowEnd={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null} fitWindowCount={pairFitValue?.points.length ?? 0} fitWindowUnavailable={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaApplied)} pairTradeLookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
+            <MixedAnalyticsDashboard key={`${chartPayload.result.firstExchange}:${chartPayload.result.firstSymbol}:${chartPayload.result.secondExchange}:${chartPayload.result.secondSymbol}`} result={dashboardPerpCombo!} pairAnalysis={dashboardPairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} pairTradeBetaSource={weighting.betaMode} olsModel={dashboardOlsModel} simpleReturnRegression={dashboardSimpleReturnRegression} dailyVar={dailyVar} pairHistoricalVolatility={pairHistoricalVolatility} riskBeta={effectiveVarBeta} pairTradeEntryCustom={entryIsCustom} pairTradeEntryCloseTime={pairTradeEntryCloseTime} pairViewport={weighting.view === "pair-trade" ? pairViewport : null} fitWindowMode={fitWindowSpec.mode} fitWindowStart={pairFitValue ? formatChartDateTime(pairFitValue.firstPointTime, chartTimeZone) : null} fitWindowEnd={pairFitValue ? formatChartDateTime(pairFitValue.lastPointTime, chartTimeZone) : null} fitWindowCount={pairFitValue?.points.length ?? 0} fitWindowUnavailable={fitWindowUnavailableCopy(fitAnalysis?.model.reason ?? currentFitWindow.reason, pairFitValue?.points.length ?? 0, customBetaApplied)} pairTradeLookahead={Boolean(pairFitValue && appliedEntryTime !== null && pairFitValue.lastPointTime > appliedEntryTime)} view={weighting.view} range="all" initialTailTrim={0} exactSelection={exactTimeSelection} weights={dashboardWeights} timeZone={chartTimeZone} />
           )}
           {comboMode && (
             <div className="flex flex-col gap-2 rounded-lg border border-violet-500/25 bg-violet-950/15 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">

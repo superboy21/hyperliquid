@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { estimateDailyPairVaR, estimateSimpleReturnRegression, type DailyPairVaR, type SimpleReturnRegression } from "./pair-risk";
+import { estimateDailyPairVaR, estimatePairHistoricalVolatility, estimateSimpleReturnRegression, type DailyPairVaR, type SimpleReturnRegression } from "./pair-risk";
 import { calculatePairTradeSeries } from "./pair-trade";
 import type { AlignedPairClose } from "./pair-statistics";
+import { selectPairFitWindow } from "./pair-fit-window";
 
 const INTERVAL = 60_000;
 const DAY_MS = 86_400_000;
@@ -136,30 +137,33 @@ const distribution300 = [
 ];
 
 describe("estimateDailyPairVaR", () => {
-  test("matches a known lower-tail distribution with the gross beta denominator", () => {
+  test("matches a known lower-tail distribution relative to leg1 notional", () => {
     const points = dailyPoints(distribution300);
     const result = estimateDailyPairVaR(points, 1, DAY_MS);
     expect(result.sampleCount).toBe(300);
     // floor((300 - 1) * 0.05) -> index 14 -> -0.05 leg1 return
-    // net = (-0.05 - 1 * 0) / (1 + 1) = -0.025 -> 2.5% loss
+    // proxy = (-0.05 - 1 * 0) / 1 = -0.05 -> 5% loss
     expect(result.var95.available).toBe(true);
-    expect(result.var95.value).toBeCloseTo(2.5, 10);
-    // floor((300 - 1) * 0.01) -> index 2 -> -0.10 leg1 return -> 5% loss
+    expect(result.var95.value).toBeCloseTo(5, 10);
+    // floor((300 - 1) * 0.01) -> index 2 -> -0.10 leg1 return -> 10% loss
     expect(result.var99.available).toBe(true);
-    expect(result.var99.value).toBeCloseTo(5, 10);
+    expect(result.var99.value).toBeCloseTo(10, 10);
   });
 
-  test("scales the net return by 1 + beta", () => {
+  test("uses applied beta without dividing by total gross notional", () => {
     const result = estimateDailyPairVaR(dailyPoints(distribution300), 3, DAY_MS);
     expect(result.sampleCount).toBe(300);
-    expect(result.var95.value).toBeCloseTo(0.05 / 4 * 100, 10);
-    expect(result.var99.value).toBeCloseTo(0.1 / 4 * 100, 10);
+    expect(result.var95.value).toBeCloseTo(0.05 * 100, 10);
+    expect(result.var99.value).toBeCloseTo(0.1 * 100, 10);
+    // The prior gross-normalized convention would report one quarter of this
+    // reading at beta 3; this convention stays relative to leg1 notional.
+    expect(result.var95.value).not.toBeCloseTo(0.05 / 4 * 100, 10);
   });
 
   test("gates both percentiles at 100 observations while retaining the quantile rule", () => {
     // 100 complete samples: the single worst day sits at sorted index 0.
     // floor((100 - 1) * 0.01) = 0 selects it for VaR99, so the reading is the
-    // worst observed sample (net -0.20 / 2 = -0.10 -> 10), while
+    // worst observed sample (-0.20 / 1 = -0.20 -> 20), while
     // floor((100 - 1) * 0.05) = 4 lands on a +0.001 day -> VaR95 is 0.
     const hundred = [-0.2, ...Array.from({ length: 99 }, () => 0.001)];
     const hundredResult = estimateDailyPairVaR(dailyPoints(hundred), 1, DAY_MS);
@@ -167,7 +171,7 @@ describe("estimateDailyPairVaR", () => {
     expect(hundredResult.var95.available).toBe(true);
     expect(hundredResult.var95.value).toBeCloseTo(0, 10);
     expect(hundredResult.var99.available).toBe(true);
-    expect(hundredResult.var99.value).toBeCloseTo(10, 10);
+    expect(hundredResult.var99.value).toBeCloseTo(20, 10);
 
     // 99 complete samples: both percentiles stay below the shared 100 gate.
     const ninetyNine = [-0.2, ...Array.from({ length: 98 }, () => 0.001)];
@@ -185,7 +189,7 @@ describe("estimateDailyPairVaR", () => {
     expect(twoFortyNineResult.sampleCount).toBe(249);
     expect(twoFortyNineResult.var95.available).toBe(true);
     expect(twoFortyNineResult.var99.available).toBe(true);
-    expect(twoFortyNineResult.var99.value).toBeCloseTo(10, 10);
+    expect(twoFortyNineResult.var99.value).toBeCloseTo(20, 10);
 
     // 250 samples: the same gate and quantile rule keep VaR99 available.
     const twoFifty = [...Array.from({ length: 3 }, () => -0.2), ...Array.from({ length: 247 }, () => 0.001)];
@@ -193,7 +197,7 @@ describe("estimateDailyPairVaR", () => {
     expect(twoFiftyResult.sampleCount).toBe(250);
     expect(twoFiftyResult.var95.available).toBe(true);
     expect(twoFiftyResult.var99.available).toBe(true);
-    expect(twoFiftyResult.var99.value).toBeCloseTo(10, 10);
+    expect(twoFiftyResult.var99.value).toBeCloseTo(20, 10);
   });
 
   test("rejects non-100 observation samples with the count reported", () => {
@@ -254,36 +258,34 @@ describe("estimateDailyPairVaR", () => {
     expect(result.var99.value).toBe(0);
   });
 
-  test("the daily rebalanced ratio proxy differs from entry-fixed quantities after drift", () => {
+  test("the daily leg1-notional proxy differs from entry-fixed quantities after drift", () => {
     // Leg1 alternates +10%/-10%, leg2 the mirror -10%/+10% for 100 daily
     // transitions. With beta = 1 the odd transitions have simple returns
-    // (r1 = -0.10, r2 = +0.10), so the documented daily ratio proxy is
-    // (r1 - beta*r2)/(1+beta) = (-0.10 - 0.10)/2 = -0.10 on each of those 50
-    // days (the other 50 are +0.10). floor((100 - 1) * 0.05) = index 4, which
-    // is one of the -0.10 values, so var95 reports the hand-computed 10% day-2
-    // proxy magnitude.
+    // With beta = 2, an odd transition (r1 = -0.10, r2 = +0.10) has proxy
+    // r1 - beta*r2 = -0.30. floor((100 - 1) * 0.05) = index 4 selects a
+    // negative sample, so VaR95 reports the 30% leg1-notional proxy magnitude.
     const firstReturns = Array.from({ length: 100 }, (_, index) => (index % 2 === 0 ? 0.1 : -0.1));
     const secondReturns = Array.from({ length: 100 }, (_, index) => (index % 2 === 0 ? -0.1 : 0.1));
     const points = pairPoints(firstReturns, secondReturns, 100, 100, DAY_MS);
 
-    const proxy = estimateDailyPairVaR(points, 1, DAY_MS);
+    const proxy = estimateDailyPairVaR(points, 2, DAY_MS);
     expect(proxy.sampleCount).toBe(100);
     expect(proxy.var95.available).toBe(true);
-    expect(proxy.var95.value).toBeCloseTo(10, 10);
+    expect(proxy.var95.value).toBeCloseTo(30, 10);
 
-    // Fixed-token pair trade from the first close: day 1 is +20%, day 2 back to
-    // flat 0% (both legs return to 99), so the day-2 incremental change is -20%.
-    const trade = calculatePairTradeSeries(points, 1, 10_000);
+    // Fixed-token trade has leg2 sized at beta=2: day 1 is +30%; after both
+    // prices return to 99, total trade return is +1%, a -29% incremental move.
+    const trade = calculatePairTradeSeries(points, 2, 10_000);
     expect(trade.available).toBe(true);
     const day1 = trade.value!.points[1].returnPercent!;
     const day2 = trade.value!.points[2].returnPercent!;
-    expect(day1).toBeCloseTo(20, 8);
-    expect(day2).toBeCloseTo(0, 8);
-    const fixedDailyChange = day2 - day1; // -20%
-    expect(fixedDailyChange).toBeCloseTo(-20, 8);
+    expect(day1).toBeCloseTo(30, 8);
+    expect(day2).toBeCloseTo(1, 8);
+    const fixedDailyChange = day2 - day1; // -29%
+    expect(fixedDailyChange).toBeCloseTo(-29, 8);
 
-    // The two paths do not coincide once prices drift: the 10% rebalanced ratio
-    // proxy is not the 20% fixed-quantity daily change.
+    // The paths remain distinct once prices drift: 30% proxy loss vs -29%
+    // incremental fixed-quantity PnL.
     expect(Math.abs(fixedDailyChange)).not.toBeCloseTo(proxy.var95.value!, 8);
   });
 
@@ -307,7 +309,7 @@ describe("estimateDailyPairVaR", () => {
     const complete = estimateDailyPairVaR(points, 1, DAY_MS, exactLastClose);
     expect(complete.sampleCount).toBe(100);
     expect(complete.var95.available).toBe(true);
-    expect(complete.var95.value).toBeCloseTo(10, 10);
+    expect(complete.var95.value).toBeCloseTo(20, 10);
   });
 
   test("rejects a non-finite as-of timestamp instead of risking lookahead", () => {
@@ -328,5 +330,226 @@ describe("estimateDailyPairVaR", () => {
     expect(result.sampleCount).toBe(298);
     expect(result.var95.available).toBe(true);
     expect(result.var99.available).toBe(true);
+  });
+});
+
+describe("estimatePairHistoricalVolatility", () => {
+  test("uses sample standard deviation relative to leg1 notional", () => {
+    const points = pairPoints([0.1, -0.1, 0.05], [0, 0, 0], 100, 50, INTERVAL);
+    const result = estimatePairHistoricalVolatility(points, 1, INTERVAL, 4 * INTERVAL);
+    const proxyReturns = [0.1, -0.1, 0.05];
+    const mean = proxyReturns.reduce((sum, value) => sum + value, 0) / proxyReturns.length;
+    const sampleStdDev = Math.sqrt(proxyReturns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (proxyReturns.length - 1));
+    expect(result.sampleCount).toBe(3);
+    expect(result.annualizedPercent.available).toBe(true);
+    expect(result.annualizedPercent.value).toBeCloseTo(sampleStdDev * Math.sqrt(YEAR_MS / INTERVAL) * 100, 10);
+  });
+
+  test("beta other than one changes the numerator without gross-notional division", () => {
+    const firstReturns = [0.1, -0.1, 0.05];
+    const secondReturns = [0.01, 0.02, -0.03];
+    const beta = 3;
+    const points = pairPoints(firstReturns, secondReturns, 100, 50, INTERVAL);
+    const result = estimatePairHistoricalVolatility(points, beta, INTERVAL, 4 * INTERVAL);
+    const proxyReturns = firstReturns.map((value, index) => value - beta * secondReturns[index]);
+    const mean = proxyReturns.reduce((sum, value) => sum + value, 0) / proxyReturns.length;
+    const sampleStdDev = Math.sqrt(proxyReturns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (proxyReturns.length - 1));
+    const expected = sampleStdDev * Math.sqrt(YEAR_MS / INTERVAL) * 100;
+    const priorGrossNormalizedValue = expected / (1 + beta);
+    expect(result.annualizedPercent.value).toBeCloseTo(expected, 8);
+    expect(result.annualizedPercent.value).not.toBeCloseTo(priorGrossNormalizedValue, 8);
+  });
+
+  test("cancels identical leg returns at beta one and reports valid zero volatility", () => {
+    const points = pairPoints([0.1, -0.05], [0.1, -0.05], 100, 50, INTERVAL);
+    const result = estimatePairHistoricalVolatility(points, 1, INTERVAL, 3 * INTERVAL);
+    expect(result.sampleCount).toBe(2);
+    expect(result.annualizedPercent).toEqual({ available: true, value: 0, reason: null });
+  });
+
+  test("annualizes using the actual supported cadence", () => {
+    const points = pairPoints([0, 0.02], [0, 0], 100, 50, 60 * 60_000);
+    const hourly = estimatePairHistoricalVolatility(points, 1, 60 * 60_000, 3 * 60 * 60_000);
+    const dailyPointsForSameReturns = pairPoints([0, 0.02], [0, 0], 100, 50, DAY_MS);
+    const daily = estimatePairHistoricalVolatility(dailyPointsForSameReturns, 1, DAY_MS, 3 * DAY_MS);
+    expect(hourly.annualizedPercent.value).toBeCloseTo((0.02 / Math.sqrt(2)) * Math.sqrt(YEAR_MS / (60 * 60_000)) * 100, 8);
+    expect(hourly.annualizedPercent.value! / daily.annualizedPercent.value!).toBeCloseTo(Math.sqrt(24), 8);
+  });
+
+  test("excludes active candles at the exact completion boundary", () => {
+    const points = pairPoints([0.1, -0.1], [0, 0], 100, 50, INTERVAL);
+    const justBeforeClose = estimatePairHistoricalVolatility(points, 1, INTERVAL, 3 * INTERVAL - 1);
+    const atClose = estimatePairHistoricalVolatility(points, 1, INTERVAL, 3 * INTERVAL);
+    expect(justBeforeClose.sampleCount).toBe(1);
+    expect(justBeforeClose.annualizedPercent.reason).toBe("insufficient-returns");
+    expect(atClose.sampleCount).toBe(2);
+    expect(atClose.annualizedPercent.available).toBe(true);
+  });
+
+  test("does not bridge gaps, missing timestamps, or invalid closes", () => {
+    const base = pairPoints([0.01, 0.02, 0.03], [0, 0, 0], 100, 50, INTERVAL);
+    const gap = base.filter((_, index) => index !== 2);
+    expect(estimatePairHistoricalVolatility(gap, 1, INTERVAL, 10 * INTERVAL).sampleCount).toBe(1);
+    const badTime = base.map((point, index) => index === 2 ? { ...point, closeTime: Number.NaN } : point);
+    expect(estimatePairHistoricalVolatility(badTime, 1, INTERVAL, 10 * INTERVAL).sampleCount).toBe(1);
+    const badClose = base.map((point, index) => index === 2 ? { ...point, firstClose: 0 } : point);
+    expect(estimatePairHistoricalVolatility(badClose, 1, INTERVAL, 10 * INTERVAL).sampleCount).toBe(1);
+  });
+
+  test("rejects invalid beta, cadence and as-of values", () => {
+    const points = pairPoints([0.01, 0.02], [0, 0]);
+    for (const beta of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY] as const) {
+      expect(estimatePairHistoricalVolatility(points, beta, INTERVAL, 10 * INTERVAL).annualizedPercent.reason).toBe("invalid-beta");
+    }
+    for (const interval of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(estimatePairHistoricalVolatility(points, 1, interval, 10 * INTERVAL).annualizedPercent.reason).toBe("invalid-interval");
+    }
+    for (const asOf of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(estimatePairHistoricalVolatility(points, 1, INTERVAL, asOf).annualizedPercent.reason).toBe("invalid-as-of");
+    }
+  });
+
+  test("requires two valid returns and reports arithmetic overflow", () => {
+    expect(estimatePairHistoricalVolatility(pairPoints([0.1], [0], 100, 50), 1, INTERVAL, 10 * INTERVAL).annualizedPercent.reason).toBe("insufficient-returns");
+    const overflow: AlignedPairClose[] = [
+      { closeTime: 0, firstClose: 1e-308, secondClose: 1 },
+      { closeTime: INTERVAL, firstClose: 1e308, secondClose: 1 },
+      { closeTime: 2 * INTERVAL, firstClose: 1, secondClose: 1 },
+    ];
+    expect(estimatePairHistoricalVolatility(overflow, 1, INTERVAL, 10 * INTERVAL).annualizedPercent.reason).toBe("non-finite-volatility");
+  });
+
+  test("rejects variance and annualization overflow", () => {
+    const varianceOverflow: AlignedPairClose[] = [
+      { closeTime: 0, firstClose: 1, secondClose: 1 },
+      { closeTime: INTERVAL, firstClose: 1e200, secondClose: 1 },
+      { closeTime: 2 * INTERVAL, firstClose: 1, secondClose: 1 },
+    ];
+    expect(estimatePairHistoricalVolatility(varianceOverflow, 1, INTERVAL, 10 * INTERVAL).annualizedPercent.reason).toBe("non-finite-volatility");
+
+    const tinyInterval = Number.MIN_VALUE;
+    const tinyCadence: AlignedPairClose[] = [
+      { closeTime: 0, firstClose: 100, secondClose: 50 },
+      { closeTime: tinyInterval, firstClose: 101, secondClose: 50 },
+      { closeTime: 2 * tinyInterval, firstClose: 100, secondClose: 50 },
+    ];
+    expect(estimatePairHistoricalVolatility(tinyCadence, 1, tinyInterval, 3 * tinyInterval).annualizedPercent.reason).toBe("non-finite-volatility");
+  });
+
+  test("normalizes unsorted, duplicate and invalid points consistently", () => {
+    const canonical = pairPoints([0.03, -0.02], [0.01, 0], 100, 50, DAY_MS);
+    const normalizedEquivalent: AlignedPairClose[] = [
+      canonical[2],
+      { ...canonical[1], firstClose: 103 }, // last valid observation at this timestamp wins
+      { closeTime: DAY_MS, firstClose: 0, secondClose: 50 }, // invalid rows do not replace valid duplicates
+      canonical[0],
+      { closeTime: Number.NaN, firstClose: 100, secondClose: 50 },
+    ];
+    const clean = estimatePairHistoricalVolatility(canonical, 2, DAY_MS, 3 * DAY_MS);
+    const normalized = estimatePairHistoricalVolatility(normalizedEquivalent, 2, DAY_MS, 3 * DAY_MS);
+    expect(normalized.sampleCount).toBe(clean.sampleCount);
+    expect(normalized.annualizedPercent.value).toBeCloseTo(clean.annualizedPercent.value!, 10);
+  });
+});
+
+const YEAR_MS = 365 * DAY_MS;
+
+describe("fit-window-scoped risk estimates", () => {
+  const asOf = 161 * DAY_MS;
+  const variedDailyPoints = () => {
+    const secondReturns = Array.from({ length: 160 }, (_, index) => ((index % 5) - 2) * 0.01);
+    const firstReturns = secondReturns.map((secondReturn, index) => (
+      0.002 + 2 * secondReturn + (index % 2 === 0 ? -0.01 : 0.01)
+    ));
+    return pairPoints(firstReturns, secondReturns, 1000, 500, DAY_MS);
+  };
+
+  test("short selected fit suppresses VaR while the full preset has enough samples", () => {
+    const points = variedDailyPoints();
+    const full = selectPairFitWindow(points, { mode: "all" });
+    const short = selectPairFitWindow(points, { mode: "custom", startTime: 110 * DAY_MS, endTime: 160 * DAY_MS });
+    expect(full.available).toBe(true);
+    expect(short.available).toBe(true);
+    const fullVar = estimateDailyPairVaR(full.value!.points, 3, DAY_MS, asOf);
+    const shortVar = estimateDailyPairVaR(short.value!.points, 3, DAY_MS, asOf);
+    expect(fullVar.sampleCount).toBe(160);
+    expect(fullVar.var95.available).toBe(true);
+    expect(shortVar.sampleCount).toBe(50);
+    expect(shortVar.var95.available).toBe(false);
+    expect(shortVar.var95.reason).toBe("insufficient-daily-returns");
+    expect(estimatePairHistoricalVolatility(short.value!.points, 3, DAY_MS, asOf).sampleCount).toBe(50);
+  });
+
+  test("longer selected windows change sample counts and risk values", () => {
+    const points = dailyPoints([
+      ...Array.from({ length: 40 }, () => -0.02),
+      ...Array.from({ length: 120 }, () => 0.01),
+    ]);
+    const shorter = selectPairFitWindow(points, { mode: "custom", startTime: 50 * DAY_MS, endTime: 160 * DAY_MS });
+    const longer = selectPairFitWindow(points, { mode: "custom", startTime: 20 * DAY_MS, endTime: 160 * DAY_MS });
+    const shortVar = estimateDailyPairVaR(shorter.value!.points, 1, DAY_MS, asOf);
+    const longVar = estimateDailyPairVaR(longer.value!.points, 1, DAY_MS, asOf);
+    const shortVol = estimatePairHistoricalVolatility(shorter.value!.points, 1, DAY_MS, asOf);
+    const longVol = estimatePairHistoricalVolatility(longer.value!.points, 1, DAY_MS, asOf);
+    expect(shortVar.sampleCount).toBe(110);
+    expect(longVar.sampleCount).toBe(140);
+    expect(shortVar.var95.value).toBe(0);
+    expect(longVar.var95.value).toBeCloseTo(2, 10);
+    expect(shortVol.sampleCount).toBe(110);
+    expect(longVol.sampleCount).toBe(140);
+    expect(shortVol.annualizedPercent.value).toBe(0);
+    expect(longVol.annualizedPercent.value).toBeGreaterThan(0);
+  });
+
+  test("does not include the return straddling fit start and applies custom beta", () => {
+    const points = variedDailyPoints();
+    const selected = selectPairFitWindow(points, { mode: "custom", startTime: 40 * DAY_MS, endTime: 160 * DAY_MS });
+    expect(selected.available).toBe(true);
+    const fitPoints = selected.value!.points;
+    const estimate = estimateSimpleReturnRegression(fitPoints, DAY_MS);
+    expect(estimate.available).toBe(true);
+    expect(estimate.value!.beta).toBeCloseTo(2, 8);
+
+    const customBeta = 3;
+    const varResult = estimateDailyPairVaR(fitPoints, customBeta, DAY_MS, asOf);
+    const volatilityResult = estimatePairHistoricalVolatility(fitPoints, customBeta, DAY_MS, asOf);
+    const selectedReturns = [
+      ...Array.from({ length: 120 }, (_, offset) => {
+        const index = 40 + offset;
+        const r2 = ((index % 5) - 2) * 0.01;
+        return 0.002 + 2 * r2 + (index % 2 === 0 ? -0.01 : 0.01) - customBeta * r2;
+      }),
+    ];
+    const sorted = [...selectedReturns].sort((a, b) => a - b);
+    const expectedVaR95 = Math.max(0, -sorted[Math.floor((sorted.length - 1) * 0.05)]) * 100;
+    const mean = selectedReturns.reduce((sum, value) => sum + value, 0) / selectedReturns.length;
+    const expectedVolatility = Math.sqrt(selectedReturns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (selectedReturns.length - 1)) * Math.sqrt(YEAR_MS / DAY_MS) * 100;
+    expect(varResult.sampleCount).toBe(120); // transition from day 39 to day 40 is outside the selected points
+    expect(varResult.var95.value).toBeCloseTo(expectedVaR95, 8);
+    expect(volatilityResult.sampleCount).toBe(120);
+    expect(volatilityResult.annualizedPercent.value).toBeCloseTo(expectedVolatility, 8);
+    expect(volatilityResult.annualizedPercent.value).not.toBeCloseTo(
+      estimatePairHistoricalVolatility(fitPoints, estimate.value!.beta, DAY_MS, asOf).annualizedPercent.value!,
+      8,
+    );
+  });
+
+  test("invalid and empty fit selections do not fall back to full-series risk", () => {
+    const points = dailyPoints(Array.from({ length: 160 }, (_, index) => index % 2 === 0 ? -0.02 : 0.01));
+    const unavailableFit = selectPairFitWindow(points, { mode: "custom", startTime: 10 * DAY_MS + 1, endTime: 160 * DAY_MS });
+    const emptyFit = selectPairFitWindow(points, { mode: "custom", startTime: 160 * DAY_MS, endTime: 0 });
+    expect(unavailableFit.available).toBe(false);
+    expect(emptyFit.available).toBe(false);
+    const fullRisk = estimateDailyPairVaR(points, 1, DAY_MS, asOf);
+    expect(fullRisk.var95.available).toBe(true);
+    for (const failedFit of [unavailableFit, emptyFit]) {
+      const fitPoints = failedFit.available ? failedFit.value!.points : [];
+      const risk = estimateDailyPairVaR(fitPoints, 1, DAY_MS, asOf);
+      const volatility = estimatePairHistoricalVolatility(fitPoints, 1, DAY_MS, asOf);
+      expect(risk.sampleCount).toBe(0);
+      expect(risk.var95.reason).toBe("insufficient-daily-returns");
+      expect(volatility.sampleCount).toBe(0);
+      expect(volatility.annualizedPercent.reason).toBe("insufficient-returns");
+    }
   });
 });

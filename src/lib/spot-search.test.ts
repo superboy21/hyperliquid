@@ -85,13 +85,33 @@ describe("spot search contracts", () => {
     expect(rows[2]).toMatchObject({ pair: "ETH/USD1", baseAsset: "ETH", quoteAsset: "USD1", rawSymbol: "ETHUSD1" });
   });
 
-  test("uses close-to-close sample variance annualized by sqrt(365)", () => {
+  test("uses simple close-to-close sample variance annualized by sqrt(365)", () => {
     const closes = [100, 110, 99].map((close) => ({ close: String(close) }));
-    const returns = [Math.log(1.1), Math.log(0.9)];
+    const returns = [0.1, -0.1];
     const mean = (returns[0] + returns[1]) / 2;
     const expected = Math.sqrt(((returns[0] - mean) ** 2 + (returns[1] - mean) ** 2) / 1) * Math.sqrt(365) * 100;
     expect(calculateSpotHistoricalVolatility(closes)).toBeCloseTo(expected, 12);
     expect(calculateSpotHistoricalVolatility(closes.slice(0, 2))).toBeNull();
+  });
+
+  test("distinguishes simple-return volatility from log-return volatility on large moves", () => {
+    const closes = [100, 200, 100].map((close) => ({ close: String(close) }));
+    const simpleReturns = [1, -0.5];
+    const mean = (simpleReturns[0] + simpleReturns[1]) / 2;
+    const expected = Math.sqrt(((simpleReturns[0] - mean) ** 2 + (simpleReturns[1] - mean) ** 2)) * Math.sqrt(365) * 100;
+    const priorLogResult = Math.sqrt(2) * Math.log(2) * Math.sqrt(365) * 100;
+    const actual = calculateSpotHistoricalVolatility(closes);
+    expect(actual).toBeCloseTo(expected, 10);
+    expect(actual).not.toBeCloseTo(priorLogResult, 5);
+  });
+
+  test("reports zero for constant simple returns and preserves invalid-price filtering", () => {
+    const constantReturn = [100, 110, 121, 133.1].map((close) => ({ close: String(close) }));
+    expect(calculateSpotHistoricalVolatility(constantReturn)).toBeCloseTo(0, 10);
+    const withInvalid = [100, 0, Number.NaN, 110, 121].map((close) => ({ close: String(close) }));
+    // Invalid closes are filtered as before, leaving two consecutive 10% simple returns.
+    expect(calculateSpotHistoricalVolatility(withInvalid)).toBeCloseTo(0, 10);
+    expect(calculateSpotHistoricalVolatility([{ close: "100" }, { close: "110" }])).toBeNull();
   });
 
   test("normalizes Bybit V5 spot tickers, keeping only known-quote markets and decomposing BTCUSDT exactly", () => {

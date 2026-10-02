@@ -77,6 +77,7 @@ export interface SearchExchangeRate {
   // Detail fields (loaded progressively)
   lastSettlementRate?: number | null;
   avgFundingRate2d?: number | null;
+  /** Annualized sample volatility from daily simple close-to-close returns, in percent. */
   historicalVolatility?: number | null;
   bidAskSpread?: number | null;
   avgFundingRate7d?: number | null;
@@ -88,6 +89,7 @@ export interface SearchExchangeRate {
 export interface DetailResult {
   lastSettlementRate: number | null;
   avgFundingRate2d: number | null;
+  /** Annualized sample volatility from daily simple close-to-close returns, in percent. */
   historicalVolatility: number | null;
   bidAskSpread: number | null;
   bestBid?: number;
@@ -194,15 +196,24 @@ function getAverageFundingRatesByInterval(
 
 // ==================== Volatility Calculation ====================
 
-function computeHistoricalVolatility(
-  candles: Array<{ close: string }>,
+/**
+ * Table-row daily simple-return volatility, annualized by sqrt(365) and shown
+ * in percent. A transition contributes only when both adjacent closes are
+ * finite and strictly positive; invalid closes break neighboring transitions
+ * rather than being removed and bridged. Non-finite returns/results are skipped
+ * or unavailable so malformed candle data cannot publish a non-finite metric.
+ */
+export function calculateSearchHistoricalVolatility(
+  candles: readonly { close: string }[],
 ): number | null {
   if (candles.length < 2) return null;
   const closes = candles.map((c) => Number(c.close));
   const returns: number[] = [];
   for (let i = 1; i < closes.length; i++) {
-    if (closes[i - 1] > 0) {
-      returns.push(Math.log(closes[i] / closes[i - 1]));
+    if (Number.isFinite(closes[i - 1]) && closes[i - 1] > 0
+      && Number.isFinite(closes[i]) && closes[i] > 0) {
+      const simpleReturn = closes[i] / closes[i - 1] - 1;
+      if (Number.isFinite(simpleReturn)) returns.push(simpleReturn);
     }
   }
   if (returns.length < 2) return null;
@@ -210,7 +221,8 @@ function computeHistoricalVolatility(
   const variance = returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (returns.length - 1);
   const periodVolatility = Math.sqrt(variance);
   const periodsPerYear = 365;
-  return periodVolatility * Math.sqrt(periodsPerYear) * 100;
+  const annualizedPercent = periodVolatility * Math.sqrt(periodsPerYear) * 100;
+  return Number.isFinite(annualizedPercent) ? annualizedPercent : null;
 }
 
 // ==================== Bid-Ask Spread Calculation ====================
@@ -735,7 +747,7 @@ async function fetchBitgetDetail(
     time: item.timestamp,
     fundingRate: String(item.fundingRate),
   }));
-  const historicalVolatility = computeHistoricalVolatility(detail.candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(detail.candles);
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, rate.fundingInterval, nowMs, {
     requireWindowCoverage: true,
   });
@@ -771,7 +783,7 @@ async function fetchBybitDetail(
     time: item.timestamp,
     fundingRate: String(item.fundingRate),
   }));
-  const historicalVolatility = computeHistoricalVolatility(detail.candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(detail.candles);
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, rate.fundingInterval, nowMs, {
     requireWindowCoverage: true,
   });
@@ -804,7 +816,7 @@ async function fetchHyperliquidDetail(
 
   throwIfAborted(signal);
 
-  const historicalVolatility = computeHistoricalVolatility(candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(candles);
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, 3600, nowMs, {
     requireWindowCoverage: true,
   });
@@ -838,7 +850,7 @@ async function fetchGateioDetail(
     time: item.timestamp,
     fundingRate: String(item.fundingRate),
   }));
-  const historicalVolatility = computeHistoricalVolatility(candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(candles);
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, fundingIntervalSeconds, nowMs, {
     requireWindowCoverage: true,
   });
@@ -869,7 +881,7 @@ async function fetchBinanceDetail(
     time: item.timestamp,
     fundingRate: String(item.fundingRate),
   }));
-  const historicalVolatility = computeHistoricalVolatility(candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(candles);
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, fundingIntervalSeconds, nowMs, {
     requireWindowCoverage: true,
   });
@@ -903,7 +915,7 @@ async function fetchOkxDetail(
       fundingRate: String(item.fundingRate),
     }));
   const candles = detail.candles.map((item) => ({ close: item.close }));
-  const historicalVolatility = computeHistoricalVolatility(candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(candles);
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, fundingIntervalSeconds, nowMs, {
     requireWindowCoverage: true,
   });
@@ -1085,7 +1097,7 @@ if (resolvedMarketId === null) {
 
   throwIfAborted(signal);
 
-  const historicalVolatility = computeHistoricalVolatility(candles);
+  const historicalVolatility = calculateSearchHistoricalVolatility(candles);
   // Lighter's history is hourly percentage points; keep the legacy hourly
   // reference unit used by its UI/strategy consumers.
   const { avg2d, avg7d, avg30d } = computeAvgFundingRates(fundingHistory, 3600, nowMs, {

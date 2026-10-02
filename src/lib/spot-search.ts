@@ -36,6 +36,7 @@ export interface SpotMarketRow {
 }
 
 export interface SpotDetailResult {
+  /** Annualized sample volatility from daily simple close-to-close returns, in percent. */
   historicalVolatility: number | null;
   topSpread: number | null;
   topSpreadSource: SpotTopSpreadSource | null;
@@ -381,11 +382,14 @@ export async function fetchAllSpotMarkets(signal?: AbortSignal): Promise<SpotMar
 export function calculateSpotHistoricalVolatility(candles: readonly Pick<SpotCandlePoint, "close">[]): number | null {
   const closes = candles.map((candle) => Number(candle.close)).filter((close) => Number.isFinite(close) && close > 0);
   if (closes.length < 3) return null;
-  const returns = closes.slice(1).map((close, index) => Math.log(close / closes[index]));
+  const returns = closes.slice(1)
+    .map((close, index) => close / closes[index] - 1)
+    .filter(Number.isFinite);
   if (returns.length < 2) return null;
   const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
   const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (returns.length - 1);
-  return Math.sqrt(variance) * Math.sqrt(365) * 100;
+  const annualizedPercent = Math.sqrt(variance) * Math.sqrt(365) * 100;
+  return Number.isFinite(annualizedPercent) ? annualizedPercent : null;
 }
 
 export const computeSpotHistoricalVolatility = calculateSpotHistoricalVolatility;

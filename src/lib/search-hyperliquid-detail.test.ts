@@ -3,6 +3,7 @@ import { fetchDetailForSymbol, type SearchExchangeRate } from "./search";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
+const simpleReturnVolatility = Math.sqrt(1.125) * Math.sqrt(365) * 100;
 
 function rate(): SearchExchangeRate {
   return {
@@ -40,7 +41,13 @@ describe("Hyperliquid detail funding coverage", () => {
         }
         return Response.json(history);
       }
-      if (body.type === "candleSnapshot") return Response.json([]);
+      if (body.type === "candleSnapshot") {
+        return Response.json([
+          { t: 0, T: DAY - 1, s: "BTC", i: "1d", o: "100", h: "200", l: "100", c: "100", v: "1", n: 1 },
+          { t: DAY, T: 2 * DAY - 1, s: "BTC", i: "1d", o: "100", h: "200", l: "100", c: "200", v: "1", n: 1 },
+          { t: 2 * DAY, T: 3 * DAY - 1, s: "BTC", i: "1d", o: "200", h: "200", l: "100", c: "100", v: "1", n: 1 },
+        ]);
+      }
       if (body.type === "l2Book") {
         return Response.json({ levels: [[{ px: "99", sz: "1", n: 1 }], [{ px: "101", sz: "1", n: 1 }]] });
       }
@@ -56,6 +63,7 @@ describe("Hyperliquid detail funding coverage", () => {
       expect(result.avgFundingRate2d).not.toBeNull();
       expect(result.avgFundingRate7d).not.toBeNull();
       expect(result.avgFundingRate30d).not.toBeNull();
+      expect(result.historicalVolatility).toBeCloseTo(simpleReturnVolatility, 10);
     } finally {
       globalThis.fetch = originalFetch;
       clock.mockRestore();

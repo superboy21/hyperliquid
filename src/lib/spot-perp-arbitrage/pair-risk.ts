@@ -33,6 +33,7 @@ const MIN_DAILY_RETURNS_99 = 100;
 
 /** UTC daily candle spacing (aligned by open time). */
 const DAILY_INTERVAL_MS = 86_400_000;
+const YEAR_MS = 365 * DAILY_INTERVAL_MS;
 
 const VAR_95_QUANTILE = 0.05;
 const VAR_99_QUANTILE = 0.01;
@@ -52,6 +53,12 @@ export interface DailyPairVaR {
   sampleCount: number;
   var95: StatResult<number>;
   var99: StatResult<number>;
+}
+
+/** Historical annualized volatility of the pair proxy relative to leg1 notional. */
+export interface PairHistoricalVolatility {
+  sampleCount: number;
+  annualizedPercent: StatResult<number>;
 }
 
 function unavailable<T>(reason: string): StatResult<T> {
@@ -127,7 +134,7 @@ export function estimateSimpleReturnRegression(
 }
 
 /**
- * Estimates historical lower-tail daily VaR for the daily ratio proxy of a
+ * Estimates historical lower-tail daily VaR for the daily leg1-notional proxy of a
  * two-leg pair.
  *
  * `AlignedPairClose.closeTime` is the candle OPEN timestamp while the close
@@ -140,20 +147,22 @@ export function estimateSimpleReturnRegression(
  *
  * Only consecutive daily closes one UTC day apart are used; a missing day skips
  * that transition (no bridging), and non-finite or invalid closes are skipped.
- * For each accepted transition the two-leg return is
- * `(r1 - beta * r2) / (1 + beta)`, i.e. the leg1 simple return minus β times the
- * leg2 simple return, divided by the gross notional `1 + beta`.
+ * For each accepted transition the two-leg return proxy is
+ * `(r1 - beta * r2) / 1`: leg1 return minus β times leg2 return, expressed
+ * relative to leg1's initial/reference notional. The 1:β reference exposures
+ * are re-established for each period, but the denominator is leg1 notional
+ * only—not total gross notional, margin, or account equity.
  *
- * That ratio assumes the 1:β INITIAL NOTIONAL ratio is re-established every
+ * This proxy assumes the 1:β INITIAL NOTIONAL ratio is re-established every
  * historical day before the next close, so each day's leg2 exposure is sized to
- * the current leg1 value rather than to a frozen token count. It is therefore a
- * per-day ratio/notional risk proxy, deliberately distinct from the pair-trade
- * PnL path (calculatePairTradeSeries), which holds quantities fixed from a
- * single entry and lets the 1:β notional ratio drift as prices move. The two
- * do not coincide once prices drift, and this function makes no attempt to model
- * a fixed-token position. No execution, rebalancing, fee or funding cost is
- * applied, and the result is neither a guaranteed nor a conservative bound: it
- * is a descriptive historical sample quantile of that ratio proxy.
+ * the current leg1 value rather than to a frozen token count. It is deliberately
+ * distinct from the pair-trade PnL path (calculatePairTradeSeries), which holds
+ * quantities fixed from a single entry and lets the 1:β notional ratio drift as
+ * prices move. The two do not coincide once prices drift, and this function
+ * makes no attempt to model a fixed-token position. No execution, fee or funding
+ * costs are modeled, and the result is neither a guaranteed nor a conservative
+ * bound: it is a descriptive historical sample quantile of that leg1-notional
+ * proxy.
  *
  * The reported value is the positive loss magnitude in percent,
  * `max(0, -quantile) * 100`, with a documented deterministic lower-tail index
@@ -163,7 +172,7 @@ export function estimateSimpleReturnRegression(
  * `daily-interval-required`; a null, non-finite or non-positive beta is
  * rejected with `invalid-beta`; a non-finite `asOfMs` is rejected with
  * `invalid-as-of`; each percentile below the shared 100-observation gate is
- * rejected with `insufficient-daily-returns`. Estimates are gross of
+ * rejected with `insufficient-daily-returns`. Estimates exclude
  * rebalancing, fees and funding and are historical descriptions, not a
  * guarantee of future losses.
  */
@@ -180,7 +189,6 @@ export function estimateDailyPairVaR(
 
   if (daily && validAsOf && validBeta) {
     const hedge = beta as number;
-    const grossNotional = 1 + hedge;
     const cleaned = normalizeAlignedPairCloses(points);
     for (let index = 1; index < cleaned.length; index += 1) {
       const previous = cleaned[index - 1];
@@ -194,7 +202,7 @@ export function estimateDailyPairVaR(
       const firstReturn = current.firstClose / previous.firstClose - 1;
       const secondReturn = current.secondClose / previous.secondClose - 1;
       if (!Number.isFinite(firstReturn) || !Number.isFinite(secondReturn)) continue;
-      const netReturn = (firstReturn - hedge * secondReturn) / grossNotional;
+      const netReturn = firstReturn - hedge * secondReturn;
       if (!Number.isFinite(netReturn)) continue;
       netReturns.push(netReturn);
     }
@@ -217,4 +225,75 @@ export function estimateDailyPairVaR(
     var95: gate(MIN_DAILY_RETURNS_95, VAR_95_QUANTILE),
     var99: gate(MIN_DAILY_RETURNS_99, VAR_99_QUANTILE),
   };
+}
+
+/**
+ * Estimates annualized sample volatility of `(r1 - beta * r2) / 1`, relative
+ * to leg1's initial/reference notional (not total gross notional, margin, or
+ * account equity). The 1:β reference exposures are re-established each period,
+ * unlike the fixed-quantity pair-trade PnL scenario.
+ * Only adjacent, completed candles at precisely `intervalMs` spacing contribute;
+ * normalization follows the pair-statistics policy (invalid prices/times are
+ * dropped, duplicate timestamps keep the last point, and output is time-sorted).
+ */
+export function estimatePairHistoricalVolatility(
+  points: readonly AlignedPairClose[],
+  beta: number | null,
+  intervalMs: number,
+  asOfMs: number = Date.now(),
+): PairHistoricalVolatility {
+  const validInterval = Number.isFinite(intervalMs) && intervalMs > 0;
+  const validBeta = beta !== null && Number.isFinite(beta) && beta > 0;
+  const validAsOf = Number.isFinite(asOfMs);
+  let reason: string | null = null;
+  if (!validInterval) reason = "invalid-interval";
+  else if (!validBeta) reason = "invalid-beta";
+  else if (!validAsOf) reason = "invalid-as-of";
+  if (reason !== null) {
+    return { sampleCount: 0, annualizedPercent: unavailable(reason) };
+  }
+
+  const hedge = beta as number;
+  const cleaned = normalizeAlignedPairCloses(points);
+  const returns: number[] = [];
+  for (let index = 1; index < cleaned.length; index += 1) {
+    const previous = cleaned[index - 1];
+    const current = cleaned[index];
+    if (current.closeTime - previous.closeTime !== intervalMs) continue;
+    // closeTime is the candle OPEN time; the transition is usable only after
+    // both bars have completed. Equality is the exact close boundary.
+    if (previous.closeTime + intervalMs > asOfMs! || current.closeTime + intervalMs > asOfMs!) continue;
+    const firstReturn = current.firstClose / previous.firstClose - 1;
+    const secondReturn = current.secondClose / previous.secondClose - 1;
+    const proxyReturn = firstReturn - hedge * secondReturn;
+    if (!Number.isFinite(firstReturn) || !Number.isFinite(secondReturn) || !Number.isFinite(proxyReturn)) {
+      return { sampleCount: returns.length, annualizedPercent: unavailable("non-finite-volatility") };
+    }
+    returns.push(proxyReturn);
+  }
+
+  const sampleCount = returns.length;
+  if (sampleCount < 2) {
+    return { sampleCount, annualizedPercent: unavailable("insufficient-returns") };
+  }
+
+  // Welford's online algorithm avoids the cancellation-prone E[x²] - E[x]²
+  // form and bounds intermediate variance calculations for ordinary returns.
+  let mean = 0;
+  let sumSquaredDeviations = 0;
+  for (let index = 0; index < returns.length; index += 1) {
+    const delta = returns[index] - mean;
+    mean += delta / (index + 1);
+    sumSquaredDeviations += delta * (returns[index] - mean);
+    if (!Number.isFinite(mean) || !Number.isFinite(sumSquaredDeviations)) {
+      return { sampleCount, annualizedPercent: unavailable("non-finite-volatility") };
+    }
+  }
+  const sampleVariance = sumSquaredDeviations / (sampleCount - 1);
+  const annualization = Math.sqrt(YEAR_MS / intervalMs);
+  const annualizedPercent = Math.sqrt(sampleVariance) * annualization * 100;
+  if (!Number.isFinite(sampleVariance) || sampleVariance < 0 || !Number.isFinite(annualization) || !Number.isFinite(annualizedPercent)) {
+    return { sampleCount, annualizedPercent: unavailable("non-finite-volatility") };
+  }
+  return { sampleCount, annualizedPercent: available(annualizedPercent) };
 }

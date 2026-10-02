@@ -15,7 +15,7 @@ import type { CombinationViewMode, CombinationWeights } from "@/lib/combo-weight
 import { formatChartTimeSelection, type ChartTimeSelection } from "@/lib/spot-perp-arbitrage/chart-time-selection";
 import { formatChartDateTime, type ChartTimeZone } from "@/lib/chart-timezone";
 import type { PairAnalysis, PairModelEstimate, StatResult } from "@/lib/spot-perp-arbitrage/pair-statistics";
-import type { DailyPairVaR, SimpleReturnRegression } from "@/lib/spot-perp-arbitrage/pair-risk";
+import type { DailyPairVaR, PairHistoricalVolatility, SimpleReturnRegression } from "@/lib/spot-perp-arbitrage/pair-risk";
 import type { PairTradeSeries } from "@/lib/spot-perp-arbitrage/pair-trade";
 import { postEntryPairFundingAnalytics } from "@/lib/spot-perp-arbitrage/analytics";
 import { pairTradeUnavailableReason, pairBetaModeLabel, type PairBetaMode } from "./CombinationWeightControls";
@@ -37,8 +37,10 @@ interface Props {
   olsModel?: StatResult<PairModelEstimate> | null;
   /** Simple-return OLS fit for the fit-window (pair-trade) or preset (OLS). */
   simpleReturnRegression?: StatResult<SimpleReturnRegression> | null;
-  /** Historical daily VaR on the full preset with the selected effective β. */
+  /** Historical daily VaR; scope is full preset in OLS and fit window in pair-trade. */
   dailyVar?: DailyPairVaR | null;
+  /** Pair-trade only: annualized historical volatility for the selected fit window. */
+  pairHistoricalVolatility?: PairHistoricalVolatility | null;
   /** The numeric β actually used by `dailyVar`; null/omitted shows `--` in the VaR note. */
   riskBeta?: number | null;
   /** Whether the entry candle was explicitly selected rather than defaulted to the first preset candle. */
@@ -396,7 +398,7 @@ function OlsDiagnostics({ result, pairAnalysis, olsModel, simpleReturnRegression
   // mode is always "auto" here and no separate custom-β entry is shown.
   const groupedCards = groupedDiagnosticCards({
     pairAnalysis, olsModel, simpleReturnRegression, dailyVar, riskBeta,
-    appliedBeta: null, appliedBetaMode: "auto",
+    appliedBeta: null, appliedBetaMode: "auto", varScope: "full-preset",
   });
 
   return <section className="rounded-lg border border-violet-500/25 bg-gray-800 p-4" aria-labelledby="mixed-analytics-title">
@@ -441,14 +443,14 @@ function pairDiagnosticCards(pairAnalysis: PairAnalysis | null | undefined, appl
  * ------------------------------------------------------------------ */
 
 /** Historical VaR methodology, shared verbatim by both views. */
-const VAR_METHOD_NOTE = "UTC 日线收盘到收盘 · 不含费用/资金费率 · 历史分位数；不是最大亏损。";
+const VAR_METHOD_NOTE = "收益代理 = (r1 − β×r2)/1，以腿1名义本金为基准；UTC 日线收盘到收盘 · 不含费用/资金费率 · 历史分位数，不是最大亏损。";
 const VAR_GLOBAL_NOTE = "取自完整预设范围的 UTC 日线，使用当前生效 β，独立于拟合窗口与图表视窗。";
 /**
  * The VaR return series resets a 1:β notional ratio on every historical day, so
  * it is a daily ratio proxy rather than the fixed-token pair-trade scenario.
  */
-const VAR_DAILY_RESET_NOTE = "每个历史日按 1:β 名义比例重设、未计调仓成本；与固定数量配对交易的 PnL 口径不同。";
-const VAR_DENOM_NOTE = "分母为组合总名义本金（1:β 的合计），不是账户保证金或权益；配对交易 PnL 百分比则以腿1名义本金为分母，两者不同。";
+const VAR_DAILY_RESET_NOTE = "每个历史日重设腿1:腿2 = 1:β 名义暴露，未计调仓成本；与固定数量配对交易的 PnL 口径不同。";
+const VAR_DENOM_NOTE = "分母为腿1参考名义本金（腿1=1），不是两腿总名义本金、账户保证金或权益。";
 /**
  * Both percentiles need at least this many completed UTC daily returns. Below it
  * the value is unavailable (`--`); at 250 the low-sample warning is dropped,
@@ -493,6 +495,7 @@ function groupedDiagnosticCards({
   riskBeta,
   appliedBeta,
   appliedBetaMode,
+  varScope = "full-preset",
 }: {
   pairAnalysis: PairAnalysis | null | undefined;
   olsModel: StatResult<PairModelEstimate> | null | undefined;
@@ -501,6 +504,7 @@ function groupedDiagnosticCards({
   riskBeta: number | null | undefined;
   appliedBeta: number | null;
   appliedBetaMode: PairBetaMode;
+  varScope?: "full-preset" | "fit-window";
 }): GroupedCard[] {
   const autoModel = autoOlsModel(pairAnalysis, olsModel);
   const simpleModel = statValue(simpleReturnRegression);
@@ -527,9 +531,9 @@ function groupedDiagnosticCards({
     },
   ];
   const varCard: GroupedCard = {
-    title: "历史日线 VaR（占组合总名义本金 %）",
+    title: "历史日线 VaR（占腿1名义本金 %）",
     values: varValues,
-    hint: `样本门槛：VaR 95% 与 VaR 99% 均需至少 ${VAR_MIN_DAILY_SAMPLES} 个完成的 UTC 日收益。使用 β = ${decimal(riskBeta ?? null, 4)}（-- 表示不可用）。${VAR_DAILY_RESET_NOTE}${VAR_DENOM_NOTE}${intervalLimited ? "当前图表周期不是 1d，日线 VaR 不可用；请切换到 1d 日线查看。" : `${sampleCount} 个日收益样本 · ${VAR_GLOBAL_NOTE}`}${VAR_METHOD_NOTE}`,
+    hint: `样本门槛：VaR 95% 与 VaR 99% 均需至少 ${VAR_MIN_DAILY_SAMPLES} 个完成的 UTC 日收益。使用 β = ${decimal(riskBeta ?? null, 4)}（-- 表示不可用）。${VAR_DAILY_RESET_NOTE}${VAR_DENOM_NOTE}${intervalLimited ? "当前图表周期不是 1d，日线 VaR 不可用；请切换到 1d 日线查看。" : `${sampleCount} 个日收益样本 · ${varScope === "fit-window" ? "仅取所选拟合窗口内的 UTC 日线收盘到收盘收益；不随图表视窗或入场变化。" : VAR_GLOBAL_NOTE}`}${VAR_METHOD_NOTE}`,
   };
 
   const betaValues: GroupedValue[] = [
@@ -585,7 +589,7 @@ function groupedDiagnosticCards({
 
 function GroupedDiagnosticCards({ cards }: { cards: GroupedCard[] }) {
   return (
-    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <div className={`mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 ${cards.length === 4 ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
       {cards.map((card) => (
         <div key={card.title} className="rounded-md border border-gray-700 bg-gray-900/65 p-3">
           <p className="text-[11px] font-medium text-gray-400">{card.title}</p>
@@ -637,7 +641,7 @@ function marketCards(result: Props["result"], marketAnalytics: { kind: "mixed"; 
   return { cards, leg1, leg2 };
 }
 
-function PairTradeDiagnostics({ result, pairAnalysis, pairTrade, pairTradeReason, betaSource, olsModel, simpleReturnRegression, dailyVar, riskBeta, entryCustom, entryCloseTime, pairViewport, range, weights, timeZone, fitWindowMode, fitWindowStart, fitWindowEnd, fitWindowCount, fitWindowUnavailable, pairTradeLookahead }: {
+function PairTradeDiagnostics({ result, pairAnalysis, pairTrade, pairTradeReason, betaSource, olsModel, simpleReturnRegression, dailyVar, pairHistoricalVolatility, riskBeta, entryCustom, entryCloseTime, pairViewport, range, weights, timeZone, fitWindowMode, fitWindowStart, fitWindowEnd, fitWindowCount, fitWindowUnavailable, pairTradeLookahead }: {
   result: Props["result"];
   pairAnalysis: PairAnalysis | null | undefined;
   pairTrade: PairTradeSeries | null | undefined;
@@ -646,6 +650,7 @@ function PairTradeDiagnostics({ result, pairAnalysis, pairTrade, pairTradeReason
   olsModel: StatResult<PairModelEstimate> | null | undefined;
   simpleReturnRegression: StatResult<SimpleReturnRegression> | null | undefined;
   dailyVar: DailyPairVaR | null | undefined;
+  pairHistoricalVolatility: PairHistoricalVolatility | null | undefined;
   riskBeta: number | null | undefined;
   entryCustom: boolean;
   entryCloseTime: number | null;
@@ -703,12 +708,32 @@ function PairTradeDiagnostics({ result, pairAnalysis, pairTrade, pairTradeReason
   ] : [];
   // Shared grouped diagnostics: the auto log-price OLS β/R² come from the
   // fit-window automatic model, the simple-return regression from the fit-window
-  // series, and daily VaR from the full preset with the applied effective β.
+  // series, and VaR / volatility from the selected fit window with the applied β.
   const groupedCards = groupedDiagnosticCards({
     pairAnalysis, olsModel, simpleReturnRegression, dailyVar, riskBeta,
     appliedBeta: pairTrade?.beta ?? null,
     appliedBetaMode: betaSource,
+    varScope: "fit-window",
   });
+  const volatility = pairHistoricalVolatility?.annualizedPercent;
+  const volatilityAvailable = Boolean(volatility?.available && volatility.value !== null && Number.isFinite(volatility.value));
+  const volatilityReason = volatilityAvailable ? `${pairHistoricalVolatility?.sampleCount ?? 0} 个相邻有效收益样本 · 按 365 天年化` : volatility?.reason === "invalid-beta"
+    ? "当前应用 β 无效，无法计算。"
+    : volatility?.reason === "insufficient-returns"
+      ? `有效相邻收益不足 2 个（当前 ${pairHistoricalVolatility?.sampleCount ?? 0} 个）。`
+    : volatility?.reason === "invalid-interval" || volatility?.reason === "invalid-as-of"
+      ? "K 线周期或时间范围无效，无法年化。"
+      : volatility?.reason === "non-finite-volatility"
+        ? "收益样本无法得到有限的波动率。"
+      : volatility?.reason
+          ? "历史波动率数据不可用。"
+          : "未提供历史波动率数据。";
+  const volatilityCard: GroupedCard = {
+    title: "历史年化组合波动率（占腿1名义本金 %）",
+    values: [{ label: "年化波动率（%）", value: volatilityAvailable ? `${volatility!.value!.toFixed(2)}%` : "--", tone: volatilityAvailable ? "text-cyan-200" : "text-gray-500", sub: volatilityReason }],
+    hint: "所选拟合窗口内按样本标准差计算；收益代理 (r1 − β×r2)/1，以腿1名义本金为基准，按 365 天及当前 K 线周期年化。每期重设 1:β 名义暴露，不随图表视窗或入场变化；非固定数量情景 PnL，不含费用或资金费率。",
+  };
+  const pairGroupedCards = [...groupedCards, volatilityCard];
 
   return <section className="rounded-lg border border-violet-500/25 bg-gray-800 p-4" aria-labelledby="mixed-analytics-title">
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><h3 id="mixed-analytics-title" className="text-sm font-semibold text-white">配对交易 · 诊断</h3><p className="mt-1 font-mono text-xs text-violet-200">可视范围：{pairViewport ? `${timeZone}：${formatChartTimeSelection(pairViewport, timeZone)}` : "当前预设全范围"}</p><p className="mt-1 text-xs text-gray-500">PnL、可视区诊断与入场使用当前预设范围及图表视窗；模型 β 固定来自拟合窗口。缩放不会改变 β 或入场，点击/键盘候选 K 线也不会改变视窗。拟合窗口晚于入场可能含前视信息。</p><p className="mt-1 font-mono text-[11px] text-cyan-200">拟合：{fitWindowMode} · {fitWindowStart ?? "--"} → {fitWindowEnd ?? "--"} · {fitWindowCount} 个匹配点</p>{fitWindowUnavailable && <p className="mt-1 text-xs text-amber-300" role="status">{fitWindowUnavailable}</p>}{pairTradeLookahead && <p className="mt-1 text-xs text-amber-300" role="status">拟合结束晚于入场：情景含前视信息，不是回测。</p>}</div><span className={`w-fit rounded-full border px-2 py-1 text-[11px] ${pairTrade ? "border-violet-400/40 bg-violet-400/10 text-violet-200" : "border-amber-500/40 bg-amber-500/10 text-amber-200"}`}>{pairTrade ? "情景可用" : "情景不可用"}</span></div>
@@ -717,15 +742,15 @@ function PairTradeDiagnostics({ result, pairAnalysis, pairTrade, pairTradeReason
     ) : (
       <p className="mt-3 rounded border border-amber-500/20 bg-amber-950/20 px-3 py-2 text-xs text-amber-200" role="status">{pairTradeUnavailableReason(pairTradeReason)}</p>
     )}
-    <div className="mt-3 border-t border-gray-700/70 pt-3"><h4 className="text-xs font-medium text-gray-300">配对诊断</h4><GroupedDiagnosticCards cards={groupedCards} /><div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">{coreCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700/80 bg-gray-900/40 px-3 py-2"><p className="text-[10px] text-gray-500">{card.label}</p><p className={`mt-1 font-mono text-sm ${card.tone}`}>{card.value}</p><p className="mt-1 text-[10px] text-gray-600">{card.note}</p></div>)}</div></div>
+    <div className="mt-3 border-t border-gray-700/70 pt-3"><h4 className="text-xs font-medium text-gray-300">配对诊断</h4><GroupedDiagnosticCards cards={pairGroupedCards} /><div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">{coreCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700/80 bg-gray-900/40 px-3 py-2"><p className="text-[10px] text-gray-500">{card.label}</p><p className={`mt-1 font-mono text-sm ${card.tone}`}>{card.value}</p><p className="mt-1 text-[10px] text-gray-600">{card.note}</p></div>)}</div></div>
     <div className="mt-3 border-t border-gray-700/70 pt-3"><h4 className="text-xs font-medium text-gray-300">资金费率与流动性</h4><div className="mt-2 rounded-md border border-cyan-500/35 bg-cyan-950/20 p-3"><p className="text-xs font-semibold text-cyan-200">入场后 1:β 加权年化资金费率差</p><p className="mt-1 font-mono text-lg font-semibold text-cyan-100">{postEntryFundingValue}</p><p className="mt-1 text-[10px] leading-4 text-gray-400">{postEntryFundingReason}</p></div><div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">{liquidityCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700/80 bg-gray-900/40 px-3 py-2"><p className="text-[10px] text-gray-500">{card.label.includes("历史资金费率") ? card.label.replace("历史", "视窗历史") : card.label}</p><p className="mt-1 font-mono text-sm text-gray-300">{card.value}</p><p className="mt-1 text-[10px] text-gray-600">当前可视窗口历史统计。{card.note}</p></div>)}</div></div>
-    <aside className="mt-3 rounded border border-amber-500/20 bg-gray-900/50 px-3 py-2.5 text-[11px] leading-5 text-gray-500"><p className="font-medium text-amber-300">样本内情景模拟{pairTradeLookahead ? "／含前视信息，非回测" : "／非回测"}</p><p>β 固定来自拟合窗口，PnL 曲线由完整显示预设范围的行情独立计算；卡片中的最新 PnL 仅取当前图表视窗内入场后的最后一根 K 线。入场默认是预设范围首根，也可独立指定。缩放只改变可视诊断，不改变入场或拟合。持仓数量固定，不含资金费率、手续费与滑点，不能视为回测。</p><p>残差、ADF、半衰期、滚动 β 与 BTC β 按当前可视窗口诊断；资金费率历史摘要也按当前视窗筛选。单独的入场后费率差为年化历史费率指标，不是收益或 PnL。</p><p>本组卡片口径：OLS β 与对数价格 R² 来自拟合窗口的自动回归，与当前应用 β 分开显示；简单收益率 R² 同样取自拟合窗口，但以每根 K 线简单收益率回归。日线 VaR 使用完整预设范围与当前生效 β，独立于拟合窗口和图表视窗。{VAR_METHOD_NOTE}</p></aside>
+    <aside className="mt-3 rounded border border-amber-500/20 bg-gray-900/50 px-3 py-2.5 text-[11px] leading-5 text-gray-500"><p className="font-medium text-amber-300">样本内情景模拟{pairTradeLookahead ? "／含前视信息，非回测" : "／非回测"}</p><p>β 固定来自拟合窗口，PnL 曲线由完整显示预设范围的行情独立计算；卡片中的最新 PnL 仅取当前图表视窗内入场后的最后一根 K 线。入场默认是预设范围首根，也可独立指定。缩放只改变可视诊断，不改变入场或拟合。持仓数量固定，不含资金费率、手续费与滑点，不能视为回测。</p><p>残差、ADF、半衰期、滚动 β 与 BTC β 按当前可视窗口诊断；资金费率历史摘要也按当前视窗筛选。单独的入场后费率差为年化历史费率指标，不是收益或 PnL。</p><p>本组卡片口径：OLS β 与对数价格 R² 来自拟合窗口的自动回归，与当前应用 β 分开显示；简单收益率 R² 同样取自拟合窗口，但以每根 K 线简单收益率回归。VaR 与年化波动率使用所选拟合窗口及当前生效 β，不随图表视窗或入场变化。{VAR_METHOD_NOTE}</p></aside>
   </section>;
 }
 
-export default function MixedAnalyticsDashboard({ result, pairAnalysis, pairTrade = null, pairTradeReason = null, pairTradeBetaSource = "auto", olsModel = null, simpleReturnRegression = null, dailyVar = null, riskBeta = null, pairTradeEntryCustom = false, pairTradeEntryCloseTime = null, pairViewport = null, fitWindowMode = "all", fitWindowStart = null, fitWindowEnd = null, fitWindowCount = 0, fitWindowUnavailable = null, pairTradeLookahead = false, view, range, initialTailTrim = 1, exactSelection = null, weights = DEFAULT_WEIGHTS, timeZone }: Props) {
+export default function MixedAnalyticsDashboard({ result, pairAnalysis, pairTrade = null, pairTradeReason = null, pairTradeBetaSource = "auto", olsModel = null, simpleReturnRegression = null, dailyVar = null, pairHistoricalVolatility = null, riskBeta = null, pairTradeEntryCustom = false, pairTradeEntryCloseTime = null, pairViewport = null, fitWindowMode = "all", fitWindowStart = null, fitWindowEnd = null, fitWindowCount = 0, fitWindowUnavailable = null, pairTradeLookahead = false, view, range, initialTailTrim = 1, exactSelection = null, weights = DEFAULT_WEIGHTS, timeZone }: Props) {
   if (view === "pair-trade") {
-    return <PairTradeDiagnostics result={result} pairAnalysis={pairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} betaSource={pairTradeBetaSource} olsModel={olsModel} simpleReturnRegression={simpleReturnRegression} dailyVar={dailyVar} riskBeta={riskBeta} entryCustom={pairTradeEntryCustom} entryCloseTime={pairTradeEntryCloseTime} pairViewport={pairViewport} range={range} weights={weights} timeZone={timeZone} fitWindowMode={fitWindowMode} fitWindowStart={fitWindowStart} fitWindowEnd={fitWindowEnd} fitWindowCount={fitWindowCount} fitWindowUnavailable={fitWindowUnavailable} pairTradeLookahead={pairTradeLookahead} />;
+    return <PairTradeDiagnostics result={result} pairAnalysis={pairAnalysis} pairTrade={pairTrade} pairTradeReason={pairTradeReason} betaSource={pairTradeBetaSource} olsModel={olsModel} simpleReturnRegression={simpleReturnRegression} dailyVar={dailyVar} pairHistoricalVolatility={pairHistoricalVolatility} riskBeta={riskBeta} entryCustom={pairTradeEntryCustom} entryCloseTime={pairTradeEntryCloseTime} pairViewport={pairViewport} range={range} weights={weights} timeZone={timeZone} fitWindowMode={fitWindowMode} fitWindowStart={fitWindowStart} fitWindowEnd={fitWindowEnd} fitWindowCount={fitWindowCount} fitWindowUnavailable={fitWindowUnavailable} pairTradeLookahead={pairTradeLookahead} />;
   }
   if (view === "ols") {
     return <OlsDiagnostics result={result} pairAnalysis={pairAnalysis} olsModel={olsModel} simpleReturnRegression={simpleReturnRegression} dailyVar={dailyVar} riskBeta={riskBeta} range={range} exactSelection={exactSelection} weights={weights} timeZone={timeZone} />;
