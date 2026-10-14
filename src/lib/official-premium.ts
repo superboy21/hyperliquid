@@ -147,11 +147,12 @@ export interface OfficialPremiumContext {
 }
 
 export async function prefetchOfficialPremiumContext(signal?: AbortSignal): Promise<OfficialPremiumContext> {
-  const [native, xyz, para, hyna, okxSnapshot] = await Promise.allSettled([
+  const [native, xyz, para, io, mkts, okxSnapshot] = await Promise.allSettled([
     fetchHyperliquidPremiumMap(undefined, signal),
     fetchHyperliquidPremiumMap("xyz", signal),
     fetchHyperliquidPremiumMap("para", signal),
-    fetchHyperliquidPremiumMap("hyna", signal),
+    fetchHyperliquidPremiumMap("io", signal),
+    fetchHyperliquidPremiumMap("mkts", signal),
     fetchNativeFundingSnapshot(signal),
   ]);
 
@@ -161,7 +162,7 @@ export async function prefetchOfficialPremiumContext(signal?: AbortSignal): Prom
   }
 
   const hyperliquidHip3 = new Map<string, number | null>();
-  for (const result of [xyz, para, hyna]) {
+  for (const result of [xyz, para, io, mkts]) {
     if (result.status === "fulfilled") {
       for (const [coin, premium] of result.value) hyperliquidHip3.set(coin, premium);
     }

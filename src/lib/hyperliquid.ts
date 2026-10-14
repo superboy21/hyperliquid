@@ -60,6 +60,7 @@ export interface MarketInfo {
   szDecimals: number;
   maxLeverage: number;
   onlyIsolated?: boolean;
+  isDelisted?: boolean;
 }
 
 interface AssetContext {
@@ -310,6 +311,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
 
     return meta.universe.flatMap((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
+      if (market.isDelisted) return [];
       if (!isValidLiveFundingRate(ctx?.funding)) return [];
 
       const predictedFundingRate = hlPerpPredictions.get(market.name);
@@ -335,7 +337,7 @@ export async function getAllFundingRates(): Promise<FundingRate[]> {
   }
 }
 
-async function getHip3MarketData(dex: "xyz" | "para" | "hyna"): Promise<Map<string, Partial<FundingRate>>> {
+async function getHip3MarketData(dex: "xyz" | "para" | "io" | "mkts"): Promise<Map<string, Partial<FundingRate>>> {
   try {
     const data = await fetchHyperliquidInfo<any[]>(
       { type: "metaAndAssetCtxs", dex },
@@ -357,6 +359,7 @@ async function getHip3MarketData(dex: "xyz" | "para" | "hyna"): Promise<Map<stri
     meta.universe.forEach((market: MarketInfo, index: number) => {
       const ctx = assetCtxs[index];
 
+      if (market.isDelisted) return;
       if (!isValidLiveFundingRate(ctx?.funding)) return;
       marketData.set(market.name, {
         coin: market.name,
@@ -386,7 +389,7 @@ async function getHip3MarketData(dex: "xyz" | "para" | "hyna"): Promise<Map<stri
   }
 }
 
-async function getDexFundingRates(dex: "xyz" | "para" | "hyna"): Promise<FundingRate[]> {
+async function getDexFundingRates(dex: "xyz" | "para" | "io" | "mkts"): Promise<FundingRate[]> {
   const marketData = await getHip3MarketData(dex);
   const rates: FundingRate[] = [];
 
@@ -417,9 +420,11 @@ export async function getHip3FundingRates(): Promise<FundingRate[]> {
   await sleep(150);
   const paraRates = await getDexFundingRates("para");
   await sleep(150);
-  const hynaRates = await getDexFundingRates("hyna");
+  const ioRates = await getDexFundingRates("io");
+  await sleep(150);
+  const mktsRates = await getDexFundingRates("mkts");
 
-  return [...xyzRates, ...paraRates, ...hynaRates];
+  return [...xyzRates, ...paraRates, ...ioRates, ...mktsRates];
 }
 
 export async function getSpotFundingRates(): Promise<FundingRate[]> {

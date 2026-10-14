@@ -14,10 +14,18 @@ const XYZ_API_TO_DISPLAY: Record<string, string> = {
   "xyz:SMSN": "xyz:SAMSUNG",
 };
 
+/** Mkts Hip3 API → display (spec names) */
+const MKTS_API_TO_DISPLAY: Record<string, string> = {
+  "mkts:USTECH": "mkts:QQQ",
+  "mkts:USBOND": "mkts:TLT",
+  "mkts:SMALL2000": "mkts:IWM",
+};
+
 /** Combined API → display mapping */
 export const API_TO_DISPLAY: Record<string, string> = {
   ...PARA_API_TO_DISPLAY,
   ...XYZ_API_TO_DISPLAY,
+  ...MKTS_API_TO_DISPLAY,
 };
 
 /** Convert API symbol to display symbol (returns input if no mapping exists) */

@@ -10,7 +10,7 @@
 - **RPI 盘口模式**：Binance、Gate.io、Bitget、Bybit、OKX 支持读取含 RPI（Retail Price Improvement）订单的盘口计算 Impact，端点失败时回退普通盘口并提示
 - **历史数据分析**：在 `/search` 查看资金费率历史及统计指标，按实际结算数据计算累计费率与年化值
 - **智能排序与筛选**：按费率、价格、成交量、持仓量、24h 涨跌幅排序
-- **资产类型筛选**：按标准资产、XYZ-Hip3、Vntl-Hip3、Para-Hip3、Km-Hip3 分类查看
+- **资产类型筛选**：按标准资产、XYZ-Hip3、Para-Hip3、Io-Hip3、Mkts-Hip3 分类查看
 - **加权平均计算**：持仓量加权平均资金费率
 - **响应式设计**：适配桌面端和移动端
 
@@ -146,10 +146,12 @@ bun start
 Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永续合约：
 1. **标准永续合约**：BTC、ETH、SOL 等传统加密货币永续合约
 2. **HIP-3 资产**：Hyperliquid Improvement Proposal 3 支持的扩展资产，包括：
-   - **XYZ-Hip3**：商品（GOLD、SILVER）、股票（AAPL、TSLA、NVDA）、ETF（DRAM、XLE）、指数（SP500、JP225）、FX（JPY、EUR）等 82 个资产
-   - **Vntl-Hip3**：加密主题指数（SPACEX、OPENAI、ANTHROPIC、MAG7、SEMIS 等）
+   - **XYZ-Hip3**：商品（GOLD、SILVER）、股票（AAPL、TSLA、NVDA）、ETF（DRAM、XLE）、指数（SP500、JP225）、FX（JPY、EUR）等
    - **Para-Hip3**：市场主导指数（BTC.D、TOTAL2、OTHERS）
-   - **Km-Hip3**（Kinetiq Markets）：股票（AAPL、TSLA、TENCENT）、商品（GOLD、SILVER）、指数（US500、USTECH）、债券（USBOND）等 24 个资产
+   - **Io-Hip3**：AI 与科技主题资产（OAI、ANTH、IONQ、NBIS、SNDK、DRAM 等）
+   - **Mkts-Hip3**：股票（AAPL、TSLA、NVDA、BABA、TENCENT）、商品（GOLD、SILVER、USOIL）、指数（US500、USTECH、JPN225、SMALL2000）、债券（USBOND）、FX（EUR）等
+
+HIP-3 市场由 API 动态发现，不设硬编码列表；当前启用的 dex 为 `xyz`、`para`、`io`、`mkts`。
 
 ### API 名称映射
 
@@ -311,6 +313,12 @@ Invoke-WebRequest "http://localhost:3000/api/spot/binance?action=list"
 
 ## 更新日志
 
+### v2026.10.15
+- Hyperliquid HIP-3 dex 调整：移除 `hyna`，新增 `io` 与 `mkts`；当前启用 dex 为 `xyz`、`para`、`io`、`mkts`
+- `/funding` 分类筛选与徽章同步为 XYZ-Hip3、Para-Hip3、Io-Hip3、Mkts-Hip3
+- 同步更新 README 与 memory bank，消除 Vntl-Hip3 / Km-Hip3 等历史描述偏差
+- 验证通过：938 项 Bun 测试、TypeScript 类型检查、ESLint
+
 ### v2026.09.08.2
 - 修复 Gate candle：`v` 按 `quanto_multiplier` 转换为基础币成交量；OKX 使用官方 `volCcy`。Gate `sum` 与 OKX `volCcyQuote` 保持官方报价币成交额，缺失时不再错误估算；canonical detail 同步修复
 - 回归验证通过：811 项 tests、TypeScript typecheck、ESLint；实时 BTC 日成交量约为 Gate 3.9 万–4.3 万、OKX 4.8 万–5.1 万
@@ -396,12 +404,12 @@ Invoke-WebRequest "http://localhost:3000/api/spot/binance?action=list"
 - 验证通过：62 项测试、TypeScript 类型检查、ESLint 与生产构建
 
 ### v2026.05.31
-- 新增 KM Hip3 资产（Kinetiq Markets）：24 个资产，包括股票（AAPL、TSLA、TENCENT）、商品（GOLD、SILVER、USOIL）、指数（US500、USTECH、SMALL2000）、债券（USBOND）、FX（EUR）
-- 新增 Km-Hip3 筛选标签页（emerald 主题色）
+- 新增 KM Hip3 资产（Kinetiq Markets）：24 个资产，包括股票（AAPL、TSLA、TENCENT）、商品（GOLD、SILVER、USOIL）、指数（US500、USTECH、SMALL2000）、债券（USBOND）、FX（EUR）（历史记录；该分组后续随 dex 调整移除，当前启用 dex 为 xyz/para/io/mkts）
+- 新增 Km-Hip3 筛选标签页（emerald 主题色）（历史记录）
 - 新增 `src/lib/symbol-mapping.ts` 共享 API 名称映射模块
 - XYZ Hip3 资产从 45 个扩展至 82 个（与 API 完全同步）
 - 资产分类新增 ETF、FX、债券类别
-- 修复 Km-Hip3 标签页显示全部资产的 bug
+- 修复 Km-Hip3 标签页显示全部资产的 bug（历史记录）
 - 修复搜索页面历史资金费率对重命名资产无法显示的问题
 - README 更新为中文版
 

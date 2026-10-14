@@ -8,7 +8,7 @@ const TIMEOUT_MS = 10_000;
 const MAX_BODY_LENGTH = 64 * 1024;
 const MAX_COIN_LENGTH = 64;
 const INTERVALS = new Set(["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"]);
-const LIVE_DEXES = new Set(["xyz", "para", "hyna"]);
+const LIVE_DEXES = new Set(["xyz", "para", "io", "mkts"]);
 const COIN_RE = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/;
 
 type JsonObject = Record<string, unknown>;

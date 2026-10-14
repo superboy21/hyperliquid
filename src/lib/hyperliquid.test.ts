@@ -346,22 +346,78 @@ describe("Hyperliquid direct-first transport", () => {
           [{ funding: 0.0000075 }],
         ]);
       }
+      if (body.dex === "io") {
+        return jsonResponse([
+          { universe: [{ name: "io:TSLA" }] },
+          [{ funding: "0.00001" }],
+        ]);
+      }
       return jsonResponse([
-        { universe: [{ name: "hyna:BTC" }] },
-        [{ funding: "0.0" }],
+        { universe: [{ name: "mkts:GOLD" }] },
+        [{ funding: "0.00002" }],
       ]);
     });
 
     try {
       const rates = await getHip3FundingRates();
-      expect(rates).toHaveLength(3);
+      expect(rates).toHaveLength(4);
       expect(rates.find((rate) => rate.coin === "xyz:NVDA")).toMatchObject({
         fundingRate: "0.00000625",
         predictedFundingRate: "0.00000625",
         isSpot: true,
       });
       expect(rates.find((rate) => rate.coin === "para:AVGO")?.predictedFundingRate).toBe("0.0000075");
-      expect(rates.find((rate) => rate.coin === "hyna:BTC")?.predictedFundingRate).toBe("0.0");
+      expect(rates.find((rate) => rate.coin === "io:TSLA")?.predictedFundingRate).toBe("0.00001");
+      expect(rates.find((rate) => rate.coin === "mkts:GOLD")?.predictedFundingRate).toBe("0.00002");
+    } finally {
+      restore();
+    }
+  });
+
+  test("drops delisted markets from HIP-3 rates", async () => {
+    const restore = mockFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { type: string; dex?: string };
+      if (body.type !== "metaAndAssetCtxs") return jsonResponse({});
+      if (body.dex === "mkts") {
+        return jsonResponse([
+          {
+            universe: [
+              { name: "mkts:USTECH" },
+              { name: "mkts:GOLD", isDelisted: true },
+            ],
+          },
+          [{ funding: "0.000005" }, { funding: "0.0" }],
+        ]);
+      }
+      return jsonResponse([{ universe: [] }, []]);
+    });
+
+    try {
+      const rates = await getHip3FundingRates();
+      expect(rates.map((rate) => rate.coin)).toEqual(["mkts:USTECH"]);
+    } finally {
+      restore();
+    }
+  });
+
+  test("drops delisted markets from native perp rates", async () => {
+    const restore = mockFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { type: string };
+      if (body.type !== "metaAndAssetCtxs") return jsonResponse([]);
+      return jsonResponse([
+        {
+          universe: [
+            { name: "BTC" },
+            { name: "MATIC", isDelisted: true },
+          ],
+        },
+        [{ funding: "0.00001" }, { funding: "0.0" }],
+      ]);
+    });
+
+    try {
+      const rates = await getAllFundingRates();
+      expect(rates.map((rate) => rate.coin)).toEqual(["BTC"]);
     } finally {
       restore();
     }
