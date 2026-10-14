@@ -149,17 +149,20 @@ Hyperliquid 市场包含两类资产；其余交易所展示各自支持的永�
    - **XYZ-Hip3**：商品（GOLD、SILVER）、股票（AAPL、TSLA、NVDA）、ETF（DRAM、XLE）、指数（SP500、JP225）、FX（JPY、EUR）等
    - **Para-Hip3**：市场主导指数（BTC.D、TOTAL2、OTHERS）
    - **Io-Hip3**：AI 与科技主题资产（OAI、ANTH、IONQ、NBIS、SNDK、DRAM 等）
-   - **Mkts-Hip3**：股票（AAPL、TSLA、NVDA、BABA、TENCENT）、商品（GOLD、SILVER、USOIL）、指数（US500、USTECH、JPN225、SMALL2000）、债券（USBOND）、FX（EUR）等
+   - **Mkts-Hip3**（Kinetiq Markets）：指数（US500、USTECH、SMALL2000）、债券（USBOND）、波动率（BVIV）
 
-HIP-3 市场由 API 动态发现，不设硬编码列表；当前启用的 dex 为 `xyz`、`para`、`io`、`mkts`。
+HIP-3 市场由 API 动态发现，不设硬编码列表；当前启用的 dex 为 `xyz`、`para`、`io`、`mkts`。已下架（`isDelisted`）的市场会被自动过滤，不再展示。
 
 ### API 名称映射
 
-部分资产的 API 内部名称与 Spec 显示名称不同，已自动映射：
+部分资产的 API 内部名称与前端显示名称不同，已自动映射（请求仍使用 API 名称）：
 - `xyz:CL` → `xyz:WTIOIL`
 - `xyz:SKHX` → `xyz:SKHYNIX`
 - `xyz:SMSN` → `xyz:SAMSUNG`
 - `para:BTCD` → `para:BTC.D`
+- `mkts:USTECH` → `mkts:QQQ`
+- `mkts:USBOND` → `mkts:TLT`
+- `mkts:SMALL2000` → `mkts:IWM`
 
 ### 跨交易所搜索
 
@@ -316,8 +319,10 @@ Invoke-WebRequest "http://localhost:3000/api/spot/binance?action=list"
 ### v2026.10.15
 - Hyperliquid HIP-3 dex 调整：移除 `hyna`，新增 `io` 与 `mkts`；当前启用 dex 为 `xyz`、`para`、`io`、`mkts`
 - `/funding` 分类筛选与徽章同步为 XYZ-Hip3、Para-Hip3、Io-Hip3、Mkts-Hip3
+- 新增 Mkts-Hip3 展示名映射：`mkts:USTECH` → `mkts:QQQ`、`mkts:USBOND` → `mkts:TLT`、`mkts:SMALL2000` → `mkts:IWM`
+- 过滤 `isDelisted` 市场：原生 perp 与 HIP-3 均不再展示已下架市场（已验证上游全部下架市场的资金费率与持仓量均为 0）
 - 同步更新 README 与 memory bank，消除 Vntl-Hip3 / Km-Hip3 等历史描述偏差
-- 验证通过：938 项 Bun 测试、TypeScript 类型检查、ESLint
+- 验证通过：940 项 Bun 测试、TypeScript 类型检查、ESLint
 
 ### v2026.09.08.2
 - 修复 Gate candle：`v` 按 `quanto_multiplier` 转换为基础币成交量；OKX 使用官方 `volCcy`。Gate `sum` 与 OKX `volCcyQuote` 保持官方报价币成交额，缺失时不再错误估算；canonical detail 同步修复
