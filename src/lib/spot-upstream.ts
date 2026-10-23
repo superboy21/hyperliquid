@@ -38,6 +38,11 @@ function integer(value: string | null): number | null {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
+function nonnegativeInteger(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
 function mapInterval(exchange: ExchangeSlug, interval: string): string {
   if (exchange === "gateio") return interval === "1w" ? "7d" : interval;
   if (exchange === "okx") return interval === "1w" ? "1Wutc" : interval === "1d" ? "1Dutc" : interval.endsWith("h") ? interval.replace("h", "H") : interval;
@@ -58,7 +63,7 @@ export function buildSpotUpstreamRequest(exchangeValue: string, params: URLSearc
   const allowed = new Set(["action", ...ACTION_PARAMS[action]]);
   for (const key of params.keys()) if (!allowed.has(key) || params.getAll(key).length !== 1) return "Unknown or repeated parameter";
   const symbol = params.get("symbol");
-  const marketId = integer(params.get("marketId"));
+  const marketId = exchange === "lighter" ? nonnegativeInteger(params.get("marketId")) : integer(params.get("marketId"));
   if (symbol !== null && !SYMBOL_RE.test(symbol)) return "Invalid symbol";
   if (params.has("marketId") && marketId === null) return "Invalid marketId";
   if (action !== "list" && action !== "instruments") {

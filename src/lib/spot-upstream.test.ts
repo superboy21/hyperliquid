@@ -52,6 +52,22 @@ describe("Bybit spot upstream requests", () => {
   });
 });
 
+describe("Lighter market id validation", () => {
+  test("allows market id zero for spot books", () => {
+    const built = buildSpotUpstreamRequest("lighter", params("action=book&marketId=0&limit=250"));
+    expect(typeof built).not.toBe("string");
+    if (typeof built !== "string") expect(built.url).toContain("/api/v1/orderBookOrders?market_id=0&limit=250");
+  });
+
+  test.each(["-1", "NaN", "1.5"])("rejects invalid market id %s", (marketId) => {
+    expect(buildSpotUpstreamRequest("lighter", params(`action=book&marketId=${encodeURIComponent(marketId)}`))).toBe("Invalid marketId");
+  });
+
+  test("rejects a missing market id", () => {
+    expect(buildSpotUpstreamRequest("lighter", params("action=book&limit=10"))).toBe("Missing marketId");
+  });
+});
+
 describe("UTC spot candle mappings", () => {
   test.each([
     ["bitget", "1d", "1Dutc"],

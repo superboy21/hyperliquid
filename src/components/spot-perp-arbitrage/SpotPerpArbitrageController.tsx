@@ -28,6 +28,9 @@ import {
 } from "@/lib/impact-price";
 import { fetchSpotImpactSpreadDetail } from "@/lib/spot-impact-price";
 import { hasRpiEndpoint, type BookMode } from "@/lib/rpi-book";
+import { toBookTarget } from "@/lib/order-book/project";
+import type { BookTarget } from "@/lib/order-book/types";
+import { useLiveOrderBook } from "@/hooks/use-live-order-book";
 import { fetchOfficialPremium, prefetchOfficialPremiumContext } from "@/lib/official-premium";
 import { DETAIL_LANE_PROFILE } from "@/lib/search-detail-lanes";
 import { getSearchIntervalMs, type SearchCandleResult, type SearchChartInterval } from "@/lib/search-candles";
@@ -57,6 +60,7 @@ import {
   type ArbitrageChartRange,
   type ArbitrageExchange,
   type ArbitrageMarket,
+  type ChartPlan,
   type LoadedLeg,
   type MarketTableDetail,
   type OrderedSelection,
@@ -94,6 +98,8 @@ import StrategyRecommendations from "./StrategyRecommendations";
 import SpotContainingCombinationChart from "./SpotContainingCombinationChart";
 import MixedAnalyticsDashboard from "./MixedAnalyticsDashboard";
 import SingleMarketAnalyticsDashboard from "./SingleMarketAnalyticsDashboard";
+import LiveOrderBookPanel, { preferenceForTargetChange, resolveLiveBookTarget, shouldShowLiveBookToggle, type LiveBookPreference } from "./LiveOrderBookPanel";
+import CombinationOrderBookPanel, { EMPTY_COMBINATION_PREFERENCE, combinationPreferenceKey, preferenceForCombinationChange, shouldShowCombinationToggle, type CombinationBookPreference } from "./CombinationOrderBookPanel";
 import { CombinationWeightControls, DEFAULT_PAIR_FIT_WINDOW_SPEC, fitWindowPreset, fitWindowSetEnd, fitWindowSetStart, fitWindowUnavailableCopy, resolvePairModelSpec, resolvePairTradeEntryTime, selectedEntryTime, useCombinationWeighting, type PairTradeEntryChoice } from "./CombinationWeightControls";
 
 type UniverseState = "loading" | "ready" | "error";
@@ -147,6 +153,74 @@ export function normalizeChartRange(
 /** Only Bitget perp transport consumes the bounded chart request window. */
 export function hasSelectedBitgetPerp(...markets: Array<ArbitrageMarket | null | undefined>): boolean {
   return markets.some((market) => market?.kind === "perp" && market.source.exchange === "Bitget");
+}
+
+/** Pair identity used to scope combined-book preferences and payload checks. */
+export function comboPlanKey(plan: {
+  kind: "combo"; leg1: ArbitrageMarket; leg2: ArbitrageMarket;
+} | null): string | null {
+  return plan === null
+    ? null
+    : combinationPreferenceKey(String(marketId(plan.leg1)), String(marketId(plan.leg2)));
+}
+
+export interface LiveBookWiring {
+  /** Refreshed market row for the selected single leg, or null when not a single chart. */
+  target: BookTarget | null;
+  targetId: string | null;
+  /** Both legs of the spread/ratio chart, resolved against the refreshed market rows. */
+  combinationKey: string | null;
+  targetA: BookTarget | null;
+  targetB: BookTarget | null;
+  singleOpen: boolean;
+  singleWsMode: boolean;
+  combinationOpen: boolean;
+  combinationWsMode: boolean;
+}
+
+/**
+ * Every live-book value the controller needs, computed in one pure step. Keeping
+ * the identity rules out of the component makes them testable without a DOM:
+ * market refresh keeps a session, a leg swap or reversal closes and resets it,
+ * and the timeframe or spread/ratio mode never touches it.
+ */
+export function resolveLiveBookWiring(input: {
+  plan: ChartPlan;
+  markets: readonly ArbitrageMarket[];
+  singlePreference: LiveBookPreference;
+  combinationPreference: CombinationBookPreference;
+}): LiveBookWiring {
+  const { plan, markets, singlePreference, combinationPreference } = input;
+  const singleMarket = plan?.kind === "single" ? plan.leg1 : undefined;
+  const target = resolveLiveBookTarget(singleMarket, markets);
+  const targetId = target?.id ?? null;
+  // A stale preference never keeps a session open: both values below compare
+  // the scope key before reporting it as open.
+  const singleScope = preferenceForTargetChange(singlePreference, targetId);
+  const singleOpen = Boolean(target && singleScope.targetId === target.id && singleScope.open);
+  const singleWsMode = Boolean(target && singleScope.targetId === target.id && singleScope.wsMode);
+
+  const comboPlan = plan?.kind === "combo" ? plan : null;
+  const targetA = comboPlan ? resolveLiveBookTarget(comboPlan.leg1, markets) : null;
+  const targetB = comboPlan ? resolveLiveBookTarget(comboPlan.leg2, markets) : null;
+  const combinationKey = comboPlanKey(comboPlan);
+  const combinationScope = preferenceForCombinationChange(combinationPreference, combinationKey);
+  const combinationOpen = combinationKey !== null
+    && combinationScope.key === combinationKey && combinationScope.open;
+  const combinationWsMode = combinationKey !== null
+    && combinationScope.key === combinationKey && combinationScope.wsMode;
+
+  return {
+    target,
+    targetId,
+    combinationKey,
+    targetA,
+    targetB,
+    singleOpen,
+    singleWsMode,
+    combinationOpen,
+    combinationWsMode,
+  };
 }
 
 function isAbortError(error: unknown): boolean {
@@ -334,6 +408,12 @@ export default function SpotPerpArbitrageController() {
   // RPI 端点不可用、已回退普通盘口的市场：marketId → "交易所 交易对"。
   const [rpiFallbackMarkets, setRpiFallbackMarkets] = useState<Map<string, string>>(new Map());
   const [chartTimeZone, setChartTimeZone] = useState<ChartTimeZone>("UTC+8");
+  const [liveBookPreference, setLiveBookPreference] = useState<LiveBookPreference>({ targetId: null, open: false, wsMode: false });
+  const [combinationPreference, setCombinationPreference] = useState<CombinationBookPreference>(EMPTY_COMBINATION_PREFERENCE);
+  // Identity of the plan that produced the current payload. Comparing plans to
+  // payloads through this key keeps a loading/old chart from quoting other legs,
+  // without depending on the single-leg payload shape.
+  const [chartPayloadPlanKey, setChartPayloadPlanKey] = useState<string | null>(null);
 
   // 抓取参数快照 ref：render 期间同步最新值，供「搜索变化 / 手动刷新」触发抓取时读取。
   // 参数本身变化不直接触发重算（避免调整 impact 额/价差模式时立即重拉数据）。
@@ -405,6 +485,7 @@ export default function SpotPerpArbitrageController() {
     btcAbortRef.current?.abort();
     chartGenerationRef.current += 1;
     setChartPayload(null);
+    setChartPayloadPlanKey(null);
     setChartLoading(false);
     setChartError(null);
     setChartRange("1y");
@@ -709,6 +790,73 @@ export default function SpotPerpArbitrageController() {
     ),
     [searchResult.markets, searchResult.query, selection, strategyChartOverride, strategyChartMode],
   );
+  // Live-book wiring is resolved in one pure step so identity rules stay
+  // testable: render-phase state adjustment below closes a previous target's
+  // session before another render can briefly reuse it, and the chart interval
+  // or spread/ratio mode never appear in either identity key.
+  const bookWiring = resolveLiveBookWiring({
+    plan: effectiveChartPlan,
+    markets: searchResult.markets,
+    singlePreference: liveBookPreference,
+    combinationPreference,
+  });
+  const liveBookTarget = bookWiring.target;
+  const liveBookTargetId = bookWiring.targetId;
+  const chartPayloadTargetId = chartPayload?.kind === "single" ? toBookTarget(chartPayload.leg.market)?.id ?? null : null;
+  if (liveBookPreference.targetId !== liveBookTargetId) {
+    setLiveBookPreference(preferenceForTargetChange(liveBookPreference, liveBookTargetId));
+  }
+  if (combinationPreference.key !== bookWiring.combinationKey) {
+    setCombinationPreference(preferenceForCombinationChange(combinationPreference, bookWiring.combinationKey));
+  }
+  const liveBookOpen = bookWiring.singleOpen;
+  const liveBookWsMode = bookWiring.singleWsMode;
+  const liveBookState = useLiveOrderBook(liveBookTarget, { enabled: liveBookOpen, bookMode, wsMode: liveBookWsMode });
+  const setLiveBookOpen = (open: boolean) => {
+    if (!liveBookTargetId) return;
+    setLiveBookPreference((current) => current.targetId === liveBookTargetId
+      ? { ...current, open }
+      : { targetId: liveBookTargetId, open, wsMode: false });
+  };
+  const setLiveBookWsMode = (wsMode: boolean) => {
+    if (!liveBookTargetId) return;
+    setLiveBookPreference((current) => current.targetId === liveBookTargetId
+      ? { ...current, wsMode }
+      : { targetId: liveBookTargetId, open: true, wsMode });
+  };
+
+  // Combined (spread/ratio) book. Both hooks are unconditional so state never
+  // moves between renders; `enabled` keeps a hidden panel completely I/O-free.
+  const combinationPlan = effectiveChartPlan?.kind === "combo" ? effectiveChartPlan : null;
+  const combinationTargetA = bookWiring.targetA;
+  const combinationTargetB = bookWiring.targetB;
+  const combinationKey = bookWiring.combinationKey;
+  const combinationOpen = bookWiring.combinationOpen;
+  const combinationWsMode = bookWiring.combinationWsMode;
+  const combinationStateA = useLiveOrderBook(combinationTargetA, {
+    enabled: combinationOpen, bookMode, wsMode: combinationWsMode,
+  });
+  const combinationStateB = useLiveOrderBook(combinationTargetB, {
+    enabled: combinationOpen, bookMode, wsMode: combinationWsMode,
+  });
+  const setCombinationOpen = (open: boolean) => {
+    if (!combinationKey) return;
+    setCombinationPreference((current) => current.key === combinationKey
+      ? { ...current, open }
+      : { key: combinationKey, open, wsMode: false });
+  };
+  const setCombinationWsMode = (wsMode: boolean) => {
+    if (!combinationKey) return;
+    setCombinationPreference((current) => current.key === combinationKey
+      ? { ...current, wsMode }
+      : { key: combinationKey, open: true, wsMode });
+  };
+  const combinationLabelA = combinationPlan
+    ? `${combinationPlan.leg1.source.exchange} ${marketDisplaySymbol(combinationPlan.leg1)}`
+    : "";
+  const combinationLabelB = combinationPlan
+    ? `${combinationPlan.leg2.source.exchange} ${marketDisplaySymbol(combinationPlan.leg2)}`
+    : "";
   const singleSpotChart = effectiveChartPlan?.kind === "single" && effectiveChartPlan.leg1.kind === "spot";
   const selectedChartIncludesBitget = effectiveChartPlan?.kind === "combo"
     ? hasSelectedBitgetPerp(effectiveChartPlan.leg1, effectiveChartPlan.leg2)
@@ -727,6 +875,7 @@ export default function SpotPerpArbitrageController() {
     setBtcSource(undefined);
     if (!plan) {
       setChartPayload(null);
+      setChartPayloadPlanKey(null);
       setChartLoading(false);
       setChartError(null);
       return;
@@ -739,9 +888,14 @@ export default function SpotPerpArbitrageController() {
     const leg2 = plan.kind === "combo" ? plan.leg2 : null;
     const window = createChartRequestWindow(chartTransportRange, SINGLE_RANGE_MS, Date.now());
     const isCurrent = () => !controller.signal.aborted && generation === chartGenerationRef.current;
+    // Stamp every payload with the plan identity that produced it. The book
+    // toggles compare against this stamp instead of the payload's own symbol
+    // fields, so an old payload can never authorise quoting new legs.
+    const planKey = comboPlanKey(plan.kind === "combo" ? plan : null);
     setChartLoading(true);
     setChartError(null);
     setChartPayload(null);
+    setChartPayloadPlanKey(null);
     setExactTimeSelection(null);
 
     void (async () => {
@@ -756,10 +910,14 @@ export default function SpotPerpArbitrageController() {
           setChartPayload("kind" in combined
             ? { kind: "spot-combo", result: combined }
             : { kind: "perp-combo", result: combined });
+          setChartPayloadPlanKey(planKey);
           return;
         }
         const leg = await loadMarketCandles(leg1, chartInterval, controller.signal, { window });
-        if (isCurrent()) setChartPayload({ kind: "single", leg });
+        if (isCurrent()) {
+          setChartPayload({ kind: "single", leg });
+          setChartPayloadPlanKey(planKey);
+        }
       } catch (error) {
         if (isCurrent() && !isAbortError(error)) {
           setChartError(error instanceof Error ? error.message : "K线数据加载失败");
@@ -1115,6 +1273,7 @@ export default function SpotPerpArbitrageController() {
     setStrategyChartMode("ratio");
     setSelectedRecommendationKey(null);
     setChartPayload(null);
+    setChartPayloadPlanKey(null);
     setChartLoading(false);
     setChartError(null);
     setExactTimeSelection(null);
@@ -1503,8 +1662,66 @@ export default function SpotPerpArbitrageController() {
                       </button>
                     ))}
                   </div>
+                  {shouldShowLiveBookToggle({
+                    open: liveBookOpen,
+                    targetId: liveBookTargetId,
+                    chartPayloadTargetId,
+                    hasValidCandles: Boolean((chartPayload?.kind === "single" && chartPayload.leg.kind === "perp" && visibleSinglePerp && visibleSinglePerp.candles.length > 0)
+                      || (chartPayload?.kind === "single" && chartPayload.leg.kind === "spot" && visibleSingleSpot && visibleSingleSpot.candles.length > 0)),
+                  }) && liveBookTarget && (
+                    <button
+                      type="button"
+                      aria-expanded={liveBookOpen}
+                      aria-controls="live-order-book-panel"
+                      onClick={() => setLiveBookOpen(!liveBookOpen)}
+                      className={`rounded border px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 ${liveBookOpen ? "border-cyan-500/50 bg-cyan-600/20 text-cyan-200" : "border-gray-600 bg-gray-900 text-gray-300 hover:border-gray-400 hover:text-white"}`}
+                    >
+                      {liveBookOpen ? "隐藏实时盘口" : "显示实时盘口"}
+                    </button>
+                  )}
+                  {combinationPlan && shouldShowCombinationToggle({
+                    open: combinationOpen,
+                    planKey: combinationKey,
+                    payloadKey: chartPayloadPlanKey,
+                    hasValidCandles: Boolean(
+                      (chartPayload?.kind === "perp-combo" && visiblePerpCombo && visiblePerpCombo.candles.length > 1)
+                      || (chartPayload?.kind === "spot-combo" && visibleSpotCombo && visibleSpotCombo.points.length > 1),
+                    ),
+                  }) && (
+                    <button
+                      type="button"
+                      aria-expanded={combinationOpen}
+                      aria-controls="combination-order-book-panel"
+                      onClick={() => setCombinationOpen(!combinationOpen)}
+                      className={`rounded border px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${combinationOpen ? "border-violet-500/50 bg-violet-600/20 text-violet-200" : "border-gray-600 bg-gray-900 text-gray-300 hover:border-gray-400 hover:text-white"}`}
+                    >
+                      {combinationOpen ? "隐藏合成盘口" : "显示合成盘口"}
+                    </button>
+                  )}
                 </div>
               </div>
+
+              {liveBookOpen && liveBookTarget && (
+                <div id="live-order-book-panel">
+                  <LiveOrderBookPanel target={liveBookTarget} state={liveBookState} wsMode={liveBookWsMode} onWsModeChange={setLiveBookWsMode} />
+                </div>
+              )}
+
+              {combinationOpen && combinationPlan && (
+                <div id="combination-order-book-panel">
+                  <CombinationOrderBookPanel
+                    mode={combinationPlan.mode}
+                    labelA={combinationLabelA}
+                    labelB={combinationLabelB}
+                    targetA={combinationTargetA}
+                    targetB={combinationTargetB}
+                    stateA={combinationStateA}
+                    stateB={combinationStateB}
+                    wsMode={combinationWsMode}
+                    onWsModeChange={setCombinationWsMode}
+                  />
+                </div>
+              )}
 
               {chartLoading ? (
                 <div className="flex h-[520px] items-center justify-center" role="status"><div className="text-center"><div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-2 border-gray-700 border-b-violet-400 motion-reduce:animate-none" /><p className="text-sm text-gray-400">正在加载并对齐K线…</p></div></div>
