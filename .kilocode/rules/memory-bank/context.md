@@ -25,6 +25,20 @@ The product UI now consists of `/funding` and `/search` for Hyperliquid, Gate.io
 
 ## Recently Completed
 
+- [x] **单币种实时盘口点差行（2026-10-24）**：单市场「显示实时盘口」在来源/状态说明后、累计七列表格前新增同款单行最佳点差和 VWAP 点差（数值与百分比均10px），并在WS左侧提供默认5,000的共享样式预算picker。沿用 `buildLegOrderBookMetrics`、本市场实际报价币、完整已收深度与20秒新鲜度门槛；浅盘只隐藏VWAP，状态/身份失效不伪造读数，原累计盘口和回退/I/O不变。抽取 `orderBookReadout.tsx`、`vwapBudgetControl.tsx`、`orderBookClock.ts` 供两个面板共用，组合原有公开helper保留兼容re-export，无循环依赖。README已同步。
+  - **验证**：主代理读取共享模块、两个面板、单市场新增测试、fixture截图和DOM；全量 Bun 1285 pass / 0 fail（5232断言）。最终将自定义提交从state updater内副作用恢复为事件callback、清理提取后未用imports后，两个面板112 pass / 0 fail（594断言），typecheck、范围ESLint、diff check通过。组件预览验证相同book下与组合A腿读数一致，5,000→1,000→10,000改变VWAP但best和WS不变；360px容器摘要局部横滚，800px视口无页面横溢出；最终callback校正未取得新浏览器自定义交互记录。证据Temp `opencode/single-book-spread-{wide.png,narrow.png,dom.json}`；仅组件fixture，非真实行情E2E，临时路由已删除。本轮未生产构建/提交/推送。
+
+- [x] **点差字号与标签统一（2026-10-24）**：组合及两腿摘要的标签、绝对数值与百分比均统一为 10px，保留既有字重、颜色、行高和单行布局；单腿「最佳买卖点差」简化为「最佳点差」，spread 组合标签也统一为「最佳点差」，ratio 保留「最佳比值差」语义。未改任何计算或预算控件。主代理读取产物及字号断言，面板 SSR 87 pass / 0 fail（479 断言）、typecheck、范围 ESLint、diff check 通过；本轮未重跑浏览器截图/全量测试/生产构建，未提交或推送。
+
+- [x] **组合百分比相加、可调 VWAP 预算与单行摘要（2026-10-24）**：用户新口径取代下方历史组合中间价百分比——组合最佳 % 为 A/B 单腿最佳 % 相加，组合 VWAP % 为 A/B 同预算单腿 VWAP % 相加，spread/ratio 一致；绝对点差、撮合段与累计不变。WS 勾选左侧新增共享预算下拉，默认 5,000，预设 1,000/3,000/5,000/10,000 及自定义正数（可小数）；输入 Enter/失焦生效，无效草稿保留上次有效预算。预算在面板 mount 内保留，三处摘要同步重算，不修改 I/O、订阅或 Controller。单腿与组合最佳/VWAP 改为同一条文本行，窄列仅摘要局部横滚，移除组合常驻公式脚注；完整计算口径保留悬浮说明。README 已同步。
+  - **验证**：主代理读取核心/UI产物、测试、截图及 DOM 交互记录；全量 Bun 1267 pass / 0 fail（5121 断言）；最终修正有效百分比 hover 文案及取消草稿不误提交后，核心+面板 302 pass / 0 fail（1654 断言），typecheck、范围 ESLint、diff check 通过。临时组件预览验证 800px 视口默认/1,000/10,000/自定义1,234.5/无效0恢复，三处 VWAP 同步变化、best与WS不变；常规摘要29px高、内部20px单行，窄腿局部横滚。取消/Escape 保留10,000、真正离开控件提交1,234.5、编辑中切预设放弃草稿均有交互记录。证据 Temp `opencode/compact-book-{normal.png,budget-10000.png,invalid-custom.png,narrow-lane.png,dom.json}`（JSON 最终记录为缺陷修复交互，布局截图沿用未改变的视觉版本）。仅组件fixture交互与容器验证，非上游行情E2E或真实全尺寸响应式验收；未生产构建/提交/推送。
+
+- [x] **左右单腿点差摘要（2026-10-24）**：用户确认两腿均显示最佳买卖点差及买卖每侧各 5,000 本腿报价币 VWAP 点差，位置在各腿标题描述/状态之后、七列盘口之前，均含带符号数值与百分比。`buildLegOrderBookMetrics` 复用完整深度处理和 VWAP 算法，单腿差值为 ask − bid、百分比除以买卖中间值绝对值；使用该腿实际报价币，不做换汇，也不受组合 USD 门槛、另一腿失效或两腿 skew 影响；本腿身份/live/新鲜度仍校验。浅盘只隐藏 VWAP，最佳点差保留；stale/无帧/无效档位不伪造值。A/B/组合分别使用独立 aria 与数据 hook，中间摘要及原盘口列序/档序不变。README 已补充三处摘要口径。
+  - **验证**：最终盘口核心与面板 277 pass / 0 fail（12 文件、1454 断言），typecheck、范围 ESLint、diff check 通过。主代理读取计算/UI产物、测试和临时组件浏览器截图/DOM：单腿摘要位于描述和表格之间，340px 腿容器两卡同行，178px 腿容器换行且摘要无横向溢出。证据 Temp `opencode/leg-spread-{wide-stacked.png,wide-lanes.png,narrow-lanes.png,stale-a.png,dom.json}`；三栏为 800px 视口强制布局，仅组件 fixture 验证，非真实 ≥1024px 或手机视口、也非真实行情 E2E；临时路由已删除。本轮未重跑全量测试/生产构建，未提交/推送。
+
+- [x] **合成盘口买卖点差摘要（2026-10-24）**：买入/卖出组合之间新增最佳一档及每腿 5,000 报价币 VWAP 点差，均显示带符号数值和百分比。用户确认百分比为 `(买入组合值 − 卖出组合值) / abs((买入组合值 + 卖出组合值)/2) × 100`；中间价为零时仅百分比为 —。VWAP 按每方向 A/B 各 5,000 报价币、完整已收到深度逐腿吃单（末档可部分成交），各腿实际报价成交额 / 基础币成交量后再按 spread/ratio 合成，不受五段展示截断影响。深度不足、过期、时差或无效输入不发布指标并说明原因；仅允许 ULP 级预算残差，不计手续费。原盘口列序、档位与累计不变。
+  - **验证**：整合全量 Bun 测试 1211 pass / 0 fail；随后增加预算完成守卫及三个核心回归，最终盘口核心+面板 246 pass / 0 fail，typecheck、范围 ESLint、diff check 通过。读取并核验临时组件预览截图：800px 视口两指标同行，320px 容器下自动换行，摘要无横向溢出；非真实行情端到端验收，也未验证 ≥1024px 三栏或真实手机视口。证据 Temp `opencode/evidence-spread-{wide800.png,narrow320.png,dom.json}`；临时预览路由已删除。本轮未执行生产构建，未提交/推送。
+
 - [x] **合成盘口视觉验收（2026-10-24）**：真实 797×658 CSS 视口、DPR 1.5，Gate.io BTC/USDT 现货 A + Binance BTCUSDC 永续 B、spread 模式。已读取两张真实截图核验两腿七列表头顺序及各自 USDT/USDC 单位、买入 5→1、卖出 1→5，表头与数字无明显遮挡重叠；DOM 记录页面无横向溢出。截图同帧内买入首行累计与汇总一致；报告中跨次刷新抽样金额不得混作同帧一致性证据。验收后面板已隐藏。仅此真实视口通过，≥1024px 三栏、手机窄屏截图与 ratio 视觉未覆盖，不外推全尺寸通过。报告与 JSON 位于 Temp `opencode/combination-book-visual-review-20261024.*`；截图为 Temp `opencode-browser-WX3Rx4/0/screenshot.png` 与 `opencode-browser-6P3ngi/0/screenshot.png`。
 
 - [x] **合成盘口列序与买入档序（2026-10-24）**：A/B 两腿改为「量（报价币）｜量（商品币）｜买价｜档｜卖价｜量（商品币）｜量（报价币）」七列，报价币量为该档价格×该档数量（非累计），资产单位取各自 target.baseAsset/quoteAsset（不硬写 USDT）；缺档价格与两种量、以及非有限或溢出的乘积均显示破折号。中间买入组合仅倒序展示已有真实档位（5→4→…→1，不足五档不补造），保留原档号、本段金额与累计金额，卖出组合保持 1→5 升序；`displayLevels` 复制后反转，不就地 mutate。回退提示、实时数据链与撮合算法不变。

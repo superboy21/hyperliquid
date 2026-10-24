@@ -5,10 +5,14 @@ import type { BookFrame, BookSessionState, BookTarget, NormalizedOrderBook } fro
 import { BookError } from "@/lib/order-book/types";
 import LiveOrderBookPanel from "./LiveOrderBookPanel";
 import CombinationOrderBookPanel, {
+  DEFAULT_VWAP_BUDGET,
   EMPTY_COMBINATION_PREFERENCE,
+  VWAP_BUDGET_PRESETS,
   combinationPreferenceKey,
   displayLevels,
   formatCombinationValue,
+  formatMetricDifference,
+  formatMetricPercent,
   formatUsdt,
   isFallbackNotice,
   legBookRows,
@@ -16,9 +20,13 @@ import CombinationOrderBookPanel, {
   legTiming,
   levelQuoteAmount,
   modeLabel,
+  parseVwapBudget,
   preferenceForCombinationChange,
   resolveLiveClock,
+  shortMetricReason,
   shouldShowCombinationToggle,
+  vwapBudgetError,
+  vwapBudgetSelection,
 } from "./CombinationOrderBookPanel";
 
 const NOW = Date.UTC(2026, 0, 1, 12, 0, 0);
@@ -114,6 +122,34 @@ const plainText = (html: string) => html
   .replace(/&[a-zA-Z#0-9]+;/g, " ")
   .replace(/\s+/g, " ")
   .trim();
+
+/**
+ * Reads one rendered summary reading through its stable data hook. The visual
+ * classes are free to change; the number a user sees must not.
+ */
+function metricValue(markup: string, key: string): string {
+  const match = new RegExp(`data-combination-metric="${key}"[^>]*>([^<]*)<`).exec(markup);
+  return plainText(match?.[1] ?? "");
+}
+
+function metricNumber(markup: string, key: string): number {
+  return Number(metricValue(markup, key).replace(/[,\s+%]/g, ""));
+}
+
+/** Reads one attribute of a summary reading's span, e.g. its hover title. */
+function metricAttribute(markup: string, key: string, attribute: string): string {
+  const match = new RegExp(`data-combination-metric="${key}"[^>]*?${attribute}="([^"]*)"`).exec(markup);
+  return match?.[1] ?? "";
+}
+
+/** The pair summary's own markup, stopping before the sell direction block. */
+function pairSummaryBlock(markup: string): string {
+  const label = markup.indexOf('aria-label="买卖点差摘要"');
+  if (label < 0) return "";
+  const start = markup.lastIndexOf("<div", label);
+  const sellBlock = markup.indexOf('<div class="rounded border border-rose-500/25', label);
+  return markup.slice(start, sellBlock === -1 ? undefined : sellBlock);
+}
 
 function tables(markup: string): ParsedTable[] {
   return [...markup.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/g)].map((match) => {
@@ -435,6 +471,558 @@ describe("CombinationOrderBookPanel values", () => {
     expect(isFallbackNotice("fallback")).toBe(true);
     expect(isFallbackNotice("unsupported")).toBe(true);
     expect(isFallbackNotice("policy")).toBe(false);
+  });
+});
+
+describe("CombinationOrderBookPanel buy/sell spread summary", () => {
+  test("renders the summary between the buy and sell blocks without adding a table", () => {
+    const markup = panel();
+    const buy = markup.indexOf("买入组合合成盘口");
+    const summaryStart = markup.indexOf('aria-label="买卖点差摘要"');
+    const sell = markup.indexOf("卖出组合合成盘口");
+    expect(buy).toBeGreaterThan(-1);
+    expect(summaryStart).toBeGreaterThan(buy);
+    expect(sell).toBeGreaterThan(summaryStart);
+    const summary = pairSummaryBlock(markup);
+    // One compact line: both readings plus a separator, no wrapping card grid.
+    expect(summary).toContain("flex min-w-max items-baseline");
+    expect(summary).not.toContain("flex-col");
+    expect(summary).not.toContain("grid-cols");
+    expect(summary).toContain("overflow-x-auto");
+    // Buy 5→1 and sell 1→5 keep their columns: the summary adds no table.
+    expect(tables(markup)).toHaveLength(4);
+    expect(tables(markup)[1].rows.map((row) => Number(row[0]))).toEqual([4, 3, 2, 1]);
+    expect(tables(markup)[2].rows.map((row) => Number(row[0]))).toEqual([1, 2, 3, 4]);
+  });
+
+  test("quotes 买入组合价 − 卖出组合价 with a signed difference and the summed leg percentage", () => {
+    // Buy = 101 (A ask) − 99 (B bid) = +2; sell = 100 − 100 = 0.
+    // The percentage is A leg% + B leg%, never a combined-midpoint division.
+    const markup = panel({
+      stateA: state({ asks: [{ price: 101, quantity: 100 }], bids: [{ price: 100, quantity: 100 }] }, TARGET_A),
+      stateB: state({ bids: [{ price: 99, quantity: 100 }], asks: [{ price: 100, quantity: 100 }] }, TARGET_B),
+    });
+    expect(metricValue(markup, "best-difference")).toBe("+2");
+    const aBest = metricNumber(markup, "leg-a-best-percent");
+    const bBest = metricNumber(markup, "leg-b-best-percent");
+    // Rendered percentages are rounded to five significant digits, so the sum is
+    // compared with a display-level tolerance rather than bit equality.
+    expect(Math.abs(metricNumber(markup, "best-percent") - (aBest + bBest))).toBeLessThan(0.001);
+    expect(metricNumber(markup, "best-percent")).toBeGreaterThan(0);
+    // One level per side, so both readings land on the same numbers here.
+    expect(metricValue(markup, "vwap-difference")).toBe("+2");
+    expect(markup).toContain("百分比 = A 腿最佳点差% + B 腿最佳点差%");
+    // The old combined-midpoint denominator is gone from every note.
+    expect(markup).not.toContain("两方向中间价");
+  });
+
+  test("the visible footnote is gone and the explanation lives in titles only", () => {
+    const summary = plainText(pairSummaryBlock(panel()));
+    expect(summary).not.toContain("买入 − 卖出");
+    expect(summary).not.toContain("组合中间价绝对值");
+    // Only the readings themselves are visible, plus a separator.
+    expect(summary.startsWith("最佳点差")).toBe(true);
+    expect(summary).toContain("VWAP 点差");
+    // The summed-percentage rule is still reachable on hover. Deep books are
+    // needed for the VWAP note, which is a reason when the budget cannot fill.
+    const deep = panel({
+      stateA: state({
+        asks: [{ price: 101, quantity: 10 }, { price: 114, quantity: 50 }],
+        bids: [{ price: 100, quantity: 100 }],
+      }, TARGET_A),
+      stateB: state({
+        bids: [{ price: 98, quantity: 100 }],
+        asks: [{ price: 100, quantity: 100 }],
+      }, TARGET_B),
+    });
+    expect(deep).toContain("A 腿最佳点差% + B 腿最佳点差%");
+    expect(deep).toContain("A 腿 VWAP 点差% + B 腿 VWAP 点差%");
+  });
+
+  test("a zero leg midpoint no longer blanks the pair percentage", () => {
+    // Default books: A best +1 (0.995%), B best +1 (0.995%). The pair value is
+    // now the sum of those two leg percentages (~1.99%), not a midpoint ratio.
+    const markup = panel();
+    expect(metricValue(markup, "best-difference")).toBe("+2");
+    expect(metricNumber(markup, "best-percent")).toBeCloseTo(1.99, 2);
+    expect(metricValue(markup, "best-percent")).not.toBe("—");
+    expect(plainText(markup.slice(markup.indexOf("最佳点差指标")))).not.toContain("百分比 —");
+  });
+
+  test("keeps a negative reading signed instead of taking its absolute value", () => {
+    // A crossed synthetic book (ask below bid) is the only way the sell
+    // combination can be richer than the buy one: buy −3, sell +2, so the
+    // reading is −5. It must stay negative rather than being compared as a size.
+    const markup = panel({
+      stateA: state({ asks: [{ price: 100, quantity: 100 }], bids: [{ price: 104, quantity: 100 }] }, TARGET_A),
+      stateB: state({ bids: [{ price: 103, quantity: 100 }], asks: [{ price: 102, quantity: 100 }] }, TARGET_B),
+    });
+    expect(metricValue(markup, "best-difference")).toBe("-5");
+    expect(metricNumber(markup, "best-percent")).toBeLessThan(0);
+    expect(metricValue(markup, "best-difference")).not.toContain("—");
+  });
+
+  test("ratio mode reports the difference of the two ratios, not a price spread", () => {
+    // Buy = 110/100 = 1.1; sell = 100/105 = 0.952380…; difference ≈ 0.147619.
+    // Percent is the sum of the two legs' ratio percentages.
+    const markup = panel({
+      mode: "ratio",
+      stateA: state({ asks: [{ price: 110, quantity: 1 }], bids: [{ price: 100, quantity: 1 }] }, TARGET_A),
+      stateB: state({ bids: [{ price: 100, quantity: 1 }], asks: [{ price: 105, quantity: 1 }] }, TARGET_B),
+    });
+    const expectedDifference = 1.1 - 100 / 105;
+    expect(metricNumber(markup, "best-difference")).toBeCloseTo(expectedDifference, 5);
+    const aBest = metricNumber(markup, "leg-a-best-percent");
+    const bBest = metricNumber(markup, "leg-b-best-percent");
+    expect(Math.abs(metricNumber(markup, "best-percent") - (aBest + bBest))).toBeLessThan(0.001);
+    // Label and note switch to ratio wording rather than claiming a price.
+    expect(markup).toContain("最佳比值差");
+    expect(markup).toContain("绝对点差 = 买入组合比值 − 卖出组合比值");
+    expect(markup).not.toContain("绝对点差 = 买入组合价 − 卖出组合价");
+    expect(markup).not.toContain(">最佳价差<");
+  });
+
+  test("the pair note states subtraction for spreads and never divides by a combined midpoint", () => {
+    const markup = panel();
+    expect(markup).toContain("绝对点差 = 买入组合价 − 卖出组合价");
+    expect(markup).not.toContain("÷ |两方向中间价|");
+    expect(markup).toContain("A 腿最佳点差% + B 腿最佳点差%");
+  });
+
+  test("a VWAP reading uses each leg's full 5000 quote depth, not the best level", () => {
+    // Buy best level is 101 over 98 (+3). A's ask depth only covers 1010 at 101,
+    // so the 5000 budget continues at 114: A VWAP = 5000 / (10 + 3990/114).
+    const markup = panel({
+      stateA: state({
+        asks: [{ price: 101, quantity: 10 }, { price: 114, quantity: 50 }],
+        bids: [{ price: 100, quantity: 100 }],
+      }, TARGET_A),
+      stateB: state({
+        bids: [{ price: 98, quantity: 100 }],
+        asks: [{ price: 100, quantity: 100 }],
+      }, TARGET_B),
+    });
+    const expectedBuyVwap = 5000 / 45;
+    expect(metricValue(markup, "best-difference")).toBe("+3");
+    expect(metricNumber(markup, "vwap-difference")).toBeCloseTo(expectedBuyVwap - 98, 4);
+    // The summary must not reuse the best-level reading for VWAP.
+    expect(metricNumber(markup, "vwap-difference")).not.toBe(3);
+    // Pair VWAP% is the sum of each leg's own VWAP percentage.
+    expect(Math.abs(
+      metricNumber(markup, "vwap-percent")
+      - (metricNumber(markup, "leg-a-vwap-percent") + metricNumber(markup, "leg-b-vwap-percent")),
+    )).toBeLessThan(0.001);
+    // Percentages are the sums of the two legs' own percentages, so a shallow
+    // book still yields a finite pair percentage instead of a blank.
+    expect(markup).toContain("两腿各按 5,000 报价币");
+    expect(markup).toContain("不含手续费");  });
+
+  test("a leg short of 5000 quotes no VWAP, keeps the best reading and names the cause", () => {
+    const markup = panel();
+    expect(metricValue(markup, "best-difference")).toBe("+2");
+    expect(metricValue(markup, "vwap-difference")).toBe("—");
+    expect(metricValue(markup, "vwap-percent")).toBe("");
+    expect(markup).toContain("深度不足");
+    expect(markup).toContain("买方向A 腿");
+    // The reason is shortened for the row but the full sentence stays on hover.
+    expect(markup).toContain("不发布部分预算 VWAP");
+  });
+
+  test("stale books publish dashes and a reason instead of last-known numbers", () => {
+    const markup = panel({ nowMs: NOW + 20_001 });
+    for (const key of ["best-difference", "vwap-difference"]) {
+      expect(metricValue(markup, key)).toBe("—");
+    }
+    // A missing reading shows one dash, not a second unexplained percent dash.
+    expect(metricValue(markup, "best-percent")).toBe("");
+    expect(metricValue(markup, "vwap-percent")).toBe("");
+    const summary = markup.slice(markup.indexOf('aria-label="买卖点差摘要"'));
+    expect(summary).toContain("已过期");
+    expect(summary).not.toMatch(/data-combination-metric="[^"]+"[^>]*>[-+0-9]/);
+  });
+
+  test("unloaded legs explain the missing readings once, not twice", () => {
+    const markup = panel({ stateA: state(null, TARGET_A, { status: "connecting" }) });
+    expect(metricValue(markup, "best-difference")).toBe("—");
+    expect(metricValue(markup, "vwap-difference")).toBe("—");
+    // Both readings share the same sentence, so the summary prints it once
+    // instead of stacking two identical lines side by side.
+    const summary = plainText(markup.slice(markup.indexOf('aria-label="买卖点差摘要"')));
+    expect((summary.match(/不是实时行情/g) ?? []).length).toBe(1);
+  });
+
+  test("formats tiny differences and percentages without collapsing to zero", () => {
+    expect(formatMetricDifference(2e-7)).toBe("+0.0000002");
+    expect(formatMetricDifference(-1e-9)).toBe("-0.000000001");
+    expect(formatMetricDifference(0)).toBe("0");
+    expect(formatMetricDifference(Number.NaN)).toBe("—");
+    expect(formatMetricDifference(Number.POSITIVE_INFINITY)).toBe("—");
+    expect(formatMetricDifference(null)).toBe("—");
+    expect(formatMetricDifference(123_456.789)).toBe("+123,456.79");
+
+    expect(formatMetricPercent(null)).toBe("—");
+    expect(formatMetricPercent(Number.NaN)).toBe("—");
+    expect(formatMetricPercent(0)).toBe("0%");
+    expect(formatMetricPercent(0.00012345)).toBe("+0.00012345%");
+    expect(formatMetricPercent(-12.5)).toBe("-12.5%");
+    expect(formatMetricPercent(12_345.678)).toBe("+12,345.7%");
+    expect(formatMetricPercent(14.38508)).toBe("+14.385%");
+  });
+
+  test("shortens long reasons for the row without losing the full sentence", () => {
+    expect(shortMetricReason(null)).toBeNull();
+    expect(shortMetricReason("  ")).toBeNull();
+    expect(shortMetricReason("A 腿盘口已过期")).toBe("A 腿盘口已过期");
+    const long = "买方向A 腿深度不足 5000 报价币，不发布部分预算 VWAP";
+    const short = shortMetricReason(long, 20);
+    expect(short?.endsWith("…")).toBe(true);
+    expect(short).toHaveLength(20);
+    expect(shortMetricReason(long, 100)).toBe(long);
+  });
+});
+
+describe("CombinationOrderBookPanel per-leg spread summary", () => {
+  // A: ask top 101 over 1000, then 114 for the rest of the budget; bid 100.
+  // B: ask 100, bid 98; both sides deep enough for one 5000 budget each.
+  const DEEP_A: NormalizedOrderBook = {
+    asks: [{ price: 101, quantity: 10 }, { price: 114, quantity: 50 }],
+    bids: [{ price: 100, quantity: 100 }],
+  };
+  const DEEP_B: NormalizedOrderBook = {
+    bids: [{ price: 98, quantity: 100 }],
+    asks: [{ price: 100, quantity: 100 }],
+  };
+
+  /** The A or B side block only, so scoped assertions cannot leak into a neighbour. */
+  function legSection(markup: string, side: "A" | "B"): string {
+    const start = markup.indexOf(`aria-label="${side} 腿实时盘口"`);
+    const end = markup.indexOf("</section>", start);
+    return markup.slice(start, end);
+  }
+
+  test("both legs show their own summary between the description and the book table", () => {
+    const markup = panel();
+    for (const side of ["A", "B"] as const) {
+      const section = legSection(markup, side);
+      const description = section.indexOf(side === "A" ? "买入组合用 A 卖盘" : "买入组合用 B 买盘");
+      const summary = section.indexOf(`aria-label="${side} 腿最佳点差指标"`);
+      const table = section.indexOf("<table");
+      expect(description).toBeGreaterThan(-1);
+      expect(summary).toBeGreaterThan(description);
+      expect(table).toBeGreaterThan(summary);
+      // One summary each: A, B and the pair never double up in one leg.
+      expect((section.match(/aria-label="[AB] 腿最佳点差指标"/g) ?? []).length).toBe(1);
+      expect((section.match(/aria-label="[AB] 腿 VWAP 点差指标"/g) ?? []).length).toBe(1);
+    }
+    // The original seven-column books and their rank order are untouched.
+    const parsed = tables(markup);
+    expect(parsed).toHaveLength(4);
+    expect(parsed[0].rows.map((row) => row[3])).toEqual(["1", "2", "3", "4", "5"]);
+    expect(parsed[3].rows.map((row) => row[3])).toEqual(["1", "2", "3", "4", "5"]);
+    expect(parsed[0].headers).toEqual([
+      "量（USDT）", "量（BTC）", "买价", "档", "卖价", "量（BTC）", "量（USDT）",
+    ]);
+  });
+
+  test("keeps leg hooks independent from the combination hooks", () => {
+    // Deep books so all four readings exist and every hook is rendered.
+    const markup = panel({
+      stateA: state(DEEP_A, TARGET_A),
+      stateB: state(DEEP_B, TARGET_B),
+    });
+    for (const key of [
+      "leg-a-best-difference", "leg-a-best-percent", "leg-a-vwap-difference", "leg-a-vwap-percent",
+      "leg-b-best-difference", "leg-b-best-percent", "leg-b-vwap-difference", "leg-b-vwap-percent",
+      "best-difference", "best-percent", "vwap-difference", "vwap-percent",
+    ]) {
+      expect(markup).toContain(`data-combination-metric="${key}"`);
+    }
+    // Every hook appears exactly once, so no leg can shadow the pair summary.
+    for (const key of [
+      "leg-a-best-difference", "leg-b-best-difference", "leg-a-vwap-difference", "leg-b-vwap-difference",
+      "best-difference", "vwap-difference",
+    ]) {
+      expect((markup.match(new RegExp(`data-combination-metric="${key}"`, "g")) ?? []).length).toBe(1);
+    }
+  });
+
+  test("quotes each leg's ask−bid and 5000-quote VWAP from that leg's own depth", () => {
+    const markup = panel({
+      stateA: state(DEEP_A, TARGET_A),
+      stateB: state(DEEP_B, TARGET_B),
+    });
+    // A: best = 101 − 100 = +1; VWAP = 5000/45 − 100 ≈ +11.11.
+    expect(metricValue(markup, "leg-a-best-difference")).toBe("+1");
+    expect(metricNumber(markup, "leg-a-best-percent")).toBeCloseTo((1 / 100.5) * 100, 4);
+    expect(metricNumber(markup, "leg-a-vwap-difference")).toBeCloseTo(5000 / 45 - 100, 4);
+    expect(metricNumber(markup, "leg-a-vwap-percent")).toBeCloseTo(
+      ((5000 / 45 - 100) / Math.abs(((5000 / 45) + 100) / 2)) * 100,
+      3,
+    );
+    // B: best and VWAP are both 100 − 98 = +2 with a 99 midpoint.
+    expect(metricValue(markup, "leg-b-best-difference")).toBe("+2");
+    expect(metricNumber(markup, "leg-b-best-percent")).toBeCloseTo((2 / 99) * 100, 4);
+    expect(metricValue(markup, "leg-b-vwap-difference")).toBe("+2");
+    // The pair summary keeps its own numbers in the same render.
+    expect(metricValue(markup, "best-difference")).not.toBe(metricValue(markup, "leg-a-best-difference"));
+  });
+
+  test("labels the budget with each leg's real quote instead of assuming USDT", () => {
+    const usdcA: BookTarget = { ...TARGET_A, id: "spot:Binance:ETHUSDC", rawSymbol: "ETHUSDC", baseAsset: "ETH", quoteAsset: "USDC" };
+    const eurB: BookTarget = { ...TARGET_B, id: "spot:Gate.io:ETH_EUR", rawSymbol: "ETH_EUR", quoteAsset: "EUR" };
+    const markup = panel({
+      targetA: usdcA,
+      targetB: eurB,
+      stateA: state(DEEP_A, usdcA),
+      stateB: state(DEEP_B, eurB),
+    });
+    expect(legSection(markup, "A")).toContain("5,000 USDC");
+    expect(legSection(markup, "B")).toContain("5,000 EUR");
+    expect(legSection(markup, "A")).not.toContain("5,000 USDT");
+    // A non-USD quote only blocks the combination; the leg readings still work.
+    expect(markup).toContain("暂不支持合成盘口");
+    expect(metricValue(markup, "leg-b-best-difference")).toBe("+2");
+    expect(metricValue(markup, "leg-b-vwap-difference")).toBe("+2");
+  });
+
+  test("a shallow leg keeps its best gap and withholds only the VWAP", () => {
+    const markup = panel();
+    // Default books hold 408 and 397 quote units per side, far below 5000.
+    expect(metricValue(markup, "leg-a-best-difference")).toBe("+1");
+    expect(metricValue(markup, "leg-a-vwap-difference")).toBe("—");
+    expect(metricValue(markup, "leg-a-vwap-percent")).toBe("");
+    expect(metricValue(markup, "leg-b-best-difference")).toBe("+1");
+    expect(metricValue(markup, "leg-b-vwap-difference")).toBe("—");
+    // No leg-level problem exists here, so the depth shortfall is explained in
+    // the row itself rather than only on hover.
+    const a = plainText(legSection(markup, "A"));
+    expect(a).toContain("深度不足");
+    expect(a).toContain("A 腿卖盘（asks）");
+  });
+
+  test("a stale leg blanks only itself, even though the pair is also unavailable", () => {
+    // A is 26s old (over the 20s budget), B is exactly at 20s. The pair is
+    // rejected for both age and skew, but B's own readings must survive.
+    const markup = panel({
+      nowMs: NOW + 20_000,
+      stateA: state(DEEP_A, TARGET_A, {}, NOW - 6_000),
+      stateB: state(DEEP_B, TARGET_B, {}, NOW),
+    });
+    expect(metricValue(markup, "leg-a-best-difference")).toBe("—");
+    expect(metricValue(markup, "leg-a-vwap-difference")).toBe("—");
+    expect(metricValue(markup, "leg-b-best-difference")).toBe("+2");
+    expect(metricValue(markup, "leg-b-vwap-difference")).toBe("+2");
+    // The leg block already names the stale state; the summary repeats no reason.
+    const a = plainText(legSection(markup, "A"));
+    expect(a).toContain("盘口已过期");
+    expect(a).not.toContain("（26000ms 前收到");
+    expect(legSection(markup, "A")).toContain("title=\"最佳点差不可用：A 腿盘口已过期");
+    // The pair itself is still rejected in the middle column.
+    expect(markup).toContain("合成盘口暂不可用");
+    expect(metricValue(markup, "best-difference")).toBe("—");
+  });
+
+  test("a leg with no frame or an error states why without inventing numbers", () => {
+    const markup = panel({
+      stateA: state(null, TARGET_A, { status: "error", error: new BookError("network", "Binance 请求失败") }),
+    });
+    expect(metricValue(markup, "leg-a-best-difference")).toBe("—");
+    expect(metricValue(markup, "leg-a-vwap-difference")).toBe("—");
+    expect(metricValue(markup, "leg-b-best-difference")).toBe("+1");
+    const a = plainText(legSection(markup, "A"));
+    // The leg's own status line explains it; the summary adds no second copy.
+    expect(a).toContain("盘口暂不可用：Binance 请求失败");
+    expect(a).not.toContain("不是实时行情");
+    expect(legSection(markup, "A")).toContain("title=\"最佳点差不可用：A 腿盘口状态为 error");
+    expect(a).not.toMatch(/leg-a-(best|vwap)-difference"[\s\S]{0,200}?>[+-]?\d/);
+  });
+
+  test("the cited hover title follows the real percentage state", () => {
+    // Finite percentages must describe the calculation; only a withheld one may
+    // say it cannot be computed.
+    const markup = panel({
+      stateA: state({
+        asks: [{ price: 101, quantity: 10 }, { price: 114, quantity: 50 }],
+        bids: [{ price: 100, quantity: 100 }],
+      }, TARGET_A),
+      stateB: state({
+        bids: [{ price: 98, quantity: 100 }],
+        asks: [{ price: 100, quantity: 100 }],
+      }, TARGET_B),
+    });
+    for (const key of ["leg-a-best-percent", "leg-a-vwap-percent", "leg-b-best-percent"]) {
+      const title = metricAttribute(markup, key, "title");
+      expect(title).toContain("百分比");
+      expect(title).toContain("× 100");
+      expect(title).not.toContain("不适用");
+    }
+    const pairBest = metricAttribute(markup, "best-percent", "title");
+    expect(pairBest).toContain("A 腿最佳点差% + B 腿最佳点差%");
+    expect(pairBest).not.toContain("缺少可相加");
+    expect(metricAttribute(markup, "vwap-percent", "title")).toContain("A 腿 VWAP 点差% + B 腿 VWAP 点差%");
+  });
+
+  test("a withheld percentage hovers the reason instead of a formula", () => {
+    // Ask + bid cannot form a finite midpoint at this magnitude, so the core
+    // publishes a finite difference with percent = null.
+    const overflowing = state({
+      asks: [{ price: 9e307, quantity: 1e-300 }],
+      bids: [{ price: 9e307, quantity: 1e-300 }],
+    }, TARGET_A);
+    const markup = panel({ stateA: overflowing });
+    expect(metricValue(markup, "leg-a-best-percent")).toBe("—");
+    const title = metricAttribute(markup, "leg-a-best-percent", "title");
+    expect(title).toContain("该腿中间价为 0 或无法计算");
+    expect(title).not.toContain("× 100");
+  });
+
+  test("a rejected custom budget keeps the previous reading", () => {
+    // Pure-state guard behind the picker: a cancelled or invalid draft can never
+    // change what the summaries were computed from.
+    const markup = panel();
+    expect(markup).toContain('<option value="5000" selected="">5,000</option>');
+    expect(parseVwapBudget("")).toBeNull();
+    expect(markup).toContain("当前 VWAP 每侧预算 5,000 报价币");
+  });
+
+  test("labels the leg readings as 最佳点差 / VWAP 点差", () => {
+    const markup = panel();
+    for (const side of ["A", "B"] as const) {
+      const section = legSection(markup, side);
+      expect(section).toContain(">最佳点差</span>");
+      expect(section).toContain(">VWAP 点差</span>");
+      // The older, longer label is gone from the leg rows.
+      expect(section).not.toContain("最佳买卖点差");
+      expect(section).toContain(`aria-label="${side} 腿最佳点差指标"`);
+    }
+    // The pair summary uses the same short wording for spread mode.
+    expect(pairSummaryBlock(markup)).toContain(">最佳点差</span>");
+  });
+
+  test("label, absolute value and percentage all render at the same 10px size", () => {
+    // Deep books so every span (label / difference / percent) exists.
+    const markup = panel({
+      stateA: state({
+        asks: [{ price: 101, quantity: 10 }, { price: 114, quantity: 50 }],
+        bids: [{ price: 100, quantity: 100 }],
+      }, TARGET_A),
+      stateB: state({
+        bids: [{ price: 98, quantity: 100 }],
+        asks: [{ price: 100, quantity: 100 }],
+      }, TARGET_B),
+    });
+    const hookClass = (key: string) => {
+      const tag = new RegExp(`<span[^>]*data-combination-metric="${key}"[^>]*>`).exec(markup)?.[0] ?? "";
+      return /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+    };
+    for (const key of ["leg-a-best", "leg-a-vwap", "leg-b-best", "leg-b-vwap", "best", "vwap"]) {
+      expect(hookClass(`${key}-difference`)).toContain("text-[10px]");
+      expect(hookClass(`${key}-percent`)).toContain("text-[10px]");
+    }
+    // Every reading label is the same 10px weight/colour pair as before.
+    const labels = [...markup.matchAll(/class="text-\[10px\] font-semibold text-(?:sky|violet)-200" title="[^"]*">([^<]+)</g)]
+      .map((match) => match[1]);
+    expect(labels.length).toBeGreaterThanOrEqual(6);
+    expect(labels.every((label) => label === "最佳点差" || label === "VWAP 点差")).toBe(true);
+    // Nothing in a summary row may grow back to the old 13px value, and the line
+    // box stays at leading-5 so the row height does not change.
+    expect(pairSummaryBlock(markup)).not.toContain("text-[13px]");
+    expect(hookClass("best-difference")).toContain("leading-5");
+  });
+
+  test("the pair summary still reports the same values alongside the leg rows", () => {
+    const markup = panel();
+    expect(metricValue(markup, "best-difference")).toBe("+2");
+    // The pair percentage is now the two legs' percentages added together.
+    expect(Math.abs(
+      metricNumber(markup, "best-percent")
+      - (metricNumber(markup, "leg-a-best-percent") + metricNumber(markup, "leg-b-best-percent")),
+    )).toBeLessThan(0.001);
+    expect(metricValue(markup, "vwap-difference")).toBe("—");
+    expect(markup).not.toContain("买入 − 卖出 · %");
+    expect(markup).toContain("A 腿最佳点差% + B 腿最佳点差%");
+  });
+});
+
+describe("CombinationOrderBookPanel VWAP budget picker", () => {
+  test("offers the presets plus a custom entry, defaulting to 5,000", () => {
+    const markup = panel();
+    const options = [...markup.matchAll(/<option value="([^"]+)"[^>]*>([^<]*)<\/option>/g)]
+      .map((match) => ({ value: match[1], text: match[2] }));
+    expect(options).toEqual([
+      { value: "1000", text: "1,000" },
+      { value: "3000", text: "3,000" },
+      { value: "5000", text: "5,000" },
+      { value: "10000", text: "10,000" },
+      { value: "custom", text: "自定义" },
+    ]);
+    expect(markup).toContain('<option value="5000" selected="">5,000</option>');
+    expect(markup).toContain("VWAP 预算");
+    // The select is a labelled control, not an unlabeled combobox.
+    expect(markup).toMatch(/<label for="[^"]+" class="[^"]*">VWAP 预算<\/label><select id="[^"]+"/);
+  });
+
+  test("places the budget control before the WS checkbox", () => {
+    const markup = panel();
+    const select = markup.indexOf("<select");
+    const budgetLabel = markup.indexOf("VWAP 预算");
+    const ws = markup.indexOf("WS模式");
+    expect(budgetLabel).toBeGreaterThan(-1);
+    expect(select).toBeGreaterThan(budgetLabel);
+    expect(ws).toBeGreaterThan(select);
+    // Same control group, and it keeps wrapping instead of overflowing.
+    expect(markup).toContain('role="group" aria-label="盘口显示选项"');
+    expect(markup).not.toContain('<select id="_R_1h_" class="mr-auto');
+  });
+
+  test("parses only strictly positive finite budgets", () => {
+    expect(parseVwapBudget("1000")).toBe(1000);
+    expect(parseVwapBudget("1234.5")).toBe(1234.5);
+    expect(parseVwapBudget(" 1,234.5 ")).toBe(1234.5);
+    expect(parseVwapBudget(".5")).toBe(0.5);
+    expect(parseVwapBudget("")).toBeNull();
+    expect(parseVwapBudget("   ")).toBeNull();
+    expect(parseVwapBudget("0")).toBeNull();
+    expect(parseVwapBudget("0.0")).toBeNull();
+    expect(parseVwapBudget("-5")).toBeNull();
+    expect(parseVwapBudget("abc")).toBeNull();
+    expect(parseVwapBudget("1e5")).toBeNull();
+    expect(parseVwapBudget("NaN")).toBeNull();
+    expect(parseVwapBudget("Infinity")).toBeNull();
+  });
+
+  test("maps an applied budget to the matching preset or the custom entry", () => {
+    expect(vwapBudgetSelection(5000)).toEqual({ kind: "preset", value: 5000 });
+    expect(vwapBudgetSelection(1000)).toEqual({ kind: "preset", value: 1000 });
+    expect(vwapBudgetSelection(1234.5)).toEqual({ kind: "custom" });
+    // A budget that is already applied never reports a second, different value.
+    expect(vwapBudgetSelection(DEFAULT_VWAP_BUDGET)).toEqual({ kind: "preset", value: 5000 });
+  });
+
+  test("rejects an empty draft with one short reason", () => {
+    expect(vwapBudgetError("")).toBe("请输入大于 0 的报价币数量");
+    expect(vwapBudgetError("0")).toBe("请输入大于 0 的报价币数量");
+    expect(vwapBudgetError("1234.5")).toBeNull();
+  });
+
+  test("every summary quotes the same applied budget", () => {
+    const markup = panel({
+      stateA: state({
+        asks: [{ price: 101, quantity: 10 }, { price: 114, quantity: 50 }],
+        bids: [{ price: 100, quantity: 100 }],
+      }, TARGET_A),
+      stateB: state({
+        bids: [{ price: 98, quantity: 100 }],
+        asks: [{ price: 100, quantity: 100 }],
+      }, TARGET_B),
+    });
+    // The compact rows show no budget tag; the number lives in the picker and in
+    // each reading's title, and all three use the same value.
+    expect((markup.match(/各按 5,000 USDT/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(markup).toContain("A 腿 VWAP 点差指标");
+    expect(markup).toContain("B 腿 VWAP 点差指标");
+    expect(markup).toContain("两腿各按 5,000 报价币");
+    expect(markup).toContain('<option value="5000" selected="">5,000</option>');
   });
 });
 

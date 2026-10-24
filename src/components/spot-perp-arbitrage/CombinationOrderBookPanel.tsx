@@ -1,97 +1,61 @@
 ﻿"use client";
 
-import { useSyncExternalStore } from "react";
 import {
   COMBINATION_MAX_FRAME_AGE_MS,
   COMBINATION_MAX_SKEW_MS,
   buildCombinationOrderBook,
+  buildLegOrderBookMetrics,
   type CombinationBookLevel,
+  type CombinationBookMetrics,
   type CombinationBookMode,
   type CombinationBookSide,
+  type CombinationBookSpreadMetric,
 } from "@/lib/order-book/combination";
 import { projectOrderBook } from "@/lib/order-book/project";
 import type { BookSessionState, BookTarget } from "@/lib/order-book/types";
 import { bookSourceLabel } from "./LiveOrderBookPanel";
+import {
+  SpreadMetricInline,
+  SpreadSummaryStrip,
+  formatClockTime,
+  formatMetricDifference,
+  formatMetricPercent,
+  formatUsdt,
+  sharedMetricReason,
+  shortMetricReason,
+} from "./orderBookReadout";
+import { useOrderBookClock, resolveLiveClock } from "./orderBookClock";
+import {
+  DEFAULT_VWAP_BUDGET,
+  VWAP_BUDGET_PRESETS,
+  VwapBudgetPicker,
+  parseVwapBudget,
+  useVwapBudget,
+  vwapBudgetError,
+  vwapBudgetSelection,
+  type VwapBudgetSelection,
+} from "./vwapBudgetControl";
 
-/** One-second clock so age/skew rejection happens even while no frame arrives. */
-const CLOCK_INTERVAL_MS = 1_000;
+// Re-exported for the existing tests and any caller that imported these from
+// this panel before they moved into the shared modules.
+export {
+  DEFAULT_VWAP_BUDGET,
+  VWAP_BUDGET_PRESETS,
+  VwapBudgetPicker,
+  formatMetricDifference,
+  formatMetricPercent,
+  formatUsdt,
+  parseVwapBudget,
+  resolveLiveClock,
+  sharedMetricReason,
+  shortMetricReason,
+  useVwapBudget,
+  vwapBudgetError,
+  vwapBudgetSelection,
+};
+export type { VwapBudgetSelection };
+
 const ROWS = 5;
-
-/**
- * One shared wall clock. The snapshot is cached so `getSnapshot` stays
- * referentially stable between refreshes, and both the interval and the
- * wake-up listeners are torn down with the last subscriber so an unmounted
- * panel leaves nothing behind.
- *
- * A background tab may throttle `setInterval` to about once a minute, so the
- * clock is also refreshed on `visibilitychange`, `focus` and `pageshow`. Without
- * that, a tab returning to the foreground would render ages (and a `nowMs`)
- * that are minutes behind reality for one paint.
- */
-let clockValue: number | null = null;
-let clockTimer: ReturnType<typeof setInterval> | undefined;
-const clockListeners = new Set<() => void>();
-
-function publishClock(): void {
-  const next = Date.now();
-  if (clockValue === next) return;
-  clockValue = next;
-  for (const notify of [...clockListeners]) notify();
-}
-
-function clockSubscribe(listener: () => void): () => void {
-  clockListeners.add(listener);
-  if (clockTimer === undefined) {
-    clockValue = Date.now();
-    clockTimer = setInterval(publishClock, CLOCK_INTERVAL_MS);
-    if (typeof window !== "undefined") {
-      window.addEventListener("visibilitychange", publishClock);
-      window.addEventListener("focus", publishClock);
-      window.addEventListener("pageshow", publishClock);
-    }
-  }
-  return () => {
-    clockListeners.delete(listener);
-    if (clockListeners.size > 0 || clockTimer === undefined) return;
-    clearInterval(clockTimer);
-    clockTimer = undefined;
-    clockValue = null;
-    if (typeof window !== "undefined") {
-      window.removeEventListener("visibilitychange", publishClock);
-      window.removeEventListener("focus", publishClock);
-      window.removeEventListener("pageshow", publishClock);
-    }
-  };
-}
-
-const clockSnapshot = () => clockValue;
-/** Null during SSR and hydration; the panel then measures from the newest frame. */
-const clockServerSnapshot = () => null;
-const noClockSubscribe = () => () => {};
-
-/**
- * The clock the derivation actually uses.
- *
- * The one-second tick can legitimately be older than a frame, because a frame
- * can arrive in the middle of the current second (and a background tab may have
- * had its timers throttled). Reporting the bare tick would therefore call a
- * just-arrived frame "received in the future" and blank the book. The live clock
- * never runs behind a frame it can see, so the newest receipt time is a floor;
- * the tick drives staleness while nothing arrives.
- *
- * Frames are stamped by this same page, so the floor cannot invent a value that
- * the core would otherwise reject as untrustworthy. An explicit `nowMs` (tests,
- * stories) bypasses the floor entirely, which keeps future-frame rejection
- * testable and lets a test pin an exact instant.
- */
-export function resolveLiveClock(input: {
-  nowMs?: number;
-  ticking: number | null;
-  frameReference: number;
-}): number {
-  if (input.nowMs !== undefined) return input.nowMs;
-  return Math.max(input.ticking ?? 0, input.frameReference);
-}
 
 /**
  * Preference scope for the combined book. The pair identity (A + B) owns the
@@ -155,19 +119,6 @@ function number(value: number | undefined, digits = 8): string {
 }
 
 /**
- * USDT notionals: never round a positive amount to 0.00, never show size with
- * false precision. Amounts under 0.01 keep four significant digits.
- */
-export function formatUsdt(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return "—";
-  const size = Math.abs(value);
-  if (size > 0 && size < 0.01) {
-    return value.toLocaleString("en-US", { maximumSignificantDigits: 4 });
-  }
-  return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
-}
-
-/**
  * Spreads keep their sign and may be negative. A ratio is positive, so it is
  * formatted by magnitude: common pairs read like 1.1000, while a tiny ratio
  * stays visible (e.g. 0.0000001234) instead of collapsing to 0.0000.
@@ -199,12 +150,6 @@ export function formatCombinationValue(mode: CombinationBookMode, value: number 
 
 export function modeLabel(mode: CombinationBookMode): string {
   return mode === "ratio" ? "比值 A / B" : "价差 A − B";
-}
-
-function clockTime(value: number): string {
-  return new Date(value).toLocaleTimeString("zh-CN", {
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-  });
 }
 
 export interface LegTiming {
@@ -335,8 +280,12 @@ function LegBook(props: {
   state: BookSessionState;
   timing: LegTiming;
   skew: number | null;
+  /** The same clock the combined book uses, so both summaries age together. */
+  clockNow: number;
+  /** Shared quote-currency VWAP budget, straight from the panel's picker. */
+  vwapNotionalUsdt: number;
 }) {
-  const { side, target, label, state, timing, skew } = props;
+  const { side, target, label, state, timing, skew, clockNow, vwapNotionalUsdt } = props;
   const projected = state.frame ? projectOrderBook(state.frame.book) : null;
   const bids = projected?.bids ?? [];
   const asks = projected?.asks ?? [];
@@ -347,6 +296,10 @@ function LegBook(props: {
   const baseHeader = baseUnit ? `量（${baseUnit}）` : "数量";
   const quoteHeader = quoteUnit ? `量（${quoteUnit}）` : "数量";
   const rows = legBookRows(bids, asks);
+  // Per-leg readings are independent of the partner: a stale or skewed B leg
+  // cannot blank a healthy A leg (and vice versa), because nothing here reads
+  // the other side's state.
+  const legMetrics = buildLegOrderBookMetrics({ target, state, nowMs: clockNow, label: side, vwapNotionalUsdt });
 
   return (
     <section
@@ -368,7 +321,7 @@ function LegBook(props: {
       {state.frame && (
         <p className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-gray-500">
           <span>{bookSourceLabel(state.frame)}</span>
-          <span>{clockTime(state.frame.receivedAtMs)}</span>
+          <span>{formatClockTime(state.frame.receivedAtMs)}</span>
           {(timing.stale || state.status === "stale") && <span className="font-medium text-amber-300">已过期</span>}
         </p>
       )}
@@ -380,7 +333,10 @@ function LegBook(props: {
           {problem}
         </p>
       )}
-      <div className="min-w-0 overflow-x-auto">
+
+      <LegSpreadSummary side={side} quoteUnit={quoteUnit} metrics={legMetrics} showReasons={problem === null} />
+
+      <div className="mt-1 min-w-0 overflow-x-auto">
         <table className="w-full min-w-[26rem] table-fixed border-collapse text-[11px] tabular-nums">
           <caption className="sr-only">
             {side} 腿 {label} 买卖双方各五档紧凑盘口；数量为基础币 {baseUnit ?? "基础资产"}，报价金额为
@@ -506,24 +462,148 @@ function DirectionBlock(props: {
   );
 }
 
+/**
+ * One leg's own ask−bid gap and VWAP gap.
+ *
+ * Everything here derives from that leg alone: a stale or skewed partner can
+ * make the combined book unavailable, but it must never blank a healthy leg's
+ * readings. Copy uses the leg's real quote asset instead of assuming USDT, and
+ * the budget comes from the core result rather than a literal.
+ */
+function LegSpreadSummary(props: {
+  side: "A" | "B";
+  quoteUnit: string | null;
+  metrics: CombinationBookMetrics;
+  /**
+   * The leg block already prints why this leg is not live directly above, so the
+   * summary skips its own copy of that sentence. The full text stays in each
+   * reading's title either way.
+   */
+  showReasons?: boolean;
+}) {
+  const { side, quoteUnit, metrics, showReasons = true } = props;
+  const { best, vwap, vwapNotionalUsdt, bestReason, vwapReason } = metrics;
+  const quote = quoteUnit ?? "报价币";
+  const budget = formatUsdt(vwapNotionalUsdt);
+  const shared = showReasons ? sharedMetricReason(metrics) : null;
+  const scopeLabel = `${side} 腿`;
+
+  const bestTitle = best === null
+    ? `最佳点差不可用：${bestReason ?? "暂无数据"}`
+    : `最低卖价 ${number(best.buyValue)} − 最高买价 ${number(best.sellValue)} = ${formatMetricDifference(best.difference)}；百分比 = 该腿点差 ÷ |该腿买卖中间价| × 100。`;
+  const vwapTitle = vwap === null
+    ? `VWAP 点差不可用：${vwapReason ?? "暂无数据"}`
+    : `卖盘侧与买盘侧各按 ${budget} ${quote} 成交后相减；每侧独立计算，不含手续费。百分比 = 该腿 VWAP 点差 ÷ |该腿两侧 VWAP 中间价| × 100。`;
+  const legPercentNullTitle = "该腿中间价为 0 或无法计算，百分比不适用；点差数值仍然有效";
+
+  return (
+    <SpreadSummaryStrip label={`${scopeLabel}点差摘要`} sharedReason={shared}>
+      <SpreadMetricInline
+        kind="best"
+        scope={{ hook: `leg-${side.toLowerCase()}`, label: `${scopeLabel}最佳点差` }}
+        label="最佳点差"
+        accent="sky"
+        metric={best}
+        reason={showReasons && shared === null ? bestReason : null}
+        title={bestTitle}
+        percentNullTitle={legPercentNullTitle}
+      />
+      <span aria-hidden="true" className="text-[10px] text-gray-700">·</span>
+      <SpreadMetricInline
+        kind="vwap"
+        scope={{ hook: `leg-${side.toLowerCase()}`, label: `${scopeLabel} VWAP 点差` }}
+        label="VWAP 点差"
+        accent="violet"
+        metric={vwap}
+        reason={showReasons && shared === null ? vwapReason : null}
+        title={vwapTitle}
+        percentNullTitle={legPercentNullTitle}
+      />
+    </SpreadSummaryStrip>
+  );
+}
+
+/**
+ * The buy/sell reading that sits between the two direction blocks.
+ *
+ * 点差 = 买入组合值 − 卖出组合值, i.e. the buy side's ask-like combination minus
+ * the sell side's bid-like combination. It is signed on purpose: a negative
+ * reading means the buy combination is the cheaper one.
+ *
+ * The percentage is not computed here. The core publishes it as the sum of the
+ * two legs' own percentages (A% + B%), so the panel only renders
+ * `result.metrics` and never divides by a combined midpoint.
+ */
+function CombinationSpreadSummary(props: {
+  mode: CombinationBookMode;
+  metrics: CombinationBookMetrics;
+}) {
+  const { mode, metrics } = props;
+  const { best, vwap, vwapNotionalUsdt, bestReason, vwapReason } = metrics;
+  const ratioMode = mode === "ratio";
+  const buyWord = ratioMode ? "买入组合比值" : "买入组合价";
+  const sellWord = ratioMode ? "卖出组合比值" : "卖出组合价";
+  const bestLabel = ratioMode ? "最佳比值差" : "最佳点差";
+  const vwapLabel = ratioMode ? "VWAP 比值差" : "VWAP 点差";
+  const budget = formatUsdt(vwapNotionalUsdt);
+  const sharedReason = sharedMetricReason(metrics);
+
+  const pairNote = (metric: CombinationBookSpreadMetric) =>
+    `${buyWord} ${formatCombinationValue(mode, metric.buyValue)} − ${sellWord} ${formatCombinationValue(mode, metric.sellValue)}`;
+
+  const bestTitle = best === null
+    ? `最佳${ratioMode ? "比值差" : "点差"}不可用：${bestReason ?? "暂无数据"}`
+    : `${pairNote(best)}。绝对点差 = ${buyWord} − ${sellWord}；百分比 = A 腿最佳点差% + B 腿最佳点差%，两腿各自按本腿买卖中间价计算后相加。`;
+  const vwapTitle = vwap === null
+    ? `VWAP ${ratioMode ? "比值差" : "点差"}不可用：${vwapReason ?? "暂无数据"}`
+    : `${pairNote(vwap)}。VWAP 每个方向 A、B 两腿各按 ${budget} 报价币成交（USD 计价按 1:1），不含手续费；百分比 = A 腿 VWAP 点差% + B 腿 VWAP 点差%。`;
+  const pairPercentNullTitle = "单腿中间价为 0 或无法计算，缺少可相加的百分比；绝对点差仍然有效";
+
+  return (
+    <SpreadSummaryStrip label="买卖点差摘要" sharedReason={sharedReason}>
+      <SpreadMetricInline
+        kind="best"
+        label={bestLabel}
+        accent="sky"
+        metric={best}
+        reason={sharedReason === null ? bestReason : null}
+        title={bestTitle}
+        percentNullTitle={pairPercentNullTitle}
+      />
+      <span aria-hidden="true" className="text-[10px] text-gray-700">·</span>
+      <SpreadMetricInline
+        kind="vwap"
+        label={vwapLabel}
+        accent="violet"
+        metric={vwap}
+        reason={sharedReason === null ? vwapReason : null}
+        title={vwapTitle}
+        percentNullTitle={pairPercentNullTitle}
+      />
+    </SpreadSummaryStrip>
+  );
+}
+
 export default function CombinationOrderBookPanel(props: CombinationOrderBookPanelProps) {
   const { mode, labelA, labelB, targetA, targetB, stateA, stateB, wsMode, onWsModeChange, nowMs } = props;
-  // An explicit clock (tests, stories) wins and never starts a timer.
-  const ticking = useSyncExternalStore(
-    nowMs === undefined ? clockSubscribe : noClockSubscribe,
-    clockSnapshot,
-    clockServerSnapshot,
-  );
-  // The newest frame sets a floor so a frame that arrived during this second is
-  // never judged as coming from the future; the tick still ages it to stale.
+  // Budget lives on the panel, so it survives a mode/timeframe re-render of the
+  // same mount (the pair identity owns the sessions) and simply resets to the
+  // default when the panel is closed and unmounted.
+  const {
+    budget, custom, customDraft, customError,
+    applyPreset, openCustom, commitCustom, cancelCustom, updateDraft,
+  } = useVwapBudget();
+  // An explicit clock (tests, stories) wins and never starts a timer; the newest
+  // frame sets a floor so a frame received during this second is never judged as
+  // coming from the future, while the tick still ages it to stale.
   const frameReference = Math.max(stateA.frame?.receivedAtMs ?? 0, stateB.frame?.receivedAtMs ?? 0);
-  const clockNow = resolveLiveClock({ nowMs, ticking, frameReference });
+  const clockNow = useOrderBookClock(nowMs, frameReference);
 
   const timingA = legTiming(clockNow, stateA);
   const timingB = legTiming(clockNow, stateB);
   const skew = legsSkewMs(stateA, stateB);
   const loading = legLoading(stateA) || legLoading(stateB);
-  const result = buildCombinationOrderBook({ targetA, targetB, stateA, stateB, mode, nowMs: clockNow });
+  const result = buildCombinationOrderBook({ targetA, targetB, stateA, stateB, mode, nowMs: clockNow, vwapNotionalUsdt: budget });
 
   const notices = [
     { side: "A" as const, label: labelA, state: stateA },
@@ -553,6 +633,18 @@ export default function CombinationOrderBookPanel(props: CombinationOrderBookPan
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1" role="group" aria-label="盘口显示选项">
+          <VwapBudgetPicker
+            budget={budget}
+            custom={custom}
+            customDraft={customDraft}
+            error={customError}
+            idleLabel="VWAP 预算"
+            onPreset={applyPreset}
+            onCustomSelect={openCustom}
+            onCustomDraft={updateDraft}
+            onCustomCommit={commitCustom}
+            onCustomCancel={cancelCustom}
+          />
           <label className="inline-flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs text-gray-300 focus-within:outline-none focus-within:ring-2 focus-within:ring-cyan-300">
             <input type="checkbox" checked={wsMode} onChange={(event) => onWsModeChange(event.currentTarget.checked)} className="h-4 w-4 accent-cyan-400" />
             WS模式
@@ -624,17 +716,18 @@ export default function CombinationOrderBookPanel(props: CombinationOrderBookPan
       )}
 
       <div className="grid min-w-0 grid-cols-1 items-start gap-2 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.7fr)_minmax(0,0.85fr)]">
-        <LegBook side="A" target={targetA} label={labelA} state={stateA} timing={timingA} skew={skew} />
+        <LegBook side="A" target={targetA} label={labelA} state={stateA} timing={timingA} skew={skew} clockNow={clockNow} vwapNotionalUsdt={budget} />
 
         <div className="min-w-0 space-y-2 rounded border border-gray-700/80 bg-gray-900/60 p-2" aria-label="中间合成盘口">
           <DirectionBlock direction="buy" mode={mode} side={result.buy} targetA={targetA} targetB={targetB} />
+          <CombinationSpreadSummary mode={mode} metrics={result.metrics} />
           <DirectionBlock direction="sell" mode={mode} side={result.sell} targetA={targetA} targetB={targetB} />
           <p className="text-[10px] leading-4 text-gray-500">
             每方向最多 5 段等名义撮合；累计 USDT 为两腿在该方向上共同成交的名义金额，不代表任一单腿的完整深度。
           </p>
         </div>
 
-        <LegBook side="B" target={targetB} label={labelB} state={stateB} timing={timingB} skew={skew} />
+        <LegBook side="B" target={targetB} label={labelB} state={stateB} timing={timingB} skew={skew} clockNow={clockNow} vwapNotionalUsdt={budget} />
       </div>
     </section>
   );
