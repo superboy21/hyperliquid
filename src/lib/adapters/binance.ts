@@ -101,6 +101,8 @@ interface NativeFundingHistoryItem {
   symbol?: string;
   fundingTime: number;
   fundingRate: string;
+  /** Real settlement mark price. Zero/non-finite values are not a real price. */
+  markPrice?: string;
 }
 
 interface NativeCandleArray extends Array<number | string> {

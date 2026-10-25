@@ -32,9 +32,21 @@ describe("funding observation availability", () => {
     );
 
     expect(fundingRates).toHaveLength(3);
-    expect(fundingRates[0]).toEqual({ time: 0, rate: 0, annualizedRate: 0, sampleCount: 1 });
+    expect(fundingRates[0]).toEqual({
+      time: 0,
+      rate: 0,
+      annualizedRate: 0,
+      sampleCount: 1,
+      settlements: [{ time: 30 * 60 * 1000, rate: 0 }],
+    });
+    // A bucket with no real sample stays a gap: no pseudo-settlement.
     expect(fundingRates[1]).toEqual({ time: HOUR_MS, rate: 0, annualizedRate: 0, sampleCount: 0 });
+    expect(fundingRates[1].settlements).toBeUndefined();
     expect(fundingRates[2]).toMatchObject({ time: 2 * HOUR_MS, sampleCount: 2 });
+    expect(fundingRates[2].settlements).toEqual([
+      { time: 2 * HOUR_MS + 10 * 60 * 1000, rate: 0.0001 },
+      { time: 2 * HOUR_MS + 50 * 60 * 1000, rate: 0.0003 },
+    ]);
     expect(fundingRates[2].rate).toBeCloseTo(0.0004, 12);
     expect(fundingRates[2].annualizedRate).toBeCloseTo(0.0004 * 365 * 24, 12);
   });

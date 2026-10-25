@@ -836,4 +836,78 @@ const forward = alignComboData(first, second, "ratio");
     expect(filtered[0].firstFunding).toEqual({ rate: 0.02, annualizedRate: 175.2 });
     expect(filtered[0].secondFunding).toBeNull();
   });
+
+  test("passes each leg's settlements through without re-signing or mixing them", () => {
+    const first = makeCandleResult({
+      fundingRates: [{
+        time: 1000,
+        rate: 0.0003,
+        annualizedRate: 3,
+        sampleCount: 2,
+        settlements: [
+          { time: 1030, rate: 0.0001, markPrice: 100 },
+          { time: 1060, rate: 0.0002, markPrice: 120 },
+        ],
+      }],
+    });
+    const second = makeCandleResult({
+      exchange: "OKX",
+      symbol: "ETH",
+      fundingRates: [{
+        time: 1000,
+        rate: -0.0005,
+        annualizedRate: -5,
+        sampleCount: 1,
+        settlements: [{ time: 1040, rate: -0.0005, markPrice: 2_000 }],
+      }],
+    });
+
+    const result = alignComboData(first, second, "spread");
+
+    // The derived spread is leg1 - leg2; it carries no settlement list of its own.
+    expect(result.fundingRates[0].rate).toBeCloseTo(0.0008, 12);
+    expect(result.fundingRates[0]).not.toHaveProperty("settlements");
+    // Each leg keeps its own times/marks and the venue's own rate sign — the
+    // negative venue rate is not flipped, and USD prices are not swapped.
+    expect(result.fundingRates[0].firstFunding).toEqual({
+      rate: 0.0003,
+      annualizedRate: 3,
+      settlements: [
+        { time: 1030, rate: 0.0001, markPrice: 100 },
+        { time: 1060, rate: 0.0002, markPrice: 120 },
+      ],
+      sampleCount: 2,
+    });
+    expect(result.fundingRates[0].secondFunding).toEqual({
+      rate: -0.0005,
+      annualizedRate: -5,
+      settlements: [{ time: 1040, rate: -0.0005, markPrice: 2_000 }],
+    });
+  });
+
+  test("a leg without a real settlement never receives the other leg's settlements", () => {
+    const first = makeCandleResult({
+      interval: "1d",
+      fundingRates: [{
+        time: 1000,
+        rate: 0.0003,
+        annualizedRate: 3,
+        sampleCount: 1,
+        settlements: [{ time: 1010, rate: 0.0003, markPrice: 100 }],
+      }],
+    });
+    const second = makeCandleResult({
+      interval: "1d",
+      exchange: "OKX",
+      symbol: "ETH",
+      fundingRates: [{ time: 1000, rate: 0, annualizedRate: 0, sampleCount: 0 }],
+    });
+
+    const result = alignComboData(first, second, "spread");
+
+    expect(result.fundingRates[0].firstFunding?.settlements).toEqual([
+      { time: 1010, rate: 0.0003, markPrice: 100 },
+    ]);
+    expect(result.fundingRates[0].secondFunding).toBeNull();
+  });
 });

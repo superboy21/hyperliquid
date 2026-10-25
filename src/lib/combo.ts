@@ -1,5 +1,5 @@
 import { SearchExchangeRate } from "./search";
-import { SearchCandleResult, SearchCandlePoint, FundingRatePoint, SearchChartInterval } from "./search-candles";
+import { SearchCandleResult, SearchCandlePoint, FundingRatePoint, FundingSettlementSample, SearchChartInterval } from "./search-candles";
 import { createCandleSourceProvenance, type CandleSourceProvenance } from "./candle-provenance";
 
 export type ComboMode = "spread" | "ratio" | null;
@@ -48,6 +48,19 @@ export interface ComboAnalysisValuePoint {
 export interface ComboFundingLegObservation {
   rate: number;
   annualizedRate: number;
+  /**
+   * This leg's own real settlements for the bucket, passed through verbatim.
+   * Each entry keeps the venue's own "long pays positive" rate: a combination's
+   * derived sign is applied to `rate` above and must never be applied again
+   * here. The array always belongs to exactly this leg.
+   */
+  settlements?: FundingSettlementSample[];
+  /**
+   * This leg's own settlement count, emitted only when it says more than the
+   * implied single settlement (i.e. > 1); otherwise it is derivable from
+   * `settlements` and omitted.
+   */
+  sampleCount?: number;
 }
 
 /** Combo funding point: the derived difference plus each leg's own raw funding
@@ -57,6 +70,36 @@ export interface ComboFundingLegObservation {
 export interface ComboFundingRatePoint extends FundingRatePoint {
   firstFunding?: ComboFundingLegObservation | null;
   secondFunding?: ComboFundingLegObservation | null;
+}
+
+/** Copy a leg's settlements without touching their venue-signed rates. */
+function legSettlements(point: FundingRatePoint): FundingSettlementSample[] | undefined {
+  return point.settlements === undefined
+    ? undefined
+    : point.settlements.map((settlement) => ({ ...settlement }));
+}
+
+/**
+ * Leg metadata for one actually-settled bucket. `settlements` stays on its own
+ * leg and keeps every venue rate's original sign. A source bucket that carried
+ * no per-settlement detail keeps that absence instead of implying an empty list.
+ *
+ * `sampleCount` is only passed through when it says more than the default single
+ * settlement (i.e. > 1): a one-settlement bucket is fully described by its single
+ * `settlements` row (or, without rows, by the bucket-level count), so the field
+ * is omitted there rather than being restated.
+ */
+function legObservation(
+  source: FundingRatePoint,
+  settlements: FundingSettlementSample[] | undefined,
+): ComboFundingLegObservation {
+  const count = Number(source.sampleCount);
+  return {
+    rate: source.rate,
+    annualizedRate: source.annualizedRate,
+    ...(settlements === undefined ? {} : { settlements }),
+    ...(Number.isFinite(count) && count > 1 ? { sampleCount: count } : {}),
+  };
 }
 
 function minimumOfficialQuoteVolume(
@@ -199,14 +242,26 @@ export function alignComboData(
     // settlement, null otherwise (missing bucket, explicit sampleCount 0
     // temporary chart-only zero, or malformed non-actual data). The temporary
     // zero is never represented as a real leg observation.
+    //
+    // Settlements are copied per leg and keep the venue's own rate sign. The
+    // derived difference below is the only place a combination sign is applied,
+    // so a settlement rate is never negated twice and never swapped between
+    // legs (a mixed/perp combo must not leak one symbol's settlements onto the
+    // other).
+    const firstSettlements = firstActual ? legSettlements(firstFr) : undefined;
+    const secondSettlements = secondActual ? legSettlements(secondFr) : undefined;
     const firstFunding: ComboFundingLegObservation | null = firstActual
-      ? { rate: firstFr.rate, annualizedRate: firstFr.annualizedRate }
+      ? legObservation(firstFr, firstSettlements)
       : null;
     const secondFunding: ComboFundingLegObservation | null = secondActual
-      ? { rate: secondFr.rate, annualizedRate: secondFr.annualizedRate }
+      ? legObservation(secondFr, secondSettlements)
       : null;
 
     let difference: ComboFundingRatePoint;
+    // The derived point deliberately carries no bucket-level `settlements`: a
+    // spread is not a venue settlement, and merging both legs' settlements into
+    // one array would mix symbols. Per-leg arrays live on firstFunding /
+    // secondFunding exactly as their venue reported them.
     if (firstActual && secondActual) {
       // Both legs have real samples: leg1 - leg2.
       difference = {

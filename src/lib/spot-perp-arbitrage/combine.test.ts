@@ -112,6 +112,63 @@ describe("spot-containing combination", () => {
     expect(perpFirst.funding.map((point) => point.annualizedRate)).toEqual([0.1, 0]);
     expect(spotFirst.funding.map((point) => point.annualizedRate)).toEqual([-0.1, -0]);
   });
+
+  test("mixed settlements keep venue signs in both directions and never cross legs", () => {
+    const candles = [rawCandle(10, 10, 10), rawCandle(20, 10, 10)];
+    const funding = [{
+      time: 10,
+      rate: 0.0003,
+      annualizedRate: 3,
+      sampleCount: 2,
+      settlements: [
+        { time: 100, rate: 0.0001, markPrice: 100 },
+        { time: 200, rate: 0.0002, markPrice: 110 },
+      ],
+    }, {
+      time: 20,
+      rate: -0.0004,
+      annualizedRate: -4,
+      sampleCount: 1,
+      settlements: [{ time: 300, rate: -0.0004, markPrice: 90 }],
+    }];
+    const perp = perpLeg(candles, funding);
+    const spot = spotLeg(candles);
+
+    // perp on leg1: the legacy bucket rate is already "long pays positive".
+    const perpFirst = spotResult(combineLoadedLegs(perp, spot, "spread"));
+    expect(perpFirst.funding[0].perpLeg).toBe(1);
+    expect(perpFirst.funding[0].rate).toBe(0.0003);
+    expect(perpFirst.funding[0].settlements).toEqual([
+      { time: 100, rate: 0.0001, markPrice: 100 },
+      { time: 200, rate: 0.0002, markPrice: 110 },
+    ]);
+    // A negative venue settlement rate is NOT flipped by the mixed sign.
+    expect(perpFirst.funding[1].rate).toBe(-0.0004);
+    expect(perpFirst.funding[1].settlements).toEqual([{ time: 300, rate: -0.0004, markPrice: 90 }]);
+
+    // perp on leg2: only the bucket rate/annualizedRate are negated for the
+    // spread lane; settlement rates stay exactly as the venue reported them.
+    const spotFirst = spotResult(combineLoadedLegs(spot, perp, "spread"));
+    expect(spotFirst.funding[0].perpLeg).toBe(2);
+    expect(spotFirst.funding[0].rate).toBe(-0.0003);
+    expect(spotFirst.funding[0].annualizedRate).toBe(-3);
+    expect(spotFirst.funding[0].settlements).toEqual([
+      { time: 100, rate: 0.0001, markPrice: 100 },
+      { time: 200, rate: 0.0002, markPrice: 110 },
+    ]);
+    expect(spotFirst.funding[1].settlements).toEqual([{ time: 300, rate: -0.0004, markPrice: 90 }]);
+  });
+
+  test("mixed settlements are dropped when only a subset of buckets aligns", () => {
+    const candles = [rawCandle(10, 10, 10)];
+    const funding = [
+      { time: 10, rate: 0.001, annualizedRate: 1, sampleCount: 1, settlements: [{ time: 10, rate: 0.001 }] },
+      { time: 999, rate: 0.002, annualizedRate: 2, sampleCount: 1, settlements: [{ time: 999, rate: 0.002 }] },
+    ];
+    const combined = spotResult(combineLoadedLegs(perpLeg(candles, funding), spotLeg(candles), "spread"));
+    expect(combined.funding).toHaveLength(1);
+    expect(combined.funding[0].settlements).toEqual([{ time: 10, rate: 0.001 }]);
+  });
 });
 
 describe("perp legacy delegation", () => {
@@ -144,6 +201,46 @@ describe("perp legacy delegation", () => {
     const expected = alignComboData(first.original, second.original, "spread");
     expect(expected.fundingRates).toHaveLength(1);
     expect(combineLoadedLegs(first, second, "spread")).toEqual(expected);
+  });
+
+  test("perp-perp delegation preserves each leg's settlements and derives the spread only", () => {
+    const first = perpLeg(
+      [rawCandle(10, 10, 11)],
+      [{
+        time: 10,
+        rate: 0.0003,
+        annualizedRate: 3,
+        sampleCount: 2,
+        settlements: [
+          { time: 100, rate: 0.0001, markPrice: 100 },
+          { time: 200, rate: 0.0002, markPrice: 110 },
+        ],
+      }],
+    );
+    const second = perpLeg(
+      [rawCandle(10, 5, 6)],
+      [{
+        time: 10,
+        rate: -0.0002,
+        annualizedRate: -2,
+        sampleCount: 1,
+        settlements: [{ time: 150, rate: -0.0002, markPrice: 50 }],
+      }],
+      "1h",
+      { ...perpSource, exchange: "OKX", symbol: "ETH" },
+    );
+
+    const combined = combineLoadedLegs(first, second, "spread");
+    const point = "candles" in combined ? combined.fundingRates[0] : null;
+    expect(point?.rate).toBeCloseTo(0.0005, 12);
+    expect(point).not.toHaveProperty("settlements");
+    expect(point?.firstFunding?.settlements).toEqual([
+      { time: 100, rate: 0.0001, markPrice: 100 },
+      { time: 200, rate: 0.0002, markPrice: 110 },
+    ]);
+    expect(point?.secondFunding?.settlements).toEqual([{ time: 150, rate: -0.0002, markPrice: 50 }]);
+    expect(point?.firstFunding?.sampleCount).toBe(2);
+    expect(point?.secondFunding?.sampleCount).toBeUndefined();
   });
 
   test("perp ratio rejects non-positive open/close on either numerator or denominator", () => {

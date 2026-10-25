@@ -316,6 +316,7 @@ describe("Bybit chart flow", () => {
       rate: 0.001,
       annualizedRate: 0.001 * 365 * 24 * 60 * 60 * 1000 / 100,
       sampleCount: 1,
+      settlements: [{ time: 1000, rate: 0.001 }],
     }]);
   });
 
@@ -338,7 +339,13 @@ describe("Bybit chart flow", () => {
       ],
       fetchFundingHistory: async () => [{ time: 100, rate: 0 }],
     });
-    expect(result.fundingRates[0]).toEqual({ time: 100, rate: 0, annualizedRate: 0, sampleCount: 1 });
+    expect(result.fundingRates[0]).toEqual({
+      time: 100,
+      rate: 0,
+      annualizedRate: 0,
+      sampleCount: 1,
+      settlements: [{ time: 100, rate: 0 }],
+    });
     expect(result.fundingRates[1]).toEqual({ time: 100 + hour, rate: 0, annualizedRate: 0, sampleCount: 0 });
   });
 
@@ -491,6 +498,7 @@ describe("Bybit search chart funding overlay horizon", () => {
       rate: 0,
       annualizedRate: 0,
       sampleCount: 1,
+      settlements: [{ time: horizonStart + 60_000, rate: 0 }],
     });
     expect(result.fundingRates.find((point) => point.time === NEWEST_OPEN - 89 * DAY_MS)?.sampleCount).toBe(1);
     expect(result.fundingRates.filter((point) => point.sampleCount === 0)).toHaveLength(118);

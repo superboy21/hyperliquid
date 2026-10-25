@@ -92,4 +92,58 @@ describe("numeric series boundary", () => {
       { time: 30, rate: 0.1, annualizedRate: 0.2, sampleCount: null },
     ]);
   });
+
+  test("passes this leg's settlements through verbatim, keeping venue rate signs", () => {
+    const raw: SearchCandleResult = {
+      interval: "1h", exchange: "Binance", symbol: "BTC", candles: [],
+      fundingRates: [{
+        time: 10,
+        rate: -0.0003,
+        annualizedRate: -1,
+        sampleCount: 2,
+        settlements: [
+          { time: 10, rate: -0.0001, markPrice: 100 },
+          { time: 20, rate: -0.0002 },
+        ],
+      }],
+    };
+    const funding = normalizePerpSeries(asPerpMarket(perpSource), raw).funding;
+    // Settlement rates are not re-signed and a missing mark stays absent.
+    expect(funding[0].settlements).toEqual([
+      { time: 10, rate: -0.0001, markPrice: 100 },
+      { time: 20, rate: -0.0002 },
+    ]);
+    expect(funding[0].rate).toBe(-0.0003);
+  });
+
+  test("drops fabricated settlement marks but keeps the settlement itself", () => {
+    const raw: SearchCandleResult = {
+      interval: "1h", exchange: "Binance", symbol: "BTC", candles: [],
+      fundingRates: [{
+        time: 10,
+        rate: 0.0003,
+        annualizedRate: 1,
+        sampleCount: 3,
+        settlements: [
+          { time: 10, rate: 0.0001, markPrice: 0 },
+          { time: 11, rate: 0.0001, markPrice: Number.NaN },
+          { time: 12, rate: 0.0001, markPrice: 0.5 },
+        ],
+      }],
+    };
+    const funding = normalizePerpSeries(asPerpMarket(perpSource), raw).funding;
+    expect(funding[0].settlements).toEqual([
+      { time: 10, rate: 0.0001 },
+      { time: 11, rate: 0.0001 },
+      { time: 12, rate: 0.0001, markPrice: 0.5 },
+    ]);
+  });
+
+  test("a bucket without per-settlement detail keeps that absence", () => {
+    const raw: SearchCandleResult = {
+      interval: "1h", exchange: "Binance", symbol: "BTC", candles: [],
+      fundingRates: [{ time: 10, rate: 0.1, annualizedRate: 0.2, sampleCount: 1 }],
+    };
+    expect(normalizePerpSeries(asPerpMarket(perpSource), raw).funding[0].settlements).toBeUndefined();
+  });
 });

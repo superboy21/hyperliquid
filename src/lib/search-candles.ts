@@ -36,12 +36,37 @@ export interface SearchCandlePoint {
   quoteVolume?: string;
 }
 
+/**
+ * One real venue funding settlement inside a candle bucket.
+ *
+ * `rate` is ALWAYS the venue's own "long pays positive" rate, exactly as the
+ * venue reported it: a derived combination's sign changes (e.g. leg1 - leg2, or
+ * a perp on leg 2 of a mixed pair) must never be written back into this array.
+ *
+ * `markPrice` is the venue's real settlement mark price when it reports one. A
+ * missing, non-finite, or non-positive upstream value is never replaced with 0
+ * or with any other fallback: the field is simply absent, so downstream callers
+ * can tell "no real mark" from "real mark of zero".
+ */
+export interface FundingSettlementSample {
+  time: number;
+  rate: number;
+  markPrice?: number;
+}
+
 export interface FundingRatePoint {
   time: number;
   /** Sum of settled funding rates in this candle interval (not an average). */
   rate: number;
   annualizedRate: number;
   sampleCount?: number;
+  /**
+   * The real settlements that produced this bucket, in ascending time order.
+   * Omitted/empty when the bucket holds no real sample, so a chart-only zero is
+   * never presented as a settlement. Two settlements in one bucket keep their
+   * own times (and their own mark prices), not the bucket's.
+   */
+  settlements?: FundingSettlementSample[];
 }
 
 export interface SearchCandleResult {
@@ -257,13 +282,77 @@ export function toAnnualizedRate(rate: number, fundingIntervalSeconds: number): 
   return rate * settlementsPerDay * 365;
 }
 
+/** A real mark price is finite and strictly positive; everything else is absent. */
+export function parseFundingSettlementMarkPrice(value: unknown): number | undefined {
+  const parsed = parseSearchFundingRate(value);
+  return parsed !== null && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * The real settlements of `[startTime, endTime)` taken from an already
+ * normalized, ascending, timestamp-deduped list. Binary-searches the first
+ * candidate so wide histories stay cheap for every candle.
+ */
+function sliceSettlements(
+  ordered: readonly FundingSettlementSample[],
+  startTime: number,
+  endTime: number,
+): FundingSettlementSample[] {
+  let low = 0;
+  let high = ordered.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (ordered[mid].time < startTime) low = mid + 1;
+    else high = mid;
+  }
+  const result: FundingSettlementSample[] = [];
+  for (let index = low; index < ordered.length; index += 1) {
+    const settlement = ordered[index];
+    if (settlement.time >= endTime) break;
+    result.push(settlement);
+  }
+  return result;
+}
+
+/**
+ * Normalize raw history once: finite time + finite rate, ascending by time, and
+ * the first valid row kept per timestamp — exactly the sample set (and the
+ * duplicate rule) of `calculateHistoricalFundingStatistics`. Real mark prices
+ * survive verbatim; a missing/zero/non-finite mark stays absent, never 0.
+ */
+function normalizeSettlementHistory(
+  rawHistory: readonly { time: number; rate: number; markPrice?: number }[],
+): FundingSettlementSample[] {
+  const samples = rawHistory.flatMap((sample) => {
+    const time = Number(sample?.time);
+    const rate = parseSearchFundingRate(sample?.rate);
+    if (!Number.isFinite(time) || rate === null) return [];
+    const markPrice = parseFundingSettlementMarkPrice(sample?.markPrice);
+    return [{ time, rate, ...(markPrice === undefined ? {} : { markPrice }) }];
+  }).sort((a, b) => a.time - b.time);
+
+  const ordered: FundingSettlementSample[] = [];
+  let lastTime: number | undefined;
+  for (const sample of samples) {
+    if (sample.time === lastTime) continue;
+    ordered.push(sample);
+    lastTime = sample.time;
+  }
+  return ordered;
+}
+
 export function aggregateFundingRatesToCandles(
-  rawHistory: { time: number; rate: number }[],
+  rawHistory: { time: number; rate: number; markPrice?: number }[],
   candles: SearchCandlePoint[],
   /** @deprecated Historical annualization is based on the candle duration. */
   _fundingIntervalSeconds?: number,
 ): FundingRatePoint[] {
   if (candles.length === 0) return [];
+
+  // One normalization pass: bucket maths stays exactly as before (the helper
+  // applies the same validation/duplicate rules), while per-settlement detail is
+  // sliced from the same canonical list instead of being re-derived.
+  const orderedSettlements = normalizeSettlementHistory(rawHistory);
 
   return candles.map((candle) => {
     const statistics = calculateHistoricalFundingStatistics(
@@ -279,9 +368,11 @@ export function aggregateFundingRatesToCandles(
         rate: statistics.settledReturn,
         annualizedRate: statistics.annualizedRate,
         sampleCount: statistics.sampleCount,
+        settlements: sliceSettlements(orderedSettlements, candle.openTime, candle.closeTime),
       };
     }
 
+    // No real sample in this bucket: an explicit gap, never a pseudo-settlement.
     return { time: candle.openTime, rate: 0, annualizedRate: 0, sampleCount: 0 };
   });
 }
@@ -644,15 +735,18 @@ async function fetchHyperliquidFundingHistory(
   startTimeMs: number,
   endTimeMs: number,
   signal?: AbortSignal,
-): Promise<{ time: number; rate: number }[]> {
+): Promise<{ time: number; rate: number; markPrice?: number }[]> {
   try {
     const history = await hlGetFundingHistoryRange(symbol, startTimeMs, endTimeMs, signal);
     return history.flatMap((h) => {
       const time = Number(h.time);
       const rate = parseSearchFundingRate(h.fundingRate);
-      return Number.isFinite(time) && rate !== null && time >= startTimeMs && time < endTimeMs
-        ? [{ time, rate }]
-        : [];
+      if (!Number.isFinite(time) || rate === null || time < startTimeMs || time >= endTimeMs) return [];
+      // Hyperliquid may report a real settlement mark price. Its upstream
+      // "0" placeholder for an absent value is not a real price and stays
+      // absent (parseFundingSettlementMarkPrice rejects non-positive values).
+      const markPrice = parseFundingSettlementMarkPrice((h as { markPrice?: unknown }).markPrice);
+      return [{ time, rate, ...(markPrice === undefined ? {} : { markPrice }) }];
     });
   } catch (error) {
     if (isAbortLikeError(error) || signal?.aborted) return [];
@@ -665,9 +759,9 @@ async function fetchBinanceFundingHistory(
   symbol: string,
   cutoffTime: number = 0,
   signal?: AbortSignal,
-): Promise<{ time: number; rate: number }[]> {
+): Promise<{ time: number; rate: number; markPrice?: number }[]> {
   try {
-    const allData: { time: number; rate: number }[] = [];
+    const allData: { time: number; rate: number; markPrice?: number }[] = [];
     const seen = new Set<number>();
     const now = Date.now();
     let currentEndTime = now;
@@ -692,7 +786,11 @@ async function fetchBinanceFundingHistory(
         const rate = parseSearchFundingRate(item.fundingRate);
         if (!Number.isFinite(time) || rate === null || seen.has(time)) continue;
         seen.add(time);
-        allData.push({ time, rate });
+        // Binance reports the real settlement mark price on the history row.
+        // Zero/non-finite/missing values are not real prices and are dropped
+        // rather than published as a synthetic 0.
+        const markPrice = parseFundingSettlementMarkPrice(item.markPrice);
+        allData.push({ time, rate, ...(markPrice === undefined ? {} : { markPrice }) });
         newCount++;
       }
 

@@ -145,10 +145,24 @@ function combineSpotContaining(
   const perp = first.kind === "perp" ? first : second.kind === "perp" ? second : null;
   const perpLeg: 1 | 2 = first.kind === "perp" ? 1 : 2;
   const sign = perpLeg === 1 ? 1 : -1;
+  // The legacy bucket rate is pre-signed as "long leg1 minus long leg2", so a
+  // perp on leg 2 is negated for the spread/chart lane. Only the bucket's own
+  // `rate`/`annualizedRate` are signed: `settlements` is passed through verbatim
+  // so each settlement keeps the venue's "long pays positive" rate and is never
+  // negated a second time downstream. There is a single perp leg here, so its
+  // settlement array can never be confused with (or swapped into) the spot leg.
   const funding: SignedFundingObservation[] = perp
     ? perp.series.funding
       .filter((point) => alignedTimes.has(point.time))
-      .map((point) => ({ ...point, rate: point.rate * sign, annualizedRate: point.annualizedRate * sign, perpLeg }))
+      .map((point) => ({
+        ...point,
+        rate: point.rate * sign,
+        annualizedRate: point.annualizedRate * sign,
+        ...(point.settlements === undefined
+          ? {}
+          : { settlements: point.settlements.map((settlement) => ({ ...settlement })) }),
+        perpLeg,
+      }))
     : [];
 
   const sourceProvenance = (leg: LoadedLeg): CandleSourceProvenance => leg.original.provenance
