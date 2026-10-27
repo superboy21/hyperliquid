@@ -15,6 +15,20 @@ import { chartIntlTimeZone, chartWeekday, chartYear, type ChartTimeZone } from "
 import type { PairAnalysis } from "@/lib/spot-perp-arbitrage/pair-statistics";
 import type { PairTradeSeries } from "@/lib/spot-perp-arbitrage/pair-trade";
 import { alignedPairChartSamples, alignedPairDerivedCandles } from "@/lib/spot-perp-arbitrage/pair-chart-data";
+import {
+  PAIR_FUNDING_PANE_NAME,
+  PAIR_TEMPORARY_ZERO_NAME,
+  PAIR_WEIGHTED_FUNDING_PANE_NAME,
+  PAIR_WEIGHTED_TEMPORARY_ZERO_NAME,
+  alignedPairFundingLane,
+  alignedPairWeightedFundingLane,
+  pairFundingAvailable,
+  pairFundingBeta,
+  pairFundingTooltipLines,
+  pairPaneLayout,
+  pairWeightedFundingAvailable,
+  pairWeightedFundingTooltipLines,
+} from "@/lib/spot-perp-arbitrage/pair-funding-lane";
 import { alignedPairCloses } from "@/lib/spot-perp-arbitrage/pair-adapter";
 import { formatRawPriceAxis, pairTradeUnavailableReason, selectionFromPlotPixelX } from "@/components/spot-perp-arbitrage/CombinationWeightControls";
 
@@ -270,6 +284,11 @@ export default function ComboSearchCandlesChart({
   const [showFirstRaw, setShowFirstRaw] = useState(false);
   const [showSecondRaw, setShowSecondRaw] = useState(false);
   const [comparisonMode, setComparisonMode] = useState<"ratio" | "spread">("ratio");
+  // Off by default: the funding lane is an extra pair-trade subplot and must be
+  // requested explicitly, exactly like the raw leg panes.
+  const [showFunding, setShowFunding] = useState(false);
+  // Separate, independent toggle: the β-weighted funding difference.
+  const [showWeightedFunding, setShowWeightedFunding] = useState(false);
   const chartRef = useRef<HTMLDivElement | null>(null);
   const applySelectionRef = useRef<((selection: ChartTimeSelection | null, showTip?: boolean, zoomRange?: boolean) => void) | null>(null);
   const selectAtPixelRef = useRef<((point: [number, number]) => void) | null>(null);
@@ -825,10 +844,40 @@ export default function ComboSearchCandlesChart({
     // draws a wick that the raw legs do not actually support.
     const derivedCandles = alignedPairDerivedCandles(data, times, comparisonMode);
     const derivedPaneName = comparisonMode === "ratio" ? "原始比值（腿1/腿2）" : "原始价差（腿1−腿2）";
-    const paneNames = ["配对交易 PnL", derivedPaneName, ...(showFirstRaw ? [`原始 ${data.firstSymbol}`] : []), ...(showSecondRaw ? [`原始 ${data.secondSymbol}`] : [])];
+    // The funding lane replays the plain view's raw 1:1 annualized difference on
+    // this timeline: same value, same gating, same sparse-point treatment. It is
+    // never β-weighted and never scaled by a settlement or entry price.
+    const fundingLane = alignedPairFundingLane(data, times, interval);
+    const fundingOffered = pairFundingAvailable(data, interval);
+    const showFundingLane = showFunding && fundingOffered;
+    // The β-weighted lane is a second, independent pane. Its β is the scenario's
+    // *applied* β (pairTrade.beta), never the fit-window β; an unusable β makes
+    // the control unavailable instead of silently drawing a 1:1 line.
+    const effectiveBeta = pairFundingBeta(pairTrade?.beta);
+    const showWeightedFundingLane = showWeightedFunding && pairWeightedFundingAvailable(data, interval, effectiveBeta) && effectiveBeta !== null;
+    const weightedFundingLane = showWeightedFundingLane && effectiveBeta !== null
+      ? alignedPairWeightedFundingLane(data, times, interval, effectiveBeta)
+      : null;
+    const layout = pairPaneLayout({
+      derived: derivedPaneName,
+      firstRaw: showFirstRaw ? `原始 ${data.firstSymbol}` : null,
+      secondRaw: showSecondRaw ? `原始 ${data.secondSymbol}` : null,
+      funding: showFundingLane ? PAIR_FUNDING_PANE_NAME : null,
+      weightedFunding: showWeightedFundingLane ? PAIR_WEIGHTED_FUNDING_PANE_NAME : null,
+    });
+    const paneNames = layout.names;
     const paneCount = paneNames.length;
     const grids = paneNames.map((_name, index) => ({ left: 62, right: 54, top: `${9 + index * (78 / paneCount)}%`, height: `${68 / paneCount}%` }));
     const axes = paneNames.map((_name, index) => index);
+    const fundingPaneIndex = layout.funding;
+    const weightedFundingPaneIndex = layout.weightedFunding;
+    const pairLegendData = [
+      ...paneNames,
+      ...(fundingPaneIndex !== null && fundingLane.hasTemporaryZero ? [{ name: PAIR_TEMPORARY_ZERO_NAME, icon: "diamond" }] : []),
+      ...(weightedFundingPaneIndex !== null && weightedFundingLane?.hasTemporaryZero ? [{ name: PAIR_WEIGHTED_TEMPORARY_ZERO_NAME, icon: "diamond" }] : []),
+    ];
+    const fundingFirstLabel = `${data.firstExchange} ${data.firstSymbol}`;
+    const fundingSecondLabel = `${data.secondExchange} ${data.secondSymbol}`;
     const unitLabel = valueUnit === "usd" ? "USDT" : "%";
     let title = `${data.firstSymbol} (${data.firstExchange}) 多 / ${data.secondSymbol} (${data.secondExchange}) 空`;
     const tradeModel = pairTrade ? matchingTradeModel(pairTradeAnalysis, pairTrade.beta) : null;
@@ -854,6 +903,23 @@ export default function ComboSearchCandlesChart({
         if (ohlc) lines.push(`${label} 原始 OHLC：${ohlc.map((value) => numberText(value, 6)).join(" / ")}`);
         else lines.push(`${label} 原始 OHLC：无数据`);
       }
+      // Funding rows are added before the PnL/availability early returns so the
+      // lane stays readable even on pre-entry bars or when the scenario is off.
+      if (showFundingLane) {
+        lines.push(...pairFundingTooltipLines(
+          fundingLane.points[index],
+          fundingLane.firstHasFunding ? fundingFirstLabel : null,
+          fundingLane.secondHasFunding ? fundingSecondLabel : null,
+        ));
+      }
+      if (weightedFundingLane && effectiveBeta !== null) {
+        lines.push(...pairWeightedFundingTooltipLines(
+          weightedFundingLane.points[index],
+          weightedFundingLane.firstHasFunding ? fundingFirstLabel : null,
+          weightedFundingLane.secondHasFunding ? fundingSecondLabel : null,
+          effectiveBeta,
+        ));
+      }
       if (!pairTrade) { lines.push(pairTradeUnavailableReason(pairTradeReason)); return lines.join("<br/>"); }
       if (point.pnlUsd === null || point.returnPercent === null) {
         lines.push("未入场（早于所选入场 K 线）", "入场前 PnL 留空，不按 0 计入。");
@@ -867,7 +933,14 @@ export default function ComboSearchCandlesChart({
       animation: false,
       backgroundColor: "transparent",
       title: { text: title, left: 16, top: 6, textStyle: { color: "#e5e7eb", fontSize: 13, fontWeight: 600 } },
-      legend: { data: paneNames, top: 5, right: 18, textStyle: { color: "#9ca3af", fontSize: 10 } },
+      legend: {
+        data: pairLegendData,
+        // The pair-trade title already carries the fitted formula. Only the new
+        // funding state needs an extra row, so every pre-existing pane
+        // combination keeps its original legend placement.
+        ...(fundingPaneIndex === null && weightedFundingPaneIndex === null ? { top: 5, right: 18 } : { top: 26, left: 16 }),
+        textStyle: { color: "#9ca3af", fontSize: 10 },
+      },
       grid: grids,
       toolbox: { show: false },
       axisPointer: { link: [{ xAxisIndex: axes }] },
@@ -883,13 +956,20 @@ export default function ComboSearchCandlesChart({
         scale: true,
         position: "right",
         axisLine: { show: false },
-        axisLabel: { color: "#9ca3af", formatter: (value: number) => gridIndex === 0 ? pairTradeAxisLabel(value, valueUnit) : formatRawPriceAxis(value) },
+        axisLabel: {
+          color: "#9ca3af",
+          formatter: gridIndex === layout.pnl
+            ? (value: number) => pairTradeAxisLabel(value, valueUnit)
+            : gridIndex === fundingPaneIndex || gridIndex === weightedFundingPaneIndex
+              ? (value: number) => `${value.toFixed(1)}%`
+              : (value: number) => formatRawPriceAxis(value),
+        },
         splitLine: { lineStyle: { color: "rgba(75,85,99,.3)" } },
       })),
       series: [{
         id: "exact-selection-pair-trade",
         type: "line",
-        name: paneNames[0],
+        name: paneNames[layout.pnl],
         data: pnlData,
         showSymbol: false,
         connectNulls: false,
@@ -910,9 +990,80 @@ export default function ComboSearchCandlesChart({
           data: pairTrade ? [{ coord: [pairTrade.entryIndex, 0] }] : [],
         },
       },
-      { type: "candlestick", name: paneNames[1], xAxisIndex: 1, yAxisIndex: 1, data: derivedCandles, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } },
-      ...(showFirstRaw ? [{ type: "candlestick", name: `原始 ${data.firstSymbol}`, xAxisIndex: showSecondRaw ? 2 : 2, yAxisIndex: 2, data: rawFirstData, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } }] : []),
-      ...(showSecondRaw ? [{ type: "candlestick", name: `原始 ${data.secondSymbol}`, xAxisIndex: showFirstRaw ? 3 : 2, yAxisIndex: showFirstRaw ? 3 : 2, data: rawSecondData, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } }] : []),
+      { type: "candlestick", name: paneNames[layout.derived], xAxisIndex: layout.derived, yAxisIndex: layout.derived, data: derivedCandles, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } },
+      ...(layout.firstRaw === null ? [] : [{ type: "candlestick", name: paneNames[layout.firstRaw], xAxisIndex: layout.firstRaw, yAxisIndex: layout.firstRaw, data: rawFirstData, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } }]),
+      ...(layout.secondRaw === null ? [] : [{ type: "candlestick", name: paneNames[layout.secondRaw], xAxisIndex: layout.secondRaw, yAxisIndex: layout.secondRaw, data: rawSecondData, itemStyle: { color: COMBO_BULL_COLOR, color0: COMBO_BEAR_COLOR, borderColor: COMBO_BULL_COLOR, borderColor0: COMBO_BEAR_COLOR } }]),
+      // Funding lane last: the plain view's raw 1:1 difference, drawn with gaps
+      // for missing buckets and no interpolation across them.
+      ...(fundingPaneIndex === null ? [] : [{
+        type: "line",
+        name: PAIR_FUNDING_PANE_NAME,
+        xAxisIndex: fundingPaneIndex,
+        yAxisIndex: fundingPaneIndex,
+        data: fundingLane.points.map((lanePoint) => lanePoint.value),
+        smooth: false,
+        connectNulls: false,
+        symbol: fundingLane.sparse ? "circle" : "none",
+        ...(fundingLane.sparse ? { showSymbol: true, showAllSymbol: true, symbolSize: 6, itemStyle: { color: COMBO_BULL_COLOR, borderColor: "#0F172A", borderWidth: 1.5 } } : {}),
+        lineStyle: { color: COMBO_BULL_COLOR, width: 1.5 },
+        areaStyle: {
+          color: {
+            type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: `${COMBO_BULL_COLOR}33` },
+              { offset: 1, color: `${COMBO_BULL_COLOR}05` },
+            ],
+          },
+        },
+        markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: "#6B7280", type: "dashed", width: 1 }, label: { show: false } },
+      }]),
+      ...(fundingPaneIndex === null || !fundingLane.hasTemporaryZero ? [] : [{
+        type: "scatter",
+        name: PAIR_TEMPORARY_ZERO_NAME,
+        xAxisIndex: fundingPaneIndex,
+        yAxisIndex: fundingPaneIndex,
+        data: fundingLane.temporaryZero,
+        symbol: "diamond",
+        symbolSize: 9,
+        itemStyle: { color: "#fbbf24", borderColor: "#78350f", borderWidth: 1.5 },
+        tooltip: { show: false },
+        z: 5,
+      }]),
+      // β-weighted funding lane: a second independent pane, same gap rules.
+      ...(weightedFundingPaneIndex === null || !weightedFundingLane ? [] : [{
+        type: "line",
+        name: PAIR_WEIGHTED_FUNDING_PANE_NAME,
+        xAxisIndex: weightedFundingPaneIndex,
+        yAxisIndex: weightedFundingPaneIndex,
+        data: weightedFundingLane.points.map((lanePoint) => lanePoint.value),
+        smooth: false,
+        connectNulls: false,
+        symbol: weightedFundingLane.sparse ? "circle" : "none",
+        ...(weightedFundingLane.sparse ? { showSymbol: true, showAllSymbol: true, symbolSize: 6, itemStyle: { color: "#22d3ee", borderColor: "#0F172A", borderWidth: 1.5 } } : {}),
+        lineStyle: { color: "#22d3ee", width: 1.5 },
+        areaStyle: {
+          color: {
+            type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: "#22d3ee33" },
+              { offset: 1, color: "#22d3ee05" },
+            ],
+          },
+        },
+        markLine: { silent: true, symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: "#6B7280", type: "dashed", width: 1 }, label: { show: false } },
+      }]),
+      ...(weightedFundingPaneIndex === null || !weightedFundingLane?.hasTemporaryZero ? [] : [{
+        type: "scatter",
+        name: PAIR_WEIGHTED_TEMPORARY_ZERO_NAME,
+        xAxisIndex: weightedFundingPaneIndex,
+        yAxisIndex: weightedFundingPaneIndex,
+        data: weightedFundingLane.temporaryZero,
+        symbol: "diamond",
+        symbolSize: 9,
+        itemStyle: { color: "#fbbf24", borderColor: "#78350f", borderWidth: 1.5 },
+        tooltip: { show: false },
+        z: 5,
+      }]),
       ],
     });
     const focus = (selection: ChartTimeSelection | null, showTip = false) => {
@@ -991,7 +1142,7 @@ export default function ComboSearchCandlesChart({
     chart.on("dataZoom", onDataZoom);
     const observer = new ResizeObserver(() => chart.resize()); observer.observe(chartRef.current);
     return () => { observer.disconnect(); zr.off("mousedown", onZrMouseDown); zr.off("mousemove", onZrMouseMove); zr.off("click", onZrClick); if (typeof onTimeSelectionChange === "function" || typeof pairViewportChangeRef.current === "function") chart.off("brushEnd", brushEnd); chart.off("dataZoom", onDataZoom); if (applySelectionRef.current === focus) applySelectionRef.current = null; selectAtPixelRef.current = null; chart.dispose(); };
-  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, pairTrade, pairTradeReason, pairTradeAnalysis, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
+  }, [view, valueUnit, comparisonMode, showFirstRaw, showSecondRaw, showFunding, showWeightedFunding, pairTrade, pairTradeReason, pairTradeAnalysis, pairAnalysis, data, interval, onTimeSelectionChange, timeZone]);
 
   const hasAnalysis = Boolean(pairAnalysis?.points.length);
   const analysisNotice = pairAnalysis === undefined ? "正在计算配对统计…" : pairAnalysis === null ? "配对统计暂不可用；等待对齐价格与回归结果。" : "没有可绘制的残差样本；请检查对齐数据量。";
@@ -1014,6 +1165,27 @@ export default function ComboSearchCandlesChart({
   const isSparseFunding = hasFunding
     && SETTLEMENT_POINT_INTERVALS.has(interval)
     && isGenuinelySparseFunding(data.fundingRates);
+  // Pair-trade funding lane: offered only where the plain view would show it.
+  const pairFundingOffered = isPairTrade && pairFundingAvailable(data, interval);
+  // The weighted control uses exactly the same funding gating as the 1:1 control
+  // (hidden entirely on 1m, spot/spot, or with no funding buckets) and
+  // additionally needs a usable applied β. Without one it stays visible and
+  // disabled with a short reason, so it never silently draws a 1:1 line under a
+  // 1:β label.
+  const pairEffectiveBeta = pairFundingBeta(pairTrade?.beta);
+  const pairWeightedOffered = pairFundingOffered && pairEffectiveBeta !== null;
+  const pairWeightedDisabledReason = !pairFundingOffered || pairWeightedOffered
+    ? null
+    : "当前配对的 β 不可用，1:β 暂不可用。";
+  // Extra panes are stacked; grow the box so each lane stays readable.
+  const pairPaneTotal = 2
+    + (showFirstRaw ? 1 : 0)
+    + (showSecondRaw ? 1 : 0)
+    + (pairFundingOffered && showFunding ? 1 : 0)
+    + (pairWeightedOffered && showWeightedFunding ? 1 : 0);
+  const pairChartTall = isPairTrade && pairPaneTotal > 2;
+  // Six panes need more room than the four-pane layout gave them.
+  const pairChartHeightClass = !pairChartTall ? "h-[520px]" : pairPaneTotal >= 6 ? "h-[900px]" : pairPaneTotal >= 5 ? "h-[800px]" : "h-[700px]";
   const { mode } = data;
   const viewLabel = isPlain ? "组合价差/比值 K 线图" : isPairTrade ? "配对交易情景 PnL 图" : "配对回归残差与 Z-score 图表";
   const selectPoint = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1031,7 +1203,7 @@ export default function ComboSearchCandlesChart({
         event.preventDefault();
         const selected = moveChartTimeSelection(selectionTimes, selectionRef.current, event.key, event.shiftKey);
         if (selected) { selectionRef.current = selected; selectionChangeRef.current?.(selected); applySelectionRef.current?.(selected, true); }
-      } } : {})} className={`w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 ${isPairTrade && (showFirstRaw || showSecondRaw) ? "h-[700px]" : "h-[520px]"}`} /> : <div className="flex h-[260px] items-center justify-center rounded border border-dashed border-gray-700 bg-gray-900/35 px-6 text-center text-sm text-gray-400" role="status" aria-live="polite">{isPlain ? "没有可绘制的组合蜡烛数据。" : isPairTrade ? pairTradeNotice : analysisNotice}</div>}
+      } } : {})} className={`w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-violet-300 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-800 ${pairChartHeightClass}`} /> : <div className="flex h-[260px] items-center justify-center rounded border border-dashed border-gray-700 bg-gray-900/35 px-6 text-center text-sm text-gray-400" role="status" aria-live="polite">{isPlain ? "没有可绘制的组合蜡烛数据。" : isPairTrade ? pairTradeNotice : analysisNotice}</div>}
       <ChartSourceCaption legProvenance={data.legProvenance} />
       <p id="combo-chart-instructions" className="sr-only">{isPlain ? `拖动选择精确 ${timeZone} 区间，点击 K 线选择时间；左右方向键移动，Shift 加方向键扩展区间。` : isPairTrade ? "在任一面板拖动即可缩放到所选时间范围；缩放滑块和内部缩放会刷新可见范围诊断。点击或用方向键只选择候选 K 线，不改变视图范围、入场或拟合。点击设为入场点后才会改变入场。入场前 PnL 留空。第二个面板为端点 K 线，可在腿1原始K线开关左侧的按钮切换比值与价差，均取两条腿的原始开收盘、不含影线。" : "拖动选择精确区间，点击数据点选择时间；左右方向键移动，Shift 加方向键扩展区间。"}</p>
       {isPairTrade && chartVisible && (
@@ -1043,6 +1215,30 @@ export default function ComboSearchCandlesChart({
           <button type="button" aria-pressed={comparisonMode === "ratio"} aria-label={comparisonMode === "ratio" ? "当前为比值 K 线子图，点击切换为价差 K 线子图" : "当前为价差 K 线子图，点击切换为比值 K 线子图"} onClick={() => setComparisonMode((current) => (current === "ratio" ? "spread" : "ratio"))} className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${comparisonMode === "ratio" ? "bg-violet-500/35 text-violet-100 ring-1 ring-inset ring-violet-400/60" : "bg-gray-900 text-gray-500 hover:bg-gray-700 hover:text-gray-300"}`}>{comparisonMode === "ratio" ? "子图：比值K线" : "子图：价差K线"}</button>
           <label className="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" checked={showFirstRaw} onChange={(event) => setShowFirstRaw(event.target.checked)} />腿1原始K线</label>
           <label className="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" checked={showSecondRaw} onChange={(event) => setShowSecondRaw(event.target.checked)} />腿2原始K线</label>
+          {pairFundingOffered && (
+            <label className="flex items-center gap-1 text-xs text-gray-400">
+              <input type="checkbox" checked={showFunding} onChange={(event) => setShowFunding(event.target.checked)} />
+              年化资金费率差（1:1）
+            </label>
+          )}
+          {pairFundingOffered && (
+            <label className={`flex items-center gap-1 text-xs ${pairWeightedOffered ? "text-gray-400" : "text-gray-600"}`} title={pairWeightedDisabledReason ?? undefined}>
+              <input
+                type="checkbox"
+                // Unavailable ⇒ shown unchecked, so the control never claims a lane
+                // that is not drawn. The requested state is kept and restored once
+                // a usable β is back.
+                checked={pairWeightedOffered && showWeightedFunding}
+                disabled={!pairWeightedOffered}
+                onChange={(event) => setShowWeightedFunding(event.target.checked)}
+                aria-describedby={pairWeightedDisabledReason ? "pair-weighted-funding-reason" : undefined}
+              />
+              年化资金费率差（1:β）
+            </label>
+          )}
+          {pairWeightedDisabledReason && (
+            <span id="pair-weighted-funding-reason" className="text-[11px] text-gray-500">{pairWeightedDisabledReason}</span>
+          )}
         </div>
       )}
       {typeof onTimeSelectionChange === "function" && <>{isPlain && <p className="mt-2 text-xs text-violet-200/80">点击 K 线后可用方向键移动；Shift + 方向键扩展区间。</p>}<p aria-live="polite" className="mt-2 rounded border border-violet-500/20 bg-violet-950/20 px-3 py-1.5 text-xs text-violet-100">{timeSelection ? `精确 ${timeZone} 区间：${formatChartTimeSelection(timeSelection, timeZone)}` : `精确 ${timeZone} 区间：预设可见范围`}</p></>}
@@ -1065,6 +1261,17 @@ export default function ComboSearchCandlesChart({
           <p>情景展示区间与入场来自当前预设范围；自动 β 使用上方单独选定的拟合窗口，自定义 β 直接用于情景。拟合结束晚于入场时包含前视信息，不是回测；PnL 不含资金费率、手续费与滑点。</p>
           <p>第二面板为端点 K 线：开盘/收盘由两条腿的原始开收盘直接推导（默认比值＝腿1开收/腿2开收，可切换为价差＝腿1开收−腿2开收），不取腿1或腿2的高低价，因此没有影线，实体即全部；任一条腿缺失或无效时该点留空。切换只改变此面板的绘制方式，不影响 PnL、入场与 β。</p>
           <p>此图中的精确区间只高亮曲线片段，不会改变入场或 β；下方当前残差/Z 与费率、流动性摘要会按精确区间筛选。</p>
+          {pairFundingOffered && showFunding && (
+            <p>
+              年化资金费率差（1:1）：直接沿用普通视图的第一交易对年化费率 − 第二交易对年化费率，未按 β 加权，也不乘结算价或入场价，因此不是合并收益年化。缺失时段留空、不连线。
+              {data.fundingRates.some((point) => point.sampleCount !== 0 && ((point.firstFunding == null) !== (point.secondFunding == null))) && "黄色菱形为一条腿显式无结算时按临时 0 计算的图表值，不是真实结算。"}
+            </p>
+          )}
+          {pairWeightedOffered && showWeightedFunding && pairEffectiveBeta !== null && (
+            <p>
+              年化资金费率差（1:β）：按当前生效 β={numberText(pairEffectiveBeta, 4)} 逐点计算腿1年化费率 − β×腿2年化费率，β 改变会重算。可与 1:1 副图同时显示；它是费率差，不是合并资金收益年化。缺失时段留空；沿用普通图的单边临时0规则时，以黄色菱形标明，仅用于图表展示。
+            </p>
+          )}
         </div>
       ) : (
         <div className="mt-2 rounded bg-gray-900/60 px-4 py-2 text-xs leading-5 text-gray-500"><p className="font-medium text-gray-400">配对回归视图</p><p>上轨为对数价格回归残差 ε（零线）；下轨为 rolling Z-score（0、±1、±2）。缺失数据保留断点，不连接。</p><p>全预设范围一次拟合，历史残差包含全样本参数，不构成无前视交易回测。</p></div>
