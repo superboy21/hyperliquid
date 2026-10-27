@@ -731,6 +731,29 @@ function percentOfBasis(amountUsd: number | null, basisUsd: number): number | nu
   return Number.isFinite(percent) ? percent : null;
 }
 
+/**
+ * One leg's annualized funding weight when the combined card restates it on the
+ * fixed basis: `annualPercent × notional / basis`.
+ *
+ * The percentage is already per-unit of this leg's own notional, so this is a
+ * plain notional weight — leg2's notional already contains β. Values are guarded
+ * at every step so an unusable notional or an overflowing weight is unknown,
+ * never a fabricated number.
+ */
+export function combinedAnnualizedContribution(
+  annualizedPercent: number | null,
+  notionalUsd: number | null,
+  basisUsd: number = COMBINED_PNL_BASIS_USD,
+): number | null {
+  if (annualizedPercent === null || !Number.isFinite(annualizedPercent)) return null;
+  if (notionalUsd === null || !Number.isFinite(notionalUsd) || notionalUsd <= 0) return null;
+  if (!Number.isFinite(basisUsd) || basisUsd <= 0) return null;
+  const weight = notionalUsd / basisUsd;
+  if (!Number.isFinite(weight)) return null;
+  const contribution = annualizedPercent * weight;
+  return Number.isFinite(contribution) ? contribution : null;
+}
+
 export interface CombinedReturnAmounts {
   priceUsd: number | null;
   fundingUsd: number | null;
@@ -738,6 +761,12 @@ export interface CombinedReturnAmounts {
   pricePercent: number | null;
   fundingPercent: number | null;
   totalPercent: number | null;
+  /**
+   * Combined annualized funding on the fixed basis:
+   * `annual1 × N1/basis + annual2 × N2/basis`, i.e. the two legs' annualized
+   * funding amounts added and expressed against the same 10,000 reference.
+   */
+  annualizedPercent: number | null;
   /** At least one leg priced its funding with a candle proxy, so funding is an estimate. */
   fundingEstimated: boolean;
   /** A leg's funding amount was unknown, so funding and total stay blank. */
@@ -781,6 +810,18 @@ export function combinedReturnAmounts({
   const total = price !== null && funding !== null && Number.isFinite(price + funding)
     ? price + funding
     : null;
+  // Both legs must state a usable annualized rate and notional; a missing one is
+  // unknown, not zero (a spot leg's 0, by contrast, is a real zero).
+  const firstAnnualized = combinedAnnualizedContribution(
+    firstLeg?.fundingAnnualizedPercent ?? null, firstNotionalUsd, basisUsd,
+  );
+  const secondAnnualized = combinedAnnualizedContribution(
+    secondLeg?.fundingAnnualizedPercent ?? null, secondNotionalUsd, basisUsd,
+  );
+  const annualized = firstAnnualized !== null && secondAnnualized !== null
+    && Number.isFinite(firstAnnualized + secondAnnualized)
+    ? firstAnnualized + secondAnnualized
+    : null;
   return {
     priceUsd: price,
     fundingUsd: funding,
@@ -788,6 +829,7 @@ export function combinedReturnAmounts({
     pricePercent: percentOfBasis(price, basisUsd),
     fundingPercent: percentOfBasis(funding, basisUsd),
     totalPercent: percentOfBasis(total, basisUsd),
+    annualizedPercent: annualized,
     fundingEstimated: isProxiedFundingBasis(firstLeg?.fundingPriceBasis ?? null)
       || isProxiedFundingBasis(secondLeg?.fundingPriceBasis ?? null),
     fundingUnavailable: price !== null && !fundingKnown,
@@ -933,11 +975,16 @@ function combinedPnlCard(
 ): ScenarioCard {
   const combined = combinedReturnAmounts({
     priceUsd: hasPostEntryCandle ? priceUsd : null,
-    firstLeg,
+    firstLeg: hasPostEntryCandle ? firstLeg : null,
     firstNotionalUsd,
-    secondLeg,
+    secondLeg: hasPostEntryCandle ? secondLeg : null,
     secondNotionalUsd,
   });
+  // Annualized funding follows the per-leg line: an estimate badge only when the
+  // rate it restates is proxied, and never on an unknown value.
+  const annualizedPartial = combined.annualizedPercent !== null && combined.fundingEstimated
+    ? <span data-estimate="annualized" className="text-gray-600">，估算</span>
+    : null;
   return {
     key: "merged-pnl",
     label: "最新合并 PnL",
@@ -951,7 +998,11 @@ function combinedPnlCard(
         estimate={combined.fundingEstimated}
       />
       <p className="mt-1 text-[10px] leading-4 text-gray-500">
-        以 {COMBINED_PNL_BASIS_USD.toLocaleString("en-US")} USDT 为基准折算百分比；资金为两腿实际金额加总（腿2 已含 β）。
+        资金费率年化 {signedPercent(combined.annualizedPercent)}
+        {combined.annualizedPercent !== null && <span className="text-gray-600">（按持有时长折算，非未来收益预测{annualizedPartial}）</span>}
+      </p>
+      <p className="mt-0.5 text-[10px] leading-4 text-gray-500">
+        以 {COMBINED_PNL_BASIS_USD.toLocaleString("en-US")} 报价币（当前界面 USDT）为基准折算百分比，资金年化按两腿本金加权到该基准；资金为两腿实际金额加总（腿2 已含 β）。
       </p>
       {combined.fundingUnavailable && (
         <p className="mt-0.5 text-[10px] leading-4 text-amber-300">资金收益暂无可用值，仅保留价格收益；单腿资金状态见上方卡片。</p>
@@ -1120,7 +1171,7 @@ function PairTradeDiagnostics({ result, sourceResult, pairAnalysis, pairTrade, p
     )}
     <div className="mt-3 border-t border-gray-700/70 pt-3"><h4 className="text-xs font-medium text-gray-300">配对诊断</h4><GroupedDiagnosticCards cards={pairGroupedCards} /><div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">{coreCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700/80 bg-gray-900/40 px-3 py-2"><p className="text-[10px] text-gray-500">{card.label}</p><p className={`mt-1 font-mono text-sm ${card.tone}`}>{card.value}</p><p className="mt-1 text-[10px] text-gray-600">{card.note}</p></div>)}</div></div>
     <div className="mt-3 border-t border-gray-700/70 pt-3"><h4 className="text-xs font-medium text-gray-300">资金费率与流动性</h4><div className="mt-2 rounded-md border border-cyan-500/35 bg-cyan-950/20 p-3"><p className="text-xs font-semibold text-cyan-200">入场后 1:β 加权年化资金费率差</p><p className="mt-1 font-mono text-lg font-semibold text-cyan-100">{postEntryFundingValue}</p><p className="mt-1 text-[10px] leading-4 text-gray-400">{postEntryFundingReason}</p></div><div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">{liquidityCards.map((card) => <div key={card.label} className="rounded-md border border-gray-700/80 bg-gray-900/40 px-3 py-2"><p className="text-[10px] text-gray-500">{card.label.includes("历史资金费率") ? card.label.replace("历史", "视窗历史") : card.label}</p><p className="mt-1 font-mono text-sm text-gray-300">{card.value}</p><p className="mt-1 text-[10px] text-gray-600">当前可视窗口历史统计。{card.note}</p></div>)}</div></div>
-    <aside className="mt-3 rounded border border-amber-500/20 bg-gray-900/50 px-3 py-2.5 text-[11px] leading-5 text-gray-500"><p className="font-medium text-amber-300">样本内情景模拟{pairTradeLookahead ? "／含前视信息，非回测" : "／非回测"}</p><p>β 固定来自拟合窗口，PnL 曲线由完整显示预设范围的行情独立计算；<strong className="font-medium text-gray-400">PnL 曲线仍只含价格</strong>，不含资金费率、手续费与滑点。最新合并 PnL 卡片另取当前图表视窗内入场后的最后一根 K 线：其中价格收益就是该点曲线值，资金收益则是两腿实际资金金额之和（腿2 已含 β），两者相加得总收益；三项百分比统一以 10,000 USDT 为基准折算，因此既不等于两腿百分比之和，也不是按两腿名义本金加权。两只单腿收益卡片另行拆分价格收益、资金费率收益与两者之和，区间为入场收盘到同一根可视末根收盘/当前时刻，各自以本腿入场名义本金为分母；每项下方的 USDT 金额就是该百分比乘以本腿自己的入场名义本金（腿2 的名义本金已含 β，因此 β 体现在金额上、不再缩放百分比），金额随百分比同号着色并同样标注「估算」。其中资金部分逐笔按 Σ(多空符号 × 结算费率 × 结算价 / 入场价) 计：有结算 mark 价时优先用 mark 价，缺失时以该结算所在本腿 K 线收盘价代理（精度受当前 K 线周期限制，并在卡片上标注「估算」），因此不等于真实账户结算现金流。年化值按持有窗口真实时长折算，是历史折算而非未来收益预测。现货腿没有资金费率，按 0 计。只要读到该腿历史数据就按完整处理，入场后暂无结算即按 0 计；只有完全读不到资金费率历史才红字提示。入场默认是预设范围首根，也可独立指定；缩放只改变可视诊断和末根选取，不改变入场、拟合与各腿入场的价格基准。</p><p>残差、ADF、半衰期、滚动 β 与 BTC β 按当前可视窗口诊断；资金费率历史摘要也按当前视窗筛选。单独的入场后费率差为年化历史费率指标，不是收益或 PnL，与单腿卡片里的资金收益是两回事。</p><p>本组卡片口径：OLS β 与对数价格 R² 来自拟合窗口的自动回归，与当前应用 β 分开显示；简单收益率 R² 同样取自拟合窗口，但以每根 K 线简单收益率回归。VaR 与年化波动率使用所选拟合窗口及当前生效 β，不随图表视窗或入场变化。{VAR_METHOD_NOTE}</p></aside>
+    <aside className="mt-3 rounded border border-amber-500/20 bg-gray-900/50 px-3 py-2.5 text-[11px] leading-5 text-gray-500"><p className="font-medium text-amber-300">样本内情景模拟{pairTradeLookahead ? "／含前视信息，非回测" : "／非回测"}</p><p>β 固定来自拟合窗口，PnL 曲线由完整显示预设范围的行情独立计算；<strong className="font-medium text-gray-400">PnL 曲线仍只含价格</strong>，不含资金费率、手续费与滑点。最新合并 PnL 卡片另取当前图表视窗内入场后的最后一根 K 线：其中价格收益就是该点曲线值，资金收益则是两腿实际资金金额之和（腿2 已含 β），两者相加得总收益；三项百分比统一以 10,000 报价币（当前界面 USDT）为基准折算，因此既不等于两腿百分比之和，也不是按两腿名义本金加权；该卡下方的资金费率年化同样以这 10,000 为基准，把两条腿各自的年化费率按本腿入场名义本金加权后相加（腿2 本金已含 β），与单腿卡片显示的年化口径一致。两只单腿收益卡片另行拆分价格收益、资金费率收益与两者之和，区间为入场收盘到同一根可视末根收盘/当前时刻，各自以本腿入场名义本金为分母；每项下方的 USDT 金额就是该百分比乘以本腿自己的入场名义本金（腿2 的名义本金已含 β，因此 β 体现在金额上、不再缩放百分比），金额随百分比同号着色并同样标注「估算」。其中资金部分逐笔按 Σ(多空符号 × 结算费率 × 结算价 / 入场价) 计：有结算 mark 价时优先用 mark 价，缺失时以该结算所在本腿 K 线收盘价代理（精度受当前 K 线周期限制，并在卡片上标注「估算」），因此不等于真实账户结算现金流。年化值按持有窗口真实时长折算，是历史折算而非未来收益预测。现货腿没有资金费率，按 0 计。只要读到该腿历史数据就按完整处理，入场后暂无结算即按 0 计；只有完全读不到资金费率历史才红字提示。入场默认是预设范围首根，也可独立指定；缩放只改变可视诊断和末根选取，不改变入场、拟合与各腿入场的价格基准。</p><p>残差、ADF、半衰期、滚动 β 与 BTC β 按当前可视窗口诊断；资金费率历史摘要也按当前视窗筛选。单独的入场后费率差为年化历史费率指标，不是收益或 PnL，与单腿卡片里的资金收益是两回事。</p><p>本组卡片口径：OLS β 与对数价格 R² 来自拟合窗口的自动回归，与当前应用 β 分开显示；简单收益率 R² 同样取自拟合窗口，但以每根 K 线简单收益率回归。VaR 与年化波动率使用所选拟合窗口及当前生效 β，不随图表视窗或入场变化。{VAR_METHOD_NOTE}</p></aside>
   </section>;
 }
 

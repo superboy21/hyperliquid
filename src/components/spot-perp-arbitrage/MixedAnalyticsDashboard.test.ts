@@ -11,11 +11,13 @@ import type { SearchExchangeRate } from "@/lib/search";
 import type { SpotMarketRow } from "@/lib/spot-search";
 import MixedAnalyticsDashboard, {
   COMBINED_PNL_BASIS_USD,
+  combinedAnnualizedContribution,
   combinedReturnAmounts,
   legAmountUsd,
   legReturnAmountsUsd,
   signedUsd,
 } from "./MixedAnalyticsDashboard";
+import { ANALYTICS_YEAR_MS } from "@/lib/spot-perp-arbitrage/single-market-analytics";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -338,8 +340,8 @@ describe("MixedAnalyticsDashboard pair-trade scenario cards", () => {
     // The curve itself is still price-only; the card says so explicitly.
     expect(markup).toContain("价格收益即价格 PnL 曲线末点，仍不含资金、手续费与滑点");
     expect(markup).toContain("曲线不因本卡列示资金而改变口径");
-    // The card's basis is the fixed 10,000 USDT reference.
-    expect(markup).toContain("以 10,000 USDT 为基准折算百分比");
+    // The card's basis is the fixed 10,000 quote-currency reference.
+    expect(markup).toContain("以 10,000 报价币（当前界面 USDT）为基准折算百分比");
     // The stale "funding not included in combined PnL" copy is gone.
     expect(markup).not.toContain("单腿卡片里的资金部分不计入");
     expect(markup).not.toContain("最新合并 PnL（价格口径）");
@@ -350,7 +352,9 @@ describe("MixedAnalyticsDashboard pair-trade scenario cards", () => {
     for (const label of ["价格收益", "资金费率收益", "总收益"]) {
       expect(count(markup, label)).toBeGreaterThanOrEqual(2);
     }
-    expect(count(markup, "资金费率年化")).toBe(2);
+    // Two leg lines plus the combined card's own annualized line (the aside note
+    // also mentions 资金费率年化, so scope the count to the scenario cards).
+    expect(count(markup.slice(0, markup.indexOf("配对诊断</h4>")), "资金费率年化")).toBe(3);
     // Long leg1: 100 → 110 price, minus four 0.0125% bucket rates priced at their
     // own candle closes (102/105/108/110) → ≈0.053% paid.
     expect(markup).toContain("+10.00%");
@@ -711,7 +715,7 @@ describe("MixedAnalyticsDashboard combined PnL card", () => {
     // The printed percentages must not be the sum of the two leg percentages.
     const legPercentSum = legReturns.first.totalReturnPercent! + legReturns.second.totalReturnPercent!;
     expect(combined.totalPercent).not.toBeCloseTo(legPercentSum, 3);
-    expect(markup).toContain("以 10,000 USDT 为基准折算百分比");
+    expect(markup).toContain("以 10,000 报价币（当前界面 USDT）为基准折算百分比");
     // −10% price + −0.0002% funding ≈ −10.00% total, all on the same basis.
     const percents = cardPercents(markup, "merged-pnl");
     expect(percents[0]).toBe("-10.00%");
@@ -857,5 +861,201 @@ describe("MixedAnalyticsDashboard combined PnL card", () => {
       secondNotionalUsd: 12_500,
     });
     expect(combined.fundingEstimated).toBe(false);
+  });
+});
+
+describe("MixedAnalyticsDashboard combined annualized funding", () => {
+  /** Both legs perp and funded; β and leg-1 notional stay configurable. */
+  function combinedFor(beta: number, firstNotionalUsd = 10_000) {
+    const trade = helperTrade(beta, firstNotionalUsd);
+    const result = perpPerpResult();
+    const legReturns = calculatePairLegReturns(result, trade, 5 * HOUR_MS, ENTRY_CLOSE_TIME);
+    const combined = combinedReturnAmounts({
+      priceUsd: trade.points[trade.points.length - 1].pnlUsd,
+      firstLeg: legReturns.first,
+      firstNotionalUsd: trade.firstNotionalUsd,
+      secondLeg: legReturns.second,
+      secondNotionalUsd: trade.secondNotionalUsd,
+    });
+    return { trade, legReturns, combined };
+  }
+
+  test("with β=1 and a 10,000 leg-1 notional the combined rate is the two legs added", () => {
+    const { trade, legReturns, combined } = combinedFor(1);
+    expect(trade.firstNotionalUsd).toBe(10_000);
+    expect(trade.secondNotionalUsd).toBe(10_000);
+    const annual1 = legReturns.first.fundingAnnualizedPercent!;
+    const annual2 = legReturns.second.fundingAnnualizedPercent!;
+    // Both legs genuinely contribute (one negative, one positive), so a
+    // spot-only fixture could not prove this.
+    expect(annual1).toBeCloseTo(-186.15, 6);
+    expect(annual2).toBeCloseTo(92.856, 6);
+    expect(combined.annualizedPercent).toBeCloseTo(annual1 + annual2, 10);
+    expect(combined.annualizedPercent).toBeCloseTo(-93.294, 6);
+  });
+
+  test("β=2 adds the second leg twice: annual1 + 2 × annual2", () => {
+    const { trade, legReturns, combined } = combinedFor(2);
+    expect(trade.secondNotionalUsd).toBe(20_000);
+    const annual1 = legReturns.first.fundingAnnualizedPercent!;
+    const annual2 = legReturns.second.fundingAnnualizedPercent!;
+    expect(combined.annualizedPercent).toBeCloseTo(annual1 + 2 * annual2, 10);
+    // β is already the notional ratio: it must not be applied a second time.
+    expect(combined.annualizedPercent).not.toBeCloseTo(annual1 + 4 * annual2, 6);
+    expect(combined.annualizedPercent).toBeCloseTo(-0.438, 6);
+  });
+
+  test("a non-10,000 leg-1 notional is still restated on the fixed 10,000 basis", () => {
+    const oneX = combinedFor(2, 10_000);
+    const twoX = combinedFor(2, 20_000);
+    expect(twoX.trade.firstNotionalUsd).toBe(20_000);
+    expect(twoX.trade.secondNotionalUsd).toBe(40_000);
+    // Each leg's rate is weighted by its own notional and divided by the *fixed*
+    // 10,000 reference, so doubling both notionals doubles the combined rate
+    // instead of leaving it unchanged (that would be normalising by the notional).
+    expect(twoX.combined.annualizedPercent).toBeCloseTo(2 * oneX.combined.annualizedPercent!, 8);
+    expect(oneX.combined.annualizedPercent).toBeCloseTo(-0.438, 6);
+    expect(twoX.combined.annualizedPercent).toBeCloseTo(-0.876, 6);
+
+    // A 5,000 leg-1 notional halves leg1's weight while leg2 keeps its own.
+    const half = combinedFor(2, 5_000);
+    expect(half.trade.firstNotionalUsd).toBe(5_000);
+    expect(half.combined.annualizedPercent).toBeCloseTo(-0.219, 6);
+  });
+
+  test("equals the combined funding percent extrapolated over the real holding window", () => {
+    for (const [beta, notional] of [[1, 10_000], [2, 10_000], [2, 20_000], [1.25, 5_000]] as const) {
+      const { combined } = combinedFor(beta, notional);
+      // Real helper windows, never a hand-coded duration.
+      const holdingMs = 4 * HOUR_MS;
+      const fromFundingPercent = combined.fundingPercent! * ANALYTICS_YEAR_MS / holdingMs;
+      expect(combined.annualizedPercent).toBeCloseTo(fromFundingPercent, 8);
+    }
+  });
+
+  test("spot annualized is a real zero and never breaks the combined rate", () => {
+    const trade = helperTrade(1.25);
+    const legReturns = calculatePairLegReturns(pricedMixed([0, 1, 2, 3, 4, 5], COMPLETE_FUNDING), trade, 5 * HOUR_MS, ENTRY_CLOSE_TIME);
+    expect(legReturns.second.isSpot).toBe(true);
+    expect(legReturns.second.fundingAnnualizedPercent).toBe(0);
+    const combined = combinedReturnAmounts({
+      priceUsd: 0,
+      firstLeg: legReturns.first,
+      firstNotionalUsd: trade.firstNotionalUsd,
+      secondLeg: legReturns.second,
+      secondNotionalUsd: trade.secondNotionalUsd,
+    });
+    // Leg2 contributes exactly 0, so the combined rate is leg1's weighted rate.
+    expect(combined.annualizedPercent).toBeCloseTo(legReturns.first.fundingAnnualizedPercent!, 10);
+    expect(combined.annualizedPercent).not.toBeNull();
+  });
+
+  test("unknown annualized, unusable notional and overflow all fail closed", () => {
+    const spotLeg = {
+      priceReturnPercent: 0,
+      fundingReturnPercent: 0,
+      totalReturnPercent: 0,
+      fundingAnnualizedPercent: 0,
+      fundingIncomplete: false,
+      priceMissing: false,
+      fundingPriceBasis: null,
+      isSpot: true,
+      entryPrice: null,
+      latestPrice: null,
+      fundingSampleBuckets: 0,
+      fundingSampleCount: 0,
+      fundingCoverageStartTime: null,
+      fundingCoverageEndTime: null,
+      fundingNote: "spot" as const,
+    };
+    const base = { priceUsd: 0, firstNotionalUsd: 10_000, secondNotionalUsd: 10_000 };
+
+    // A null annualized rate on either leg makes the combined rate unknown.
+    for (const leg of [
+      { ...spotLeg, fundingAnnualizedPercent: null },
+      { ...spotLeg, fundingAnnualizedPercent: Number.NaN },
+      { ...spotLeg, fundingAnnualizedPercent: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(combinedReturnAmounts({ ...base, firstLeg: leg, secondLeg: spotLeg }).annualizedPercent).toBeNull();
+      expect(combinedReturnAmounts({ ...base, firstLeg: spotLeg, secondLeg: leg }).annualizedPercent).toBeNull();
+    }
+
+    // An unusable notional is unknown, not zero.
+    for (const notional of [null, Number.NaN, 0, -1_000, Number.POSITIVE_INFINITY]) {
+      expect(combinedAnnualizedContribution(100, notional)).toBeNull();
+      expect(combinedReturnAmounts({ ...base, firstLeg: spotLeg, secondLeg: spotLeg, secondNotionalUsd: notional }).annualizedPercent).toBeNull();
+    }
+
+    // Overflowing weights fail closed instead of printing Infinity.
+    expect(combinedAnnualizedContribution(Number.MAX_VALUE, Number.MAX_VALUE)).toBeNull();
+    expect(combinedAnnualizedContribution(1e308, 1e308)).toBeNull();
+    expect(combinedReturnAmounts({
+      ...base, firstLeg: { ...spotLeg, fundingAnnualizedPercent: 1e308 },
+      secondLeg: { ...spotLeg, fundingAnnualizedPercent: 1e308 },
+      firstNotionalUsd: 1e308, secondNotionalUsd: 1e308,
+    }).annualizedPercent).toBeNull();
+
+    // Exact zero is preserved as a real 0, never converted to unknown.
+    expect(combinedAnnualizedContribution(0, 10_000)).toBe(0);
+    expect(combinedReturnAmounts({ ...base, firstLeg: spotLeg, secondLeg: spotLeg }).annualizedPercent).toBe(0);
+  });
+
+  test("no post-entry candle blanks the annualized rate", () => {
+    const markup = renderPairTrade({
+      result: pricedMixed([0, 1], []),
+      pairTrade: pricedTrade(ENTRY_INDEX),
+    });
+    const card = cardMarkup(markup, "merged-pnl");
+    expect(card).toContain("资金费率年化 --");
+    // Not a fabricated 0.00%.
+    expect(card).not.toContain("资金费率年化 $0.00");
+    expect(card).not.toMatch(/资金费率年化 [+-]?0\.00%/);
+  });
+
+  test("renders the annualized line in grey under the three columns, with basis copy", () => {
+    // Spot-spot has no funding lane at all, so no basis is proxied and the copy
+    // closes its bracket cleanly (the perp fixtures carry an 估算 badge here).
+    const markup = renderPairTrade({
+      result: pricedSpotSpot([0, 1, 2, 3, 4, 5]),
+      pairTradeEntryCloseTime: ENTRY_CLOSE_TIME,
+    });
+    const card = cardMarkup(markup, "merged-pnl");
+    expect(card).toContain("资金费率年化");
+    expect(card).toContain("（按持有时长折算，非未来收益预测）");
+    expect(card).toContain("以 10,000 报价币（当前界面 USDT）为基准折算百分比");
+    // The line sits after the amounts and uses the same small grey styling.
+    const amountIndex = card.lastIndexOf("data-leg-amount");
+    expect(card.indexOf("资金费率年化")).toBeGreaterThan(amountIndex);
+    expect(card).toMatch(/text-gray-500">资金费率年化/);
+    // Still six cards in two rows of three.
+    expect(count(markup, "data-scenario-card=")).toBe(6);
+    expect(markup).toContain("grid-cols-3");
+  });
+
+  test("propagates the proxy estimate badge to the annualized line only when it is a real value", () => {
+    // Perp-perp bucket pricing is a proxy, so the annualized rate is an estimate.
+    const proxied = cardMarkup(renderPairTrade({ result: perpPerpResult(), pairTrade: helperTrade(2) }), "merged-pnl");
+    expect(proxied).toContain("data-estimate=\"annualized\"");
+    expect(proxied).toContain("，估算");
+
+    // Unknown rate: no badge on a placeholder.
+    const missing = cardMarkup(renderPairTrade({
+      result: pricedMixed([0, 1], []),
+      pairTrade: pricedTrade(ENTRY_INDEX),
+    }), "merged-pnl");
+    expect(missing).not.toContain("data-estimate=\"annualized\"");
+
+    // All-mark basis carries no estimate badge.
+    const trade = helperTrade(1.25);
+    const legReturns = calculatePairLegReturns(pricedMixed([0, 1, 2, 3, 4, 5], COMPLETE_FUNDING), trade, 5 * HOUR_MS, ENTRY_CLOSE_TIME);
+    const exact = combinedReturnAmounts({
+      priceUsd: 0,
+      firstLeg: { ...legReturns.first, fundingPriceBasis: "settlement-mark" },
+      firstNotionalUsd: trade.firstNotionalUsd,
+      secondLeg: { ...legReturns.second, fundingPriceBasis: "settlement-mark" },
+      secondNotionalUsd: trade.secondNotionalUsd,
+    });
+    expect(exact.fundingEstimated).toBe(false);
+    expect(exact.annualizedPercent).not.toBeNull();
   });
 });
