@@ -83,10 +83,20 @@ function hasMinVarianceBeta(beta: number | null): beta is number {
   return beta !== null && Number.isFinite(beta) && beta > 0;
 }
 
+/**
+ * Two different questions: the OLS β fits price *levels* (log prices) so the
+ * price gap to the fitted line is small, while the minimum-variance β fits
+ * per-bar *changes* (simple returns) so period PnL swings are small. A tight
+ * level fit does not imply minimum PnL variance, and vice versa.
+ */
+const MIN_VARIANCE_MEANING =
+  "看的是每根 K 线的涨跌幅：调整腿2的仓位，让多腿1、空腿2后每期盈亏的忽大忽小尽量少；不是让累计盈亏一直贴近0。每期固定赚或固定亏，方差都可能很小，不代表最赚钱或回撤最小。";
+
+/** Levels/returns distinction matters here: this β minimises per-period PnL variance, not level deviation. */
 function minVarianceBetaTitle(beta: number | null): string {
-  if (beta === null) return "最小方差配比不可用：拟合窗口需要至少 30 个连续相邻 K 线收益样本";
-  if (!Number.isFinite(beta) || beta <= 0) return "最小方差配比不可用：拟合窗口计算出的配比不是正数";
-  return `最小方差配比 β = ${compactBeta(beta)}：按拟合窗口（所选 K 线周期）的简单收益率拟合，在腿1名义固定 $10,000 下最小化每期 PnL 方差；不等同于固定总名义本金下的波动率最小化。拟合窗口变化时自动更新。`;
+  if (beta === null) return `最小方差配比不可用：拟合窗口需要至少 30 个连续相邻 K 线收益样本\n\n${MIN_VARIANCE_MEANING}`;
+  if (!Number.isFinite(beta) || beta <= 0) return `最小方差配比不可用：拟合窗口计算出的配比不是正数\n\n${MIN_VARIANCE_MEANING}`;
+  return `${MIN_VARIANCE_MEANING}\n\n最小方差配比 β = ${compactBeta(beta)}：按拟合窗口（所选 K 线周期）的简单收益率拟合，在腿1名义固定 $10,000 下最小化每期 PnL 方差；不等同于固定总名义本金下的波动率最小化。拟合窗口变化时自动更新。`;
 }
 
 export function fitWindowModeLabel(mode: PairFitWindowMode): string {
@@ -211,6 +221,7 @@ export function CombinationWeightControls({
             <button
               type="button"
               onClick={onUseAutoBeta}
+              title="看的是整个拟合窗口里的价格关系：对两腿价格取对数做回归，让价格相对于拟合关系的偏离尽量小。像两个人走路时位置尽量靠近，不代表每一步的速度差最稳定；它不直接最小化每期盈亏波动，也不保证偏离后会回归。点击后恢复自动 OLS β。"
               className="h-7 rounded border border-gray-600 px-2.5 text-xs text-gray-300 hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
             >
               恢复自动 β

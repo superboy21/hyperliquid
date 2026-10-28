@@ -25,6 +25,9 @@ The product UI now consists of `/funding` and `/search` for Hyperliquid, Gate.io
 
 ## Recently Completed
 
+- [x] **β模式按钮通俗悬停说明（2026-10-29）**：「最小方差配比」title补充按每根K线涨跌幅减少每期盈亏起伏的意义，说明非累计盈亏贴零、非最赚钱或回撤最小；保留原技术口径和不可用原因。「恢复自动 β」title补充对数价格关系贴合与每期涨跌对冲的区别，注明不保证均值回归。仅原生title文案/源码注释，无样式或算法变化。
+  - **验证**：真实组件SSR新增5项回归覆盖两按钮title、最小方差不可用原因与禁用、恢复自动按钮显隐。主代理读取产物并修正无关格式变化；全量Bun 1431 pass / 0 fail（6034断言）、typecheck通过，lint在首次组合命令超时后单独重跑通过，diff check通过。日志Temp `opencode/beta-tooltip-tests.log`；未做浏览器悬停实测、未提交或推送。
+
 - [x] **配对交易β加权资金副图（2026-10-28）**：新增独立默认关闭的「年化资金费率差（1:β）」勾选框，可与1:1副图同时显示。逐点采用腿1年化费率 − 当前生效 `pairTrade.beta` × 腿2年化费率，非整体差值乘β；mixed仅对腿2永续的已签名费率乘β。保留原始逐腿tooltip符号、缺口、真实0和临时0菱形，旧对象无逐腿数据时不猜加权值。无有效配对β时禁用并说明，不回退1；1m/spot-spot/无资金桶时两个开关均隐藏。共享pane索引加入加权轴，同步缩放/光标/brush并按最多6个pane扩高；不改变普通图或收益年化计算。
   - **验证**：主代理读取公式、接线及测试，修正文案与临时0注释，补充腿1临时0时腿2仍需β加权的回归；新增持久 `PairFundingControls.test.ts` 对两个真实组件SSR验证默认、禁用、隐藏条件。最终全量Bun 1426 pass / 0 fail（6006断言）、typecheck、全量lint、diff check通过；日志Temp `opencode/pair-weighted-funding-lane-tests.log`。覆盖β1恒等、β2非整体缩放、mixed方向、缺失/溢出、16种pane组合。设计lane浏览器报告存在组合及1m描述不一致，本轮不作为独立浏览器验收证据；1m实际双隐藏已由代码与SSR确证。未提交或推送。
 

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
+  CombinationWeightControls,
+  type PairBetaMode,
   pairTradeUnavailableReason,
   combinationResetTransition,
   resolvePairTradeEntryTime,
@@ -204,5 +208,127 @@ describe("custom pair-trade entry selection", () => {
     expect(resolvePairTradeEntryTime(choice, "preset-B", 15)).toBe(15);
     expect(resolvePairTradeEntryTime(null, "preset-A", 10)).toBe(10);
     expect(resolvePairTradeEntryTime(choice, "", 10)).toBe(10);
+  });
+});
+
+const SSR_BASE = {
+  firstLabel: "现货",
+  secondLabel: "永续",
+  view: "pair-trade" as const,
+  customBeta: null,
+  effectiveBeta: 1.2,
+  betaMode: "auto" as PairBetaMode,
+  minVarianceBeta: 0.85 as number | null,
+  betaDraft: "",
+  betaError: null,
+  entryCandidateLabel: "2024-01-02 09:00",
+  entryCandidateIsRange: false,
+  appliedEntryLabel: "2024-01-01 00:00",
+  entryIsCustom: false,
+  fitWindow: DEFAULT_PAIR_FIT_WINDOW_SPEC,
+  fitStartLabel: "2024-01-01 00:00",
+  fitEndLabel: "2024-01-10 00:00",
+  fitFirstLabel: "2024-01-01 00:00",
+  fitLastLabel: "2024-01-10 00:00",
+  fitPointCount: 240,
+  fitUnavailableReason: null,
+  lookahead: false,
+  canResetFitToViewport: true,
+  onSetView: () => {},
+  onBetaDraftChange: () => {},
+  onApplyBeta: () => {},
+  onUseAutoBeta: () => {},
+  onUseMinVarianceBeta: () => {},
+  onUseUnitBeta: () => {},
+  onSetEntry: () => {},
+  onResetEntry: () => {},
+  onSetFitMode: () => {},
+  onSetFitStart: () => {},
+  onSetFitEnd: () => {},
+  onResetFitToViewport: () => {},
+};
+
+function renderControls(overrides: Record<string, unknown> = {}): string {
+  return renderToStaticMarkup(
+    createElement(CombinationWeightControls, { ...SSR_BASE, ...overrides } as Parameters<typeof CombinationWeightControls>[0]),
+  );
+}
+
+/** Locates the whole opening tag + label of the button whose text is exactly `label`. */
+function buttonBlock(markup: string, label: string): string {
+  const match = markup.match(new RegExp(`<button\\b[^>]*>${label}</button>`));
+  if (!match) throw new Error(`button "${label}" not found`);
+  return match[0];
+}
+
+function titleOf(block: string): string {
+  const match = block.match(/title="([^"]*)"/);
+  if (!match) throw new Error("button has no title");
+  return match[1];
+}
+
+/** True only for the real `disabled` attribute, not the `disabled:` utility classes. */
+function isDisabled(block: string): boolean {
+  return /\sdisabled(?:="(?:|true)")?(?=[\s>])/.test(block);
+}
+
+const MIN_VARIANCE_MEANING = "看的是每根 K 线的涨跌幅";
+const AUTO_BETA_MEANING = "对两腿价格取对数做回归";
+
+describe("SSR copy: minimum-variance β tooltip", () => {
+  test("an available minimum-variance β is enabled and explains returns-based PnL variance plus its technical details", () => {
+    const markup = renderControls({ minVarianceBeta: 0.85 });
+    const block = buttonBlock(markup, "最小方差配比");
+    expect(isDisabled(block)).toBe(false);
+    const title = titleOf(block);
+    expect(title).toContain(MIN_VARIANCE_MEANING);
+    expect(title).toContain("每期盈亏");
+    expect(title).toContain("不代表最赚钱或回撤最小");
+    expect(title).toContain("β = 0.85");
+    expect(title).toContain("简单收益率");
+    expect(title).toContain("$10,000");
+    expect(title).toContain("固定总名义");
+    expect(title).toContain("拟合窗口变化时自动更新");
+  });
+
+  test("a null minimum-variance β is disabled and keeps the original reason alongside the meaning", () => {
+    const markup = renderControls({ minVarianceBeta: null });
+    const block = buttonBlock(markup, "最小方差配比");
+    expect(isDisabled(block)).toBe(true);
+    const title = titleOf(block);
+    expect(title).toContain("不可用");
+    expect(title).toContain("30 个连续相邻 K 线收益样本");
+    expect(title).toContain(MIN_VARIANCE_MEANING);
+  });
+
+  test("a non-positive minimum-variance β is disabled and keeps the original reason alongside the meaning", () => {
+    for (const beta of [0, -0.5]) {
+      const markup = renderControls({ minVarianceBeta: beta });
+      const block = buttonBlock(markup, "最小方差配比");
+      expect(isDisabled(block)).toBe(true);
+      const title = titleOf(block);
+      expect(title).toContain("不是正数");
+      expect(title).toContain(MIN_VARIANCE_MEANING);
+    }
+  });
+});
+
+describe("SSR copy: restore automatic β tooltip", () => {
+  test("a non-auto β mode shows the restore button with the levels-vs-changes explanation", () => {
+    const markup = renderControls({ betaMode: "min-variance", effectiveBeta: 0.85, minVarianceBeta: 0.85 });
+    const block = buttonBlock(markup, "恢复自动 β");
+    expect(isDisabled(block)).toBe(false);
+    const title = titleOf(block);
+    expect(title).toContain(AUTO_BETA_MEANING);
+    expect(title).toContain("价格相对于拟合关系的偏离尽量小");
+    expect(title).toContain("不直接最小化每期盈亏波动");
+    expect(title).toContain("不保证偏离后会回归");
+    expect(title).toContain("点击后恢复自动 OLS β");
+  });
+
+  test("the restore button also appears for a custom β and stays hidden in auto mode", () => {
+    expect(renderControls({ betaMode: "custom", customBeta: 1.5 })).toContain("恢复自动 β");
+    expect(renderControls({ betaMode: "one" })).toContain("恢复自动 β");
+    expect(renderControls({ betaMode: "auto" })).not.toContain("恢复自动 β");
   });
 });
